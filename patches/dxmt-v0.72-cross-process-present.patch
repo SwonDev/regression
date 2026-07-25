@@ -1,0 +1,437 @@
+diff --git a/build-win64.txt b/build-win64.txt
+index afda3cc..8eb1b29 100644
+--- a/build-win64.txt
++++ b/build-win64.txt
+@@ -1,9 +1,9 @@
+ [binaries]
+-c = '@GLOBAL_SOURCE_ROOT@' / 'toolchains/llvm-mingw-20231017-ucrt-macos-universal/bin/x86_64-w64-mingw32-gcc'
+-cpp = '@GLOBAL_SOURCE_ROOT@' / 'toolchains/llvm-mingw-20231017-ucrt-macos-universal/bin/x86_64-w64-mingw32-g++'
+-ar = '@GLOBAL_SOURCE_ROOT@' / 'toolchains/llvm-mingw-20231017-ucrt-macos-universal/bin/x86_64-w64-mingw32-ar'
+-strip = '@GLOBAL_SOURCE_ROOT@' / 'toolchains/llvm-mingw-20231017-ucrt-macos-universal/bin/x86_64-w64-mingw32-strip'
+-windres = '@GLOBAL_SOURCE_ROOT@' / 'toolchains/llvm-mingw-20231017-ucrt-macos-universal/bin/x86_64-w64-mingw32-windres'
++c = 'x86_64-w64-mingw32-gcc'
++cpp = 'x86_64-w64-mingw32-g++'
++ar = 'x86_64-w64-mingw32-ar'
++strip = 'x86_64-w64-mingw32-strip'
++windres = 'x86_64-w64-mingw32-windres'
+ 
+ [properties]
+ needs_exe_wrapper = true
+diff --git a/src/d3d11/d3d11_swapchain.cpp b/src/d3d11/d3d11_swapchain.cpp
+index ae37bdb..d116fa5 100644
+--- a/src/d3d11/d3d11_swapchain.cpp
++++ b/src/d3d11/d3d11_swapchain.cpp
+@@ -66,10 +66,59 @@ WMTColorSpace ConvertColorSpace(DXGI_COLOR_SPACE_TYPE color_space, bool hdr) {
+ template <bool EnableMetalFX>
+ class MTLD3D11SwapChain final : public MTLDXGISubObject<IDXGISwapChain4, MTLD3D11Device> {
+ public:
++  // Cross-process: (re)crea la IOSurface global y publica "id w h root x y" por hwnd HIJO.
++  void setupCrossProcessTarget(MTLD3D11Device *pDevice, uint32_t w, uint32_t h) {
++    WMTTextureInfo ti = {};
++    ti.type = WMTTextureType2D;
++    ti.pixel_format = ConvertSwapChainFormat(desc_.Format);
++    if (ti.pixel_format == WMTPixelFormatInvalid)
++      ti.pixel_format = WMTPixelFormatBGRA8Unorm;
++    ti.usage = (WMTTextureUsage)(WMTTextureUsageRenderTarget | WMTTextureUsageShaderRead);
++    ti.options = WMTResourceStorageModeShared;
++    ti.width = w ? w : 1;
++    ti.height = h ? h : 1;
++    ti.depth = 1;
++    ti.mipmap_level_count = 1;
++    ti.sample_count = 1;
++    ti.array_length = 1;
++    ti.mach_port = 0;
++    ti.reserved = 1;  // GLOBAL IOSurface-backed texture (cross-process)
++    cx_shared_ = pDevice->GetMTLDevice().newSharedTexture(ti);
++    HWND root = GetAncestor(hWnd, GA_ROOT);
++    if (!root) root = hWnd;
++    uint32_t surface_id = (uint32_t)ti.mach_port;
++    if (!surface_id) {
++      ERR("cross-process present: failed to create global IOSurface texture (hwnd ", (unsigned long long)(uintptr_t)root, ")");
++      return;
++    }
++    int ox = 0, oy = 0;
++    if (root != hWnd) {
++      RECT rc, rcRoot;
++      GetWindowRect(hWnd, &rc);
++      GetWindowRect(root, &rcRoot);
++      ox = rc.left - rcRoot.left;
++      oy = rc.top - rcRoot.top;
++    }
++    char path[256];
++    snprintf(path, sizeof(path), "C:\\windows\\temp\\dxmt-cxpresent-%llx.id",
++             (unsigned long long)(uintptr_t)hWnd);
++    FILE *f = fopen(path, "w");
++    if (f) {
++      fprintf(f, "%u %u %u %llx %d %d\n", surface_id, ti.width, ti.height,
++              (unsigned long long)(uintptr_t)root, ox, oy);
++      fclose(f);
++      WARN("cross-process present: published IOSurface id ", surface_id, " (", ti.width, "x", ti.height,
++           ") at ", ox, ",", oy, " root=", (unsigned long long)(uintptr_t)root);
++    } else {
++      ERR("cross-process present: could not write id file ", path);
++    }
++  }
++
+   MTLD3D11SwapChain(
+       IDXGIFactory1 *pFactory, MTLD3D11Device *pDevice, IMTLDXGIDevice *pLayerFactoryWeakref,
+        HWND hWnd, const DXGI_SWAP_CHAIN_DESC1 *pDesc,
+-      const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *pFullscreenDesc
++      const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *pFullscreenDesc,
++      bool cross_process = false
+   ) :
+       MTLDXGISubObject(pDevice),
+       factory_(pFactory),
+@@ -80,13 +129,22 @@ public:
+       hWnd(hWnd),
+       monitor_(wsi::getWindowMonitor(hWnd)),
+       hud(WMT::DeveloperHUDProperties::instance()) {
+-
++    cross_process_ = cross_process;
++
++    if (cross_process_) {
++      // Cross-process (Uncork + Regression): la ventana pertenece a otro proceso.
++      // Renderizamos a una IOSurface GLOBAL y publicamos por hwnd HIJO con offset.
++      native_view_ = {};
++      layer_weak_ = {};
++      setupCrossProcessTarget(pDevice, desc_.Width, desc_.Height);
++    } else {
+     native_view_ = WMT::CreateMetalViewFromHWND((intptr_t)hWnd, pDevice->GetMTLDevice(), layer_weak_);
+ 
+     if (!native_view_) {
+       ERR("Failed to create metal view, it seems like your Wine has no exported symbols needed by DXMT.");
+       abort();
+     }
++    }
+ 
+     if constexpr (EnableMetalFX) {
+       scale_factor = std::max(Config::getInstance().getOption<float>("d3d11.metalSpatialUpscaleFactor", 2), 1.0f);
+@@ -96,6 +154,10 @@ public:
+                                  pDevice->GetDXMTDevice().queue().cmd_library,
+                                  scale_factor));
+ 
++    if (cross_process_)
++      presenter->setCrossProcessTarget(cx_shared_, desc_.Width ? desc_.Width : 1,
++                                       desc_.Height ? desc_.Height : 1);
++
+     frame_latency = kSwapchainLatency;
+     present_semaphore_ = CreateSemaphore(nullptr, frame_latency,
+                                          DXGI_MAX_SWAP_CHAIN_BUFFERS, nullptr);
+@@ -153,7 +215,14 @@ public:
+ 
+   ~MTLD3D11SwapChain() {
+     device_context_->WaitUntilGPUIdle();
+-    WMT::ReleaseMetalView(native_view_);
++    if (cross_process_) {
++      char path[256];
++      snprintf(path, sizeof(path), "C:\\windows\\temp\\dxmt-cxpresent-%llx.id",
++               (unsigned long long)(uintptr_t)hWnd);
++      remove(path);
++    }
++    if (native_view_)  // null in cross-process mode (no CAMetalLayer view)
++      WMT::ReleaseMetalView(native_view_);
+     native_view_ = {};
+     CloseHandle(present_semaphore_);
+   };
+@@ -357,6 +426,13 @@ public:
+     backbuffer_->AddRefPrivate();
+     backbuffer_->Release();
+ 
++    if (cross_process_) {
++      // Recrear la IOSurface al nuevo tamaño y republicar (resize de ventana CEF)
++      setupCrossProcessTarget(device_, desc_.Width, desc_.Height);
++      presenter->setCrossProcessTarget(cx_shared_, desc_.Width ? desc_.Width : 1,
++                                       desc_.Height ? desc_.Height : 1);
++    }
++
+     if constexpr (EnableMetalFX) {
+       D3D11_TEXTURE2D_DESC1 upscaled_desc_ = backbuffer_desc_;
+       upscaled_desc_.Height *= scale_factor;
+@@ -849,6 +925,8 @@ public:
+ 
+ private:
+   bool LayerSupportEDR() {
++    if (!layer_weak_)  // cross-process: no layer, assume SDR
++      return false;
+     WMTEDRValue edr_value;
+     MetalLayer_getEDRValue(layer_weak_, &edr_value);
+     return edr_value.maximum_potential_edr_color_component_value > 1.0f;
+@@ -858,6 +936,9 @@ private:
+   IMTLDXGIDevice *layer_factory_weak_;
+   WMT::Object native_view_;
+   WMT::MetalLayer layer_weak_;
++  bool cross_process_ = false;
++  WMT::Reference<WMT::Texture> cx_shared_;  // cross-process shared present target
++  char cx_name_[64] = {};                   // bootstrap name for the shared target
+   ULONG presentation_count_;
+   DXGI_SWAP_CHAIN_DESC1 desc_;
+   DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreen_desc_;
+@@ -893,12 +974,18 @@ CreateSwapChain(
+     return DXGI_ERROR_INVALID_CALL;
+   InitReturnPtr(ppSwapChain);
+ 
+-  DWORD window_process_id;
++  // Cross-process present (Uncork): when the window belongs to another process
++  // (Chromium's GPU process presenting into the browser process's CEF window),
++  // there is no reachable CAMetalLayer. The swapchain then renders into a shared
++  // IOSurface-backed texture whose mach port is published for the window-owning
++  // process (patched winemac.drv) to look up and display. See memory
++  // cef-32bit-d3dmetal-wall.
++  DWORD window_process_id = 0;
+   GetWindowThreadProcessId(hWnd, &window_process_id);
+-  if (GetProcessId(GetCurrentProcess()) != window_process_id) {
+-    ERR("CreateSwapChain: cross-process swapchain not supported yet");
+-    return E_FAIL;
+-  }
++  bool cross_process = window_process_id && (GetProcessId(GetCurrentProcess()) != window_process_id);
++  if (cross_process)
++    WARN("CreateSwapChain: cross-process swapchain (window pid ", window_process_id,
++         " != our pid ", GetProcessId(GetCurrentProcess()), ") — using shared-texture present");
+ 
+   Com<IMTLDXGIDevice> layer_factory;
+   if (FAILED(pDevice->QueryInterface(IID_PPV_ARGS(&layer_factory)))) {
+@@ -910,7 +997,7 @@ CreateSwapChain(
+       pDesc->BufferCount != 1) {
+     WARN("CreateSwapChain: unsupported swap effect ", pDesc->SwapEffect, " with backbuffer size ", pDesc->BufferCount);
+   }
+-  if (env::getEnvVar("DXMT_METALFX_SPATIAL_SWAPCHAIN") == "1") {
++  if (!cross_process && env::getEnvVar("DXMT_METALFX_SPATIAL_SWAPCHAIN") == "1") {
+     if (pDevice->GetMTLDevice().supportsFXSpatialScaler()) {
+       *ppSwapChain = new MTLD3D11SwapChain<true>(
+           pFactory, pDevice, layer_factory.ptr(), hWnd, pDesc, pFullscreenDesc
+@@ -921,7 +1008,7 @@ CreateSwapChain(
+     }
+   }
+   *ppSwapChain = new MTLD3D11SwapChain<false>(
+-      pFactory, pDevice, layer_factory.ptr(), hWnd, pDesc, pFullscreenDesc
++      pFactory, pDevice, layer_factory.ptr(), hWnd, pDesc, pFullscreenDesc, cross_process
+   );
+   return S_OK;
+ };
+diff --git a/src/dxmt/dxmt_context.cpp b/src/dxmt/dxmt_context.cpp
+index 4610a2e..a248b84 100644
+--- a/src/dxmt/dxmt_context.cpp
++++ b/src/dxmt/dxmt_context.cpp
+@@ -848,10 +848,14 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
+       auto drawable = data->presenter->encodeCommands(cmdbuf, {}, data->backbuffer, data->metadata);
+       auto t1 = clock::now();
+       currentFrameStatistics().drawable_blocking_interval += (t1 - t0);
+-      if (data->after > 0)
+-        cmdbuf.presentDrawableAfterMinimumDuration(drawable, data->after);
+-      else
+-        cmdbuf.presentDrawable(drawable);
++      // Cross-process present (Uncork): encodeCommands rendered into a shared
++      // texture and returned a null drawable — nothing to presentDrawable().
++      if (drawable) {
++        if (data->after > 0)
++          cmdbuf.presentDrawableAfterMinimumDuration(drawable, data->after);
++        else
++          cmdbuf.presentDrawable(drawable);
++      }
+       data->~PresentData();
+       break;
+     }
+diff --git a/src/dxmt/dxmt_presenter.cpp b/src/dxmt/dxmt_presenter.cpp
+index a1a7a74..a2fcf70 100644
+--- a/src/dxmt/dxmt_presenter.cpp
++++ b/src/dxmt/dxmt_presenter.cpp
+@@ -12,12 +12,19 @@ Presenter::Presenter(WMT::Device device, WMT::MetalLayer layer, InternalCommandL
+     device_(device),
+     layer_(layer),
+     lib_(lib) {
+-  layer_.getProps(layer_props_);
++  if (layer_) {
++    layer_.getProps(layer_props_);
++    layer_props_.contents_scale = layer_props_.contents_scale * scale_factor;
++  } else {
++    // Cross-process: sin CAMetalLayer; el target es la textura compartida
++    // (setCrossProcessTarget). Zero-init props.
++    layer_props_ = {};
++    layer_props_.contents_scale = scale_factor > 0 ? scale_factor : 1.0;
++  }
+   layer_props_.device = device;
+   layer_props_.opaque = true;
+   layer_props_.display_sync_enabled = false;
+   layer_props_.framebuffer_only = false; // how strangely setting it true results in worse performance
+-  layer_props_.contents_scale = layer_props_.contents_scale * scale_factor;
+ }
+ 
+ bool
+@@ -31,7 +38,7 @@ Presenter::changeLayerProperties(WMTPixelFormat format, WMTColorSpace colorspace
+   colorspace_ = colorspace;
+   if (should_invalidated)
+     pso_valid.clear(); // defer changes
+-  else
++  else if (layer_)  // cross-process: no layer
+     layer_.setProps(layer_props_);
+   return should_invalidated;
+ }
+@@ -63,9 +70,10 @@ Presenter::PresentState
+ Presenter::synchronizeLayerProperties() {
+   uint64_t display_setting_version = 0;
+ 
+-  WMTQueryDisplaySettingForLayer(
+-      layer_.handle, &display_setting_version, &display_colorspace_, &display_hdr_metadata_, &display_edr_value_
+-  );
++  if (layer_)  // cross-process: no layer to query display settings for
++    WMTQueryDisplaySettingForLayer(
++        layer_.handle, &display_setting_version, &display_colorspace_, &display_hdr_metadata_, &display_edr_value_
++    );
+ 
+   if (display_setting_version != display_setting_version_) {
+     display_setting_version_ = display_setting_version;
+@@ -80,8 +88,10 @@ Presenter::synchronizeLayerProperties() {
+   if (unlikely(!pso_valid.test_and_set())) {
+     frame_presented_.wait(frame_requested_);
+     buildRenderPipelineState(final_colorspace == WMTColorSpaceHDR_PQ, is_hdr && hdr_metadata != nullptr);
+-    layer_.setProps(layer_props_);
+-    layer_.setColorSpace(final_colorspace);
++    if (layer_) {  // cross-process: no layer props/colorspace to push
++      layer_.setProps(layer_props_);
++      layer_.setColorSpace(final_colorspace);
++    }
+   }
+ 
+   DXMTPresentMetadata metadata;
+@@ -112,13 +122,19 @@ WMT::MetalDrawable
+ Presenter::encodeCommands(
+     WMT::CommandBuffer cmdbuf, WMT::Fence fence, WMT::Texture backbuffer, DXMTPresentMetadata metadata
+ ) {
+-  auto drawable = layer_.nextDrawable();
+-
++  // Cross-process (Uncork): present into the shared IOSurface-backed texture the
++  // window-owning process displays; there is no drawable to presentDrawable().
++  WMT::MetalDrawable drawable{};
+   WMTRenderPassInfo info;
+   WMT::InitializeRenderPassInfo(info);
+   info.colors[0].load_action = WMTLoadActionDontCare;
+   info.colors[0].store_action = WMTStoreActionStore;
+-  info.colors[0].texture = drawable.texture();
++  if (cross_process_) {
++    info.colors[0].texture = cx_target_.handle;
++  } else {
++    drawable = layer_.nextDrawable();
++    info.colors[0].texture = drawable.texture();
++  }
+   auto encoder = cmdbuf.renderCommandEncoder(info);
+   if (fence)
+     encoder.waitForFence(fence, WMTRenderStageFragment);
+diff --git a/src/dxmt/dxmt_presenter.hpp b/src/dxmt/dxmt_presenter.hpp
+index 30bab8a..9ed8a32 100644
+--- a/src/dxmt/dxmt_presenter.hpp
++++ b/src/dxmt/dxmt_presenter.hpp
+@@ -53,6 +53,22 @@ public:
+   WMT::MetalDrawable
+   encodeCommands(WMT::CommandBuffer cmdbuf, WMT::Fence fence, WMT::Texture backbuffer, DXMTPresentMetadata metadata);
+ 
++  /* Cross-process present (Uncork): when a swapchain is created for a window owned
++   * by another process (e.g. Chromium's GPU process presenting into the browser
++   * process's CEF window), there is no CAMetalLayer we can reach. Instead we present
++   * into a shared IOSurface-backed texture that the window-owning process (winemac.drv)
++   * looks up by mach port and displays. In that mode encodeCommands() blits into
++   * `cx_target_` and returns a null drawable (nothing to presentDrawable). */
++  void setCrossProcessTarget(WMT::Reference<WMT::Texture> target, uint32_t width, uint32_t height) {
++    cx_target_ = std::move(target);
++    cx_width_ = width;
++    cx_height_ = height;
++    cross_process_ = true;
++    layer_props_.drawable_width = width;
++    layer_props_.drawable_height = height;
++  }
++  bool isCrossProcess() const { return cross_process_; }
++
+ private:
+   void buildRenderPipelineState(bool is_pq, bool with_hdr_metadata);
+ 
+@@ -73,5 +89,9 @@ private:
+   std::atomic_flag pso_valid = 0;
+   uint64_t frame_requested_ = 0;
+   CpuFence frame_presented_ = 0;
++  bool cross_process_ = false;
++  WMT::Reference<WMT::Texture> cx_target_;
++  uint32_t cx_width_ = 0;
++  uint32_t cx_height_ = 0;
+ };
+ } // namespace dxmt
+\ No newline at end of file
+diff --git a/src/util/com/com_guid.cpp b/src/util/com/com_guid.cpp
+index 11bf4a7..05bda6c 100644
+--- a/src/util/com/com_guid.cpp
++++ b/src/util/com/com_guid.cpp
+@@ -8,6 +8,7 @@
+  * See <https://github.com/doitsujin/dxvk/blob/master/LICENSE>
+  */
+ 
++#include <iomanip>
+ #include <mutex>
+ #include <unordered_set>
+ 
+diff --git a/src/winemetal/unix/meson.build b/src/winemetal/unix/meson.build
+index 628c8bd..ae9de46 100644
+--- a/src/winemetal/unix/meson.build
++++ b/src/winemetal/unix/meson.build
+@@ -21,6 +21,7 @@ winemetal_unix_ld_args = [
+   '-framework', 'MetalFX', '-weak_framework', 'Foundation',
+   '-weak_framework', 'CoreGraphics', '-weak_framework', 'QuartzCore',
+   '-weak_framework', 'ColorSync',  '-weak_framework', 'Cocoa',
++  '-framework', 'IOSurface',
+   '-lsqlite3',
+ ]
+ winemetal_unix_link_depends = []
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index 1de085b..f4c4176 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -5,6 +5,7 @@
+ #import <CoreFoundation/CFRunLoop.h>
+ #import <Metal/Metal.h>
+ #import <MetalFX/MetalFX.h>
++#import <IOSurface/IOSurface.h>
+ #import <QuartzCore/QuartzCore.h>
+ #include "objc/objc-runtime.h"
+ #include <bootstrap.h>
+@@ -2522,6 +2523,44 @@ _MTLDevice_newSharedTexture(void *obj) {
+   id<MTLDevice> device = (id<MTLDevice>)params->device;
+   struct WMTTextureInfo *info = params->info.ptr;
+ 
++  /* Uncork cross-process present: reserved==1 requests a GLOBAL IOSurface-backed
++   * texture (Metal's own shared-texture IOSurfaces are not global, so they can't
++   * be found via IOSurfaceLookup across processes; and bootstrap_register2 mach-
++   * port sharing is sandbox-blocked on modern macOS). We create the IOSurface
++   * ourselves with kIOSurfaceIsGlobal and return its global ID (uint32) in
++   * info->mach_port so the window-owning process can IOSurfaceLookup() it. */
++  if (info->reserved == 1 && !info->mach_port) {
++    size_t bpe = 4; /* BGRA8 */
++    size_t width = info->width ? info->width : 1;
++    size_t height = info->height ? info->height : 1;
++    size_t bpr = IOSurfaceAlignProperty(kIOSurfaceBytesPerRow, width * bpe);
++    NSDictionary *props = @{
++      (id)kIOSurfaceWidth: @(width),
++      (id)kIOSurfaceHeight: @(height),
++      (id)kIOSurfaceBytesPerElement: @(bpe),
++      (id)kIOSurfaceBytesPerRow: @(bpr),
++      (id)kIOSurfacePixelFormat: @((uint32_t)0x42475241 /* 'BGRA' */),
++      (id)kIOSurfaceIsGlobal: @YES,
++    };
++    IOSurfaceRef surface = IOSurfaceCreate((CFDictionaryRef)props);
++    if (!surface) {
++      params->ret = 0;
++      return STATUS_SUCCESS;
++    }
++    MTLTextureDescriptor *desc = [[MTLTextureDescriptor alloc] init];
++    fill_texture_descriptor(desc, info);
++    desc.storageMode = MTLStorageModeShared;
++    id<MTLTexture> ret = [device newTextureWithDescriptor:desc iosurface:surface plane:0];
++    params->ret = (obj_handle_t)ret;
++    if (ret) {
++      info->gpu_resource_id = [ret gpuResourceID]._impl;
++      info->mach_port = IOSurfaceGetID(surface); /* GLOBAL id, NOT a mach port */
++    }
++    CFRelease(surface); /* the texture retains it */
++    [desc release];
++    return STATUS_SUCCESS;
++  }
++
+   if (info->mach_port) {
+     MTLSharedTextureHandle *handle = [[MTLSharedTextureHandle alloc] initWithMachPort:info->mach_port];
+     id<MTLTexture> ret = [device newSharedTextureWithHandle:handle];

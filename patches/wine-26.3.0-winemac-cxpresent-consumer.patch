@@ -1,0 +1,149 @@
+diff -ruN -x *.o a/dlls/winemac.drv/Makefile.in b/dlls/winemac.drv/Makefile.in
+--- a/dlls/winemac.drv/Makefile.in	2026-07-15 11:37:33
++++ b/dlls/winemac.drv/Makefile.in	2026-07-24 23:48:58
+@@ -9,6 +9,7 @@
+ 	-framework CoreVideo \
+ 	-framework Foundation \
+ 	-framework IOKit \
++	-framework IOSurface \
+ 	-framework Metal \
+ 	-framework OpenGL \
+ 	-framework QuartzCore \
+diff -ruN -x *.o a/dlls/winemac.drv/cocoa_window.m b/dlls/winemac.drv/cocoa_window.m
+--- a/dlls/winemac.drv/cocoa_window.m	2026-07-15 11:37:33
++++ b/dlls/winemac.drv/cocoa_window.m	2026-07-25 08:07:05
+@@ -25,6 +25,7 @@
+ #import <Metal/Metal.h>
+ #import <QuartzCore/QuartzCore.h>
+ #include <dlfcn.h>
++#include <dirent.h>
+ 
+ #import "cocoa_window.h"
+ 
+@@ -3458,6 +3459,117 @@
+ 
+ 
+ /***********************************************************************
++ *   Cross-process present consumer (basado en Uncork)
++ *
++ * Cuando el swapchain de DXMT se crea en un proceso que NO es dueño de la
++ * ventana destino (p.ej. el GPU process de Chromium presentando en la ventana
++ * CEF del browser process), DXMT renderiza en una IOSurface GLOBAL y publica
++ * su id en C:\windows\temp\dxmt-cxpresent-<hwnd-raiz>.id. Aquí, en el proceso
++ * dueño de la ventana, sondeamos ese fichero (~16 ms), localizamos la
++ * IOSurface con IOSurfaceLookup y la mostramos como contents de la capa.
++ * Controlado por la env DXMT_CROSS_PROCESS_PRESENT=1.
++ */
++#import <IOSurface/IOSurface.h>
++
++static void wine_cxpresent_tick(void)
++{
++    const char* prefix = getenv("WINEPREFIX");
++    if (!prefix)
++        return;
++
++    /* Lee todas las publicaciones dxmt-cxpresent-<hwnd-hijo>.id:
++     * "surface_id w h root_hwnd x y" (posición del hijo dentro de la raíz) */
++    char dirpath[512];
++    snprintf(dirpath, sizeof(dirpath), "%s/drive_c/windows/temp", prefix);
++    DIR* dir = opendir(dirpath);
++    if (!dir)
++        return;
++
++    struct entry { unsigned long long child, root; unsigned sid, w, h; int x, y; };
++    struct entry entries[64];
++    int count = 0;
++    struct dirent* de;
++    while ((de = readdir(dir)) && count < 64)
++    {
++        unsigned long long child;
++        if (sscanf(de->d_name, "dxmt-cxpresent-%llx.id", &child) != 1)
++            continue;
++        char path[600];
++        snprintf(path, sizeof(path), "%s/%s", dirpath, de->d_name);
++        FILE* f = fopen(path, "r");
++        if (!f)
++            continue;
++        struct entry e = {0};
++        e.child = child;
++        int n = fscanf(f, "%u %u %u %llx %d %d", &e.sid, &e.w, &e.h, &e.root, &e.x, &e.y);
++        fclose(f);
++        if (n < 1 || !e.sid)
++            continue;
++        entries[count++] = e;
++    }
++    closedir(dir);
++
++    static NSMutableDictionary* layers; /* child hwnd -> CALayer */
++    static dispatch_once_t once_l;
++    dispatch_once(&once_l, ^{ layers = [NSMutableDictionary new]; });
++
++    for (WineWindow* window in [NSApp windows])
++    {
++        if (![window isKindOfClass:[WineWindow class]] || !window.hwnd)
++            continue;
++        unsigned long long root = (unsigned long long)(uintptr_t)window.hwnd;
++
++        for (int i = 0; i < count; i++)
++        {
++            if (entries[i].root != root)
++                continue;
++            IOSurfaceRef surface = IOSurfaceLookup((IOSurfaceID)entries[i].sid);
++            if (!surface)
++                continue;
++
++            NSView* view = window.contentView;
++            if (!view.layer || view.layerContentsRedrawPolicy != NSViewLayerContentsRedrawNever)
++            {
++                CALayer* l = [CALayer layer];
++                l.opaque = YES;
++                l.masksToBounds = YES;
++                view.layer = l;
++                view.wantsLayer = YES;
++                view.layerContentsRedrawPolicy = NSViewLayerContentsRedrawNever;
++            }
++
++            CALayer* sub = layers[@(entries[i].child)];
++            if (!sub)
++            {
++                sub = [CALayer layer];
++                sub.opaque = YES;
++                layers[@(entries[i].child)] = sub;
++            }
++            if (sub.superlayer != view.layer)
++                [view.layer addSublayer:sub];
++            sub.frame = CGRectMake(entries[i].x, entries[i].y, entries[i].w, entries[i].h);
++            sub.contentsGravity = kCAGravityTopLeft;
++            sub.contents = (__bridge id)surface;
++            CFRelease(surface);
++        }
++    }
++}
++
++void macdrv_start_cross_process_present(void)
++{
++    if (!getenv("DXMT_CROSS_PROCESS_PRESENT"))
++        return;
++    static dispatch_once_t once;
++    dispatch_once(&once, ^{
++        dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
++                                                         dispatch_get_main_queue());
++        dispatch_source_set_timer(timer, DISPATCH_TIME_NOW, 16 * NSEC_PER_MSEC, 4 * NSEC_PER_MSEC);
++        dispatch_source_set_event_handler(timer, ^{ wine_cxpresent_tick(); });
++        dispatch_resume(timer);
++    });
++}
++
++/***********************************************************************
+  *              macdrv_create_cocoa_window
+  *
+  * Create a Cocoa window with the given content frame and features (e.g.
+@@ -3474,6 +3586,8 @@
+                                                   hwnd:hwnd
+                                                  queue:(WineEventQueue*)queue] retain];
+     });
++
++    macdrv_start_cross_process_present();
+ 
+     return (macdrv_window)window;
+ }

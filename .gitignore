@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+
+# Datos personales / salidas de diagnóstico
+dxdiag_out.txt
+
+# Artefactos pesados y material de terceros NO redistribuible (ver NOTICE.md)
+Regression.app/
+backups/
+bottles/
+stage/
+toolchain/
+installers/
+sources-*/
+crossover-sources-*.tar.gz
+
+# Árbol de build (solo se versionan los scripts)
+build/*
+!build/*.sh
