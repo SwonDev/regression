@@ -42,6 +42,9 @@ varias cosas a la vez o de tocar el estado bueno para "probar"**. Sigue este pro
 2. **Descarta causas ambientales primero** (son la mitad de los "bugs" históricos):
    - ¿Hay wineservers de OTROS builds corriendo? (`ps aux | grep wineserver`) → mátalos. Un
      wineserver de otro build causa muertes silenciosas que parecen bugs del motor.
+   - ¿Hay `services.exe` huérfanos (PPID 1, sin wineserver)? Son restos de sesiones wine
+     muertas: dejan **iconos de Steam fantasmas en la barra de menús de macOS** y pueden
+     interferir. Se limpian con `kill <pid>` — son seguros de matar.
    - ¿La botella tiene ficheros `dxmt-cxpresent-*.id` stale? (el launcher ya los limpia, pero
      si lanzas wine a mano, límpialos tú).
    - ¿El juego necesita Steam activo (DRM)? Los juegos Unity/IL2CPP mueren al iniciar si Steam
@@ -115,7 +118,10 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   skeletal meshes de Palworld — NO actualizar sin probar Palworld.
 - **PIN: wine compilado con `--prefix` apuntando a la app** (Regression.app/Contents/SharedSupport/wine-root).
   Con el prefix por defecto (/usr/local) los juegos Unity morían al iniciar y CEF tenía crashes.
-- Backups: `backups/regression-app-final-20260725.tar.gz` (el bueno).
+- Backups: `backups/regression-blindado-20260725.tar.gz` (**el de referencia**: app + docs +
+  parches + scripts, estado verificado OK al 100 %) y `backups/botella-config-20260725.tar.gz`
+  (registros + 55 fuentes + DLLs DXMT/DXVK de system32). Para volver a este punto: restaurar
+  ambos. Históricos: `regression-app-final-20260725.tar.gz` (solo app).
 - **Instalación**: `/Applications/Regression.app` → symlink a la app del proyecto (canónica).
   Lanzar con `open -a Regression` desde cualquier sitio.
 
