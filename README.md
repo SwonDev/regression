@@ -185,7 +185,8 @@ Gotchas de build (todos resueltos, no redescubrir):
 8. **DYLD**: `DYLD_FALLBACK_LIBRARY_PATH` debe incluir runtime + x86_64-unix (winemac.so) +
    apple_gptk/external (D3DMetal.framework).
 9. **Steam se instala PE32**: hace falta wow64 completo (`--enable-archs=i386,x86_64`).
-10. **codex gpt-image sin cuota hasta 2026-07-28 19:03** — icono actual = placeholder magick.
+10. **Icono oficial** (2026-07-26): creado por el usuario (SVG en `assets/icon/oficial/`),
+    integrado como `Regression.icns` (squircle con máscara separada + DstIn, sips + iconutil).
 
 ---
 
@@ -259,7 +260,6 @@ pasar con otro juego: mismo arreglo.
    wineservers ajenos — ver protocolo en `AGENTS.md`).
 5. **Rendimiento**: comparativa FPS Grim Dawn vs CrossOver (mismo save/zona).
 6. **Wine Mono 10.4.1** para juegos .NET.
-6. **Icono definitivo**: regenerar con codex gpt-image (3 variantes) tras 2026-07-28.
 7. **GUI mínima opcional**: solo si el usuario la pide (él quiere cero UI: doble click → Steam).
 
 ---
