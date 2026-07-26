@@ -202,15 +202,63 @@ Gotchas de build (todos resueltos, no redescubrir):
 
 ## 8. Siguientes pasos (orden sugerido)
 
-1. **D3D12 test**: backtrace con wine debug build (no strip) del page fault en D3D12CreateDevice;
-   revisar CW HACK 22434 (non-native code regions) y el attach de `d3d12.so` (unixlib Apple).
-   Nota: en juego real (Palworld) D3DMetal funcionó — el fallo es del test sintético, prioridad baja.
-2. **MoltenVK stubs**: 3 features del SPIRV-Cross privado de CX stubeadas en
-   `sources-26.3.0/moltenvk/` — afecta a la ruta Vulkan/DXVK en algunos juegos.
-3. **Más juegos**: probar el catálogo del usuario según lo pida (siempre con Steam activo y sin
+### Hallazgos de diagnóstico (2026-07-26, sesión Cube World + FFT)
+
+**Arquitectura gráfica de CrossOver 26.3 (mapeada inspeccionando su instalación)**:
+- `lib/wine/x86_64-windows/`: PEs pequeños wine estándar (d3d11 425 KB, dxgi 218 KB,
+  d3d12 92 KB, wined3d 1,4 MB + libvkd3d-1/libvkd3d-shader-1/libvkd3d-utils-1 dinámicos).
+  Su `x86_64-unix/` tiene solo 34 `.so` (sin wined3d/d3d11/dxgi/d3d12 unix — todo PE-side).
+- `lib/dxmt/`: su fork DXMT (d3d11 4,7 MB, dxgi 1,7 MB + winemetal.so) — NUNCA en system32.
+- `lib64/apple_gptk/`: D3DMetal de Apple (dlls builtin-format + sus .so + libd3dshared).
+- D3D12 en CX = d3d12.dll (92 KB) → libvkd3d-1.dll → winevulkan → **SU MoltenVK** (SPIRV-Cross fork).
+- Botellas CX: system32 con forwarders pequeños, CERO overrides d3d.
+
+**FFT (D3D12) — causa raíz ENCONTRADA**: nuestro D3D12 muere dentro de
+`vkCreateComputePipelines` (vkd3d → winevulkan → nuestro MoltenVK). El assert real:
+`!status && "vkCreateComputePipelines"` en `winevulkan/loader_thunks.c:3119`, con un
+c0000005 (salto a dirección basura) dentro de la llamada unixlib. Sospechoso principal:
+nuestro build de MoltenVK 1.2.10 con los 3 stubs de SPIRV-Cross (`spirv_msl.hpp`:
+`texture_offset_buffer_index`, `add_texture_buffer_offsets`, `bitwise_not_causes_ice`).
+Reproducible con `build/d3d12test.exe` (fuente en `build/d3d12test.c`).
+Además: la dxgi de DXMT en system32 rompe D3D12 (FFT la cargaba nativa y su check de GPU
+fallaba: "Graphics card is not supported"). Con `WINEDLLOVERRIDES=dxgi=b` (nuestra dxgi
+builtin de wine —reconstruida desde `build/wine64`, ver nota abajo) el juego enumera el adaptador
+("NVIDIA GeForce 8800 GTX", spoof de wined3d GL) y muere en el mismo crash de vkd3d.
+OJO: la dxgi builtin de wine y la de DXMT NO pueden coexistir como builtin — wine valida el
+par PE/expectativa y solo carga la de DXMT de system32 si wine-root también tiene la de DXMT.
+Por eso wine-root lleva la dxgi de DXMT (estado blindado) y D3D12 queda bloqueado por MoltenVK.
+
+**Cube World (D3D11) — causa acotada**: el juego crea DOS swapchains (raíz 1512x838 +
+hija 1512x728 @ 0,92). Con el present normal de DXMT: pantalla negra (fullscreen y ventana).
+Forzando la ruta IOSurface (`cross_process=true`): el consumer de winemac compone las
+superficies (la pantalla pasa de negra a BLANCA) pero sin contenido del juego. En CrossOver
+con DXMT **también falla** ("Could not initialize Direct3D") — la afirmación del usuario de
+que funciona en CX probablemente implica DXVK activado en CX (no verificado aún).
+Candidato en fuente (NO instalado): condición child-hwnd en `dxmt-src` (ruta IOSurface para
+swapchains hijas, gated por `DXMT_CROSS_PROCESS_PRESENT`). La dll de system32 es la original
+(blindada); la fuente tiene el candidato sin probar.
+
+**Steam Cloud**: el diálogo modal "No se puede sincronizar" BLOQUEA el IPC de Steam
+(`SteamAPI_Init` falla y el juego muere al instante — parecía un bug del motor y era esto).
+Desactivado el cloud para 1128000 y 1004640 en
+`userdata/121123806/config/localconfig.vdf` (`"cloud" { "enabled" "0" }`). Si vuelve a
+pasar con otro juego: mismo arreglo.
+
+### Cola de trabajo
+
+1. **MoltenVK**: reproducir el crash de compute con un shader mínimo y localizar si es uno
+   de los 3 stubs (recompilar activándolos de uno en uno) o divergencia mayor con el fork
+   de CX. Alternativa: backtrace nativo con lldb dentro de vkCreateComputePipelines.
+2. **Cube World**: probar en CX con DXVK activado (si ahí funciona → evaluar DXVK per-juego
+   en Regression: DXVK d3d11+dxgi nativas en el DIR del juego + `WINEDLLOVERRIDES`
+   documentado — OJO: DXVK d3d11 usa compute shaders, choca con el mismo crash de MoltenVK).
+3. **d3d12.so attach Apple** (CW HACK 22434 en `ntdll/unix/loader.c`): la ruta D3DMetal de
+   Apple como alternativa a vkd3d para D3D12 (sus dlls son builtin-format: hay que cargarlas
+   desde su propio árbol `lib/apple_gptk/wine`, no como "native").
+4. **Más juegos**: probar el catálogo del usuario según lo pida (siempre con Steam activo y sin
    wineservers ajenos — ver protocolo en `AGENTS.md`).
-4. **Rendimiento**: comparativa FPS Grim Dawn vs CrossOver (mismo save/zona).
-5. **Wine Mono 10.4.1** para juegos .NET.
+5. **Rendimiento**: comparativa FPS Grim Dawn vs CrossOver (mismo save/zona).
+6. **Wine Mono 10.4.1** para juegos .NET.
 6. **Icono definitivo**: regenerar con codex gpt-image (3 variantes) tras 2026-07-28.
 7. **GUI mínima opcional**: solo si el usuario la pide (él quiere cero UI: doble click → Steam).
 

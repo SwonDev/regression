@@ -14,6 +14,7 @@ installers/
 sources-*/
 crossover-sources-*.tar.gz
 
-# Árbol de build (solo se versionan los scripts)
+# Árbol de build (solo se versionan los scripts y el test de diagnóstico)
 build/*
 !build/*.sh
+!build/d3d12test.c

@@ -110,14 +110,21 @@ validación de su fila pasa entera con capturas, (3) hay backup del estado nuevo
 (4) README/AGENTS reflejan el cambio. Si solo cumples el punto 1, has arreglado una cosa y
 quizá roto otra — que es exactamente lo que este protocolo existe para evitar.
 
-## Estado rápido (2026-07-25, FINAL)
+## Estado rápido (2026-07-26)
 
 - OK total con el wine de prefijo propio: **Steam completo, Moonlighter 2 (Unity IL2CPP),
-  Palworld (personaje), Grim Dawn, Romestead**, DXVK D3D9.
+  Palworld (personaje), Grim Dawn, Romestead**, DXVK D3D9. Estado blindado intacto.
 - **PIN: DXMT = v0.72 + parche cross-process** (versión exacta de CrossOver). `main` rompe los
   skeletal meshes de Palworld — NO actualizar sin probar Palworld.
 - **PIN: wine compilado con `--prefix` apuntando a la app** (Regression.app/Contents/SharedSupport/wine-root).
   Con el prefix por defecto (/usr/local) los juegos Unity morían al iniciar y CEF tenía crashes.
+- **PIN: wine-root y system32 llevan la dxgi de DXMT** (pareja). Cambiar la builtin de
+  wine-root por la de wine rompe la carga de la dxgi de DXMT en system32 (los juegos D3D11
+  mueren al instante). D3D12 necesita la dxgi de wine → conflicto documentado en README §8.
+- **Cube World**: negro (D3D11, dos swapchains). **FFT**: "graphics card not supported" →
+  crash vkd3d→MoltenVK (compute). Diagnóstico completo y arquitectura CX en README §8.
+- **Steam Cloud desactivado** para 1128000/1004640 (el diálogo modal de sincronización
+  bloquea el IPC de Steam y mata los lanzamientos — falso bug del motor).
 - Backups: `backups/regression-blindado-20260725.tar.gz` (**el de referencia**: app + docs +
   parches + scripts, estado verificado OK al 100 %) y `backups/botella-config-20260725.tar.gz`
   (registros + 55 fuentes + DLLs DXMT/DXVK de system32). Para volver a este punto: restaurar
