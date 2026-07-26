@@ -8,7 +8,35 @@ Motor Windows→macOS propio tipo CrossOver, compilado desde fuentes open-source
 `Regression.app` abre Steam de Windows con doble click. **No es** un gestor de botellas ni tiene
 GUI: la UX objetivo es "abrir app → Steam", decidida por el usuario y no negociable.
 
-## Reglas duras (errores que ya se han cometido y NO se repiten)
+## Reglas inviolables
+
+### Principios (valen más que cualquier arreglo concreto)
+
+1. **JAMÁS se integra algo que rompe lo que ya funciona.** Un arreglo que apaga otra cosa
+   no es un arreglo: se revierte al instante y se repiensa. No se negocia ni "de momento".
+   Lo que decide es la matriz de validación (ver Protocolo), no las intenciones. Si al
+   validar algo que antes funcionaba falla → revertir primero, preguntar después.
+2. **La referencia es CrossOver: se copia literalmente cómo lo hace CrossOver.** Si en
+   CrossOver funciona y en Regression no, la respuesta está en su stack: versiones exactas
+   de cada componente, convenciones de build (prefix horneado en la app), wiring de DLLs
+   (qué va en system32, qué va en lib, qué es builtin y qué es native), configuración de
+   botella y crossties. Se estudia y se replica ESO antes de inventar nada. La paridad se
+   consigue igualando, no improvisando. Ir juego por juego sin este método está prohibido.
+3. **Regression es 100 % independiente de CrossOver.** Nada en runtime puede depender de
+   que CrossOver esté instalado: ni DLLs, ni dylibs, ni rutas, ni procesos, ni su botella,
+   ni su wine. CrossOver se usa SOLO como referencia de estudio (fuentes LGPL oficiales,
+   inspección estática de su instalación, comparativas A/B en su botella) — nunca como
+   componente. Si una pieza solo existe en CrossOver (su fork de DXMT, su SPIRV-Cross, su
+   MoltenVK compilada, cxcompatdb), se reconstruye desde fuentes públicas o se
+   reimplementa; NO se copia su binario a Regression.
+4. **Legalidad limpia.** Solo fuentes open-source oficiales (Wine/DXMT/DXVK/MoltenVK LGPL,
+   Apache, zlib…). Nada de descompilar ni extraer código de binarios propietarios (GUI de
+   CrossOver, sistema de licencias, forks privados de DXMT/SPIRV-Cross). Los binarios de
+   Apple (GPTK: D3DMetal.framework, libd3dshared.dylib) se usan tal cual los distribuye
+   Apple, solo en local, jamás redistribuidos (por eso no están en el repo ni en GitHub).
+   Esto es un proyecto personal/educativo: se documenta como tal.
+
+### Reglas técnicas duras (errores que YA se han cometido y NO se repiten)
 
 1. **Backup antes de tocar botella o bundle** (`backups/`). Sin excepciones.
 2. **Validación visual obligatoria tras cualquier cambio gráfico**: relanzar app, capturar
@@ -17,17 +45,27 @@ GUI: la UX objetivo es "abrir app → Steam", decidida por el usuario y no negoc
 3. **NO overrides `d3d11/d3d10core/dxgi=native`** en el registro de la botella: las DLLs de DXMT
    son módulos wine y el override las hace "not found" (tienda negra). DXMT va en system32 sin
    override. Overrides solo para PE planas (d3d9 de DXVK sí).
-4. **No mezclar d3d11/dxgi de Apple con DXMT** en system32 (CEF muere). d3d12* de Apple sí coexiste.
-5. **Limpiar `dxmt-cxpresent-*.id` antes de lanzar** (ya en el launcher): ficheros stale →
+4. **La dxgi de DXMT es intocable EN PAREJA**: va en system32 Y en wine-root. Wine valida la
+   pareja; si wine-root lleva otra dxgi (p.ej. la de wine), la de DXMT deja de cargar y TODOS
+   los juegos D3D11 mueren al instante (exit 53). D3D12 necesita la dxgi de wine — el
+   conflicto y las vías de solución están documentados en README §8.
+5. **No mezclar d3d11/dxgi de Apple con DXMT** en system32 (CEF muere). d3d12* de Apple sí coexiste.
+   OJO: las dlls de Apple del GPTK son formato builtin (como las de DXMT): como "native" dan
+   "not found"; se cargan solo desde su propio árbol (`lib/apple_gptk/wine`).
+6. **Limpiar `dxmt-cxpresent-*.id` antes de lanzar** (ya en el launcher): ficheros stale →
    pantalla negra por hwnd reutilizado.
-6. **No "probar cosas" en vivo sobre el estado bueno.** Cada experimento en copia de la botella
+7. **No "probar cosas" en vivo sobre el estado bueno.** Cada experimento en copia de la botella
    o con dlls respaldadas; solo se aplica tras validar.
-7. **No cambiar el modelo de IA ni el stack decidido** sin permiso explícito del usuario.
-8. **Nada de ingeniería inversa de binarios propietarios** (GUI CrossOver, licencias, forks
-   privados de DXMT/SPIRV-Cross). Se trabaja con fuentes LGPL oficiales, datos de botellas,
-   crossties y comparativas A/B (método en README §3-4).
-9. Responde siempre en **español**, con tildes. Código y comentarios del repo en el idioma del
-   código existente.
+8. **Antes de diagnosticar, descartar el entorno** (la mitad de los "bugs" históricos):
+   wineservers de otros builds corriendo (muerte silenciosa), `services.exe` huérfanos
+   (iconos Steam fantasma en la barra de menús), diálogo modal de Steam Cloud bloqueando el
+   IPC (los juegos mueren al instante sin log: desactivar cloud del appid en
+   `localconfig.vdf`), juego que necesita Steam activo por DRM.
+9. **Tras `make install` o tocar el bundle: `codesign --force --deep --sign - Regression.app`**.
+10. **PE sin strip** (el strip rompe unwind SEH y la firma de módulos builtin).
+11. **No cambiar el modelo de IA ni el stack decidido** sin permiso explícito del usuario.
+12. Responde siempre en **español**, con tildes. Código y comentarios del repo en el idioma del
+    código existente.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 

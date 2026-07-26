@@ -166,8 +166,10 @@ Gotchas de build (todos resueltos, no redescubrir):
 ## 6. Reglas de oro para futuros agentes (NO saltárselas)
 
 > El **protocolo de trabajo completo** (ciclo de cambio, matriz de validación por pieza, tabla
-> de PINs, definición de "hecho") está en `AGENTS.md` → sección "Protocolo de trabajo".
-> Leerlo antes de tocar nada; estas reglas son el resumen.
+> de PINs, definición de "hecho") y los **principios inviolables** (nunca romper lo que
+> funciona, CrossOver como referencia a copiar literalmente, independencia total de
+> CrossOver, legalidad limpia) están en `AGENTS.md` → secciones "Reglas inviolables" y
+> "Protocolo de trabajo". Leerlos antes de tocar nada; estas reglas son el resumen.
 
 1. **Backup antes de tocar la botella o el bundle.** Copia en `backups/`. La botella vive en
    `~/Library/Application Support/Regression/Bottles/Steam/`.
