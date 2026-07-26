@@ -1,6 +1,8 @@
 # AGENTS.md — Reglas del proyecto Regression
 
 Lee `README.md` primero (arquitectura, build, estado, método de investigación de CrossOver).
+Este archivo es la fuente de verdad de reglas y protocolo (Codex lo lee nativamente).
+`CLAUDE.md` es su espejo adaptado para Claude Code — si difieren, manda este.
 
 ## Lo que es este proyecto
 
