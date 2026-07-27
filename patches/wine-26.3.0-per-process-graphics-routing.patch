@@ -1,0 +1,116 @@
+--- a/dlls/ntdll/unix/loader.c
++++ b/dlls/ntdll/unix/loader.c
+@@ -382,8 +382,103 @@
+     dll_paths = new_dll_paths;
+     if (path_len > dll_path_maxlen)
+         dll_path_maxlen = path_len;
++}
++
++/* Regression: select an alternate graphics backend for this process without
++ * replacing the DXMT modules installed in the default Wine tree.  CrossOver
++ * implements the same directory-prepending model in cxcompatdb; Regression
++ * keeps the policy open and independent. */
++static int regression_executable_is( const char *name )
++{
++    const WCHAR *exe = main_wargv[0];
++    const WCHAR *cursor;
++
++    for (cursor = exe; *cursor; cursor++)
++        if (*cursor == '\\' || *cursor == '/') exe = cursor + 1;
++
++    while (*exe && *name)
++    {
++        if (towlower( *exe++ ) != (unsigned char)*name++) return 0;
++    }
++    return !*exe && !*name;
++}
++
++extern void add_load_order_override( const WCHAR *entry );
++
++static void regression_force_builtin_load_order( const char *module )
++{
++    WCHAR entry[64];
++    size_t i, length = strlen( module );
++
++    if (length + 3 > ARRAY_SIZE( entry )) return;
++    for (i = 0; i < length; i++) entry[i] = (unsigned char)module[i];
++    entry[i++] = '=';
++    entry[i++] = 'b';
++    entry[i] = 0;
++    add_load_order_override( entry );
+ }
+-
++
++static void regression_set_graphics_backend(void)
++{
++    const char *backend = getenv( "REGRESSION_GRAPHICS_BACKEND" );
++    const char *root = getenv( "REGRESSION_WINE_ROOT" );
++    int is_cubeworld = regression_executable_is( "cubeworld.exe" );
++    int is_grim_dawn = regression_executable_is( "grim dawn.exe" );
++    const char *suffix;
++    char *path;
++
++    if (!backend || !backend[0])
++    {
++        if (is_cubeworld) backend = "dxvk";
++        else if (is_grim_dawn) backend = "grim-dawn";
++        else if (regression_executable_is( "fft_enhanced.exe" )) backend = "d3dmetal";
++        else return;
++    }
++
++    if (!strcasecmp( backend, "dxvk" )) suffix = "/lib/dxvk";
++    else if (!strcasecmp( backend, "grim-dawn" )) suffix = "/lib/profiles/grim-dawn";
++    else if (!strcasecmp( backend, "d3dmetal" )) suffix = "/lib/apple_gptk/wine";
++    else
++    {
++        WARN( "unknown Regression graphics backend %s\n", backend );
++        return;
++    }
++
++    if (root && root[0])
++    {
++        if (asprintf( &path, "%s%s", root, suffix ) < 0) return;
++    }
++    else
++    {
++        if (asprintf( &path, "%s/../..%s", ntdll_dir, suffix + 4 ) < 0) return;
++    }
++    if (access( path, R_OK | X_OK ))
++    {
++        WARN( "Regression graphics backend directory %s is not accessible\n", path );
++        free( path );
++        return;
++    }
++
++    prepend_dll_path( path );
++    if (is_cubeworld && !strcasecmp( backend, "dxvk" ))
++        /* CrossOver 26.3 emits discrete resource indexes for this DXVK path. */
++        setenv( "MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "0", 1 );
++    if (is_grim_dawn &&
++        (!strcasecmp( backend, "grim-dawn" ) || !strcasecmp( backend, "d3dmetal" )))
++    {
++        /* Match CrossOver's explicit D3DMetal bottle mode for this process only.
++         * The bottle's global d3d9/AMD/NVIDIA overrides belong to other profiles
++         * and otherwise create a mixed D3DMetal + DXVK route that flickers. */
++        setenv( "CX_GRAPHICS_BACKEND", "d3dmetal", 1 );
++        setenv( "CX_ACTIVE_GRAPHICS_BACKEND", "d3dmetal", 1 );
++        regression_force_builtin_load_order( "atidxx64" );
++        regression_force_builtin_load_order( "d3d9" );
++        regression_force_builtin_load_order( "nvapi64" );
++        regression_force_builtin_load_order( "nvngx" );
++    }
++    TRACE( "Regression selected graphics backend %s from %s\n", backend, path );
++}
++
+ static void set_dll_path(void)
+ {
+     char *p, *path = getenv( "WINEDLLPATH" );
+@@ -2258,5 +2353,7 @@
+         }
+     }
+-
++
++    regression_set_graphics_backend();
++
+     server_init_process_done();
+ }

@@ -1,8 +1,16 @@
 # macOS
 .DS_Store
 
+# SwiftPM
+.build/
+.swiftpm/
+
+# Intermedios de vectorización; el icono canónico vive en assets/icon/oficial/
+assets/icon/vectorized_*.svg
+
 # Datos personales / salidas de diagnóstico
 dxdiag_out.txt
+*.log
 
 # Artefactos pesados y material de terceros NO redistribuible (ver NOTICE.md)
 Regression.app/

@@ -6,9 +6,16 @@ Este archivo es la fuente de verdad de reglas y protocolo (Codex lo lee nativame
 
 ## Lo que es este proyecto
 
-Motor Windows→macOS propio tipo CrossOver, compilado desde fuentes open-source. La app
-`Regression.app` abre Steam de Windows con doble click. **No es** un gestor de botellas ni tiene
-GUI: la UX objetivo es "abrir app → Steam", decidida por el usuario y no negociable.
+`Regression.app` es el punto de entrada nativo para ejecutar Steam de Windows en macOS. Desde
+2026-07-27 tiene dos backends aislados: **CrossOver es el motor predeterminado temporal** y el
+motor Windows→macOS propio sigue íntegro y seleccionable para desarrollo y perfiles verificados.
+La app vive en la barra de menús, no en el Dock; la ventana general de CrossOver solo se muestra
+para instalar, actualizar, reparar o validar la licencia.
+
+La botella `Steam` de CrossOver es canónica para los archivos de juegos. El `steamapps` del motor
+propio es un enlace a esa misma carpeta, pero cada botella conserva por separado credenciales,
+registro, saves fuera de Steam Cloud y configuración de Steam. Nunca se ejecutan ambos Steam a la
+vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles automáticamente.
 
 ## Reglas inviolables
 
@@ -24,19 +31,24 @@ GUI: la UX objetivo es "abrir app → Steam", decidida por el usuario y no negoc
    (qué va en system32, qué va en lib, qué es builtin y qué es native), configuración de
    botella y crossties. Se estudia y se replica ESO antes de inventar nada. La paridad se
    consigue igualando, no improvisando. Ir juego por juego sin este método está prohibido.
-3. **Regression es 100 % independiente de CrossOver.** Nada en runtime puede depender de
-   que CrossOver esté instalado: ni DLLs, ni dylibs, ni rutas, ni procesos, ni su botella,
-   ni su wine. CrossOver se usa SOLO como referencia de estudio (fuentes LGPL oficiales,
-   inspección estática de su instalación, comparativas A/B en su botella) — nunca como
-   componente. Si una pieza solo existe en CrossOver (su fork de DXMT, su SPIRV-Cross, su
-   MoltenVK compilada, cxcompatdb), se reconstruye desde fuentes públicas o se
-   reimplementa; NO se copia su binario a Regression.
+3. **Separación estricta de backends.** El backend CrossOver depende deliberadamente de la
+   instalación y licencia del usuario y se invoca solo mediante su CLI oficial. El motor propio
+   debe seguir siendo independiente: no se copian DLLs, dylibs ni binarios propietarios desde
+   CrossOver. Las observaciones de CrossOver se trasladan al motor propio únicamente mediante
+   fuentes públicas o reimplementación legal, nunca copiando `cxcompatdb` ni forks privados.
 4. **Legalidad limpia.** Solo fuentes open-source oficiales (Wine/DXMT/DXVK/MoltenVK LGPL,
    Apache, zlib…). Nada de descompilar ni extraer código de binarios propietarios (GUI de
    CrossOver, sistema de licencias, forks privados de DXMT/SPIRV-Cross). Los binarios de
    Apple (GPTK: D3DMetal.framework, libd3dshared.dylib) se usan tal cual los distribuye
    Apple, solo en local, jamás redistribuidos (por eso no están en el repo ni en GitHub).
    Esto es un proyecto personal/educativo: se documenta como tal.
+5. **I+D sin techo, promoción aislada y con evidencia.** Los PIN protegen el motor estable;
+   no son un límite para investigar un juego que aún falle. En un perfil experimental aislado
+   se puede usar Rosetta, otra versión —también más reciente— de Wine, otro toolchain o cualquier
+   dependencia abierta necesaria. CrossOver sigue siendo la referencia primaria para elegir y
+   medir cada cambio. El candidato solo se blinda cuando funcionan render, entrada, opciones
+   persistentes y gameplay, y nunca puede modificar otro perfil verificado ni introducir una
+   dependencia de CrossOver en el motor propio. Un cambio global exige además su matriz completa.
 
 ### Reglas técnicas duras (errores que YA se han cometido y NO se repiten)
 
@@ -54,20 +66,32 @@ GUI: la UX objetivo es "abrir app → Steam", decidida por el usuario y no negoc
 5. **No mezclar d3d11/dxgi de Apple con DXMT** en system32 (CEF muere). d3d12* de Apple sí coexiste.
    OJO: las dlls de Apple del GPTK son formato builtin (como las de DXMT): como "native" dan
    "not found"; se cargan solo desde su propio árbol (`lib/apple_gptk/wine`).
-6. **Limpiar `dxmt-cxpresent-*.id` antes de lanzar** (ya en el launcher): ficheros stale →
+6. **Grim Dawn está fijado a D3DMetal por proceso.** `grim dawn.exe` usa el perfil interno
+   `lib/profiles/grim-dawn` → `../apple_gptk/wine`, activa D3DMetal solo en ese proceso y fuerza
+   `atidxx64/d3d9/nvapi64/nvngx=builtin`. No convertirlo en registro o entorno global: la mezcla
+   D3DMetal + d3d9 DXVK fue la causa reproducida de negro y parpadeo.
+7. **Limpiar `dxmt-cxpresent-*.id` antes de lanzar** (ya en el launcher): ficheros stale →
    pantalla negra por hwnd reutilizado.
-7. **No "probar cosas" en vivo sobre el estado bueno.** Cada experimento en copia de la botella
+8. **No "probar cosas" en vivo sobre el estado bueno.** Cada experimento en copia de la botella
    o con dlls respaldadas; solo se aplica tras validar.
-8. **Antes de diagnosticar, descartar el entorno** (la mitad de los "bugs" históricos):
+9. **Antes de diagnosticar, descartar el entorno** (la mitad de los "bugs" históricos):
    wineservers de otros builds corriendo (muerte silenciosa), `services.exe` huérfanos
    (iconos Steam fantasma en la barra de menús), diálogo modal de Steam Cloud bloqueando el
    IPC (los juegos mueren al instante sin log: desactivar cloud del appid en
    `localconfig.vdf`), juego que necesita Steam activo por DRM.
-9. **Tras `make install` o tocar el bundle: `codesign --force --deep --sign - Regression.app`**.
-10. **PE sin strip** (el strip rompe unwind SEH y la firma de módulos builtin).
-11. **No cambiar el modelo de IA ni el stack decidido** sin permiso explícito del usuario.
-12. Responde siempre en **español**, con tildes. Código y comentarios del repo en el idioma del
+10. **Tras `make install` o tocar el bundle: `codesign --force --deep --sign - Regression.app`**.
+11. **PE sin strip** (el strip rompe unwind SEH y la firma de módulos builtin).
+12. **No cambiar el modelo de IA ni el stack decidido** sin permiso explícito del usuario.
+13. Responde siempre en **español**, con tildes. Código y comentarios del repo en el idioma del
     código existente.
+14. **Todo juego confirmado perfecto debe quedar visible como blindado.** Inmediatamente después
+    de la confirmación visual, verificar la ejecución exacta en la base local con veredicto
+    `perfect` (render, entrada y opciones en `passed`) y refrescar la app hasta comprobar la fila
+    verde `Verificado perfecto: Regression`. Los fallos anteriores se conservan como historial;
+    el perfil perfecto tiene prioridad. Si la validación es histórica y anterior a la telemetría,
+    registrar una observación importada con App ID, nombre, backend, nota y evidencia/rollback.
+    Un exit code 0 jamás crea este estado por sí solo. La confirmación modal del veredicto
+    perfecto es una salvaguarda deliberada y no se elimina.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 
@@ -111,6 +135,7 @@ Según lo que tocaste, valida TODO lo de su fila antes de dar el cambio por buen
 | Si tocaste… | Debes validar (con captura visual) |
 |---|---|
 | Wine (build, dlls en wine-root) | Steam tienda renderiza + Moonlighter 2 (Unity) + Palworld |
+| Perfil aislado por ejecutable | Juego objetivo completo + Steam tienda + un perfil ya blindado no afectado |
 | DXMT (d3d11/dxgi/d3d10core) | Steam tienda (CEF) + Palworld (personajes visibles) |
 | DXVK / d3d9 | Un juego D3D9 + Steam tienda |
 | winemac.drv / parche cross-process | Steam tienda + clicks precisos + Palworld |
@@ -122,7 +147,15 @@ Validar = lanzar, capturar con `screencapture -x -l <CGWindowID>` y **mirar la i
 "Compila" o "el proceso corre" NO es validación. Si algo de la matriz falla → **revertir al
 instante** (para eso está el backup) y repensar, no apilar otro cambio encima.
 
+Cuando el usuario confirme el resultado perfecto, cerrar el ciclo en la propia UI: registrar el
+veredicto sobre el run, refrescar Regression y capturar la fila verde. Esa captura forma parte de
+la evidencia del perfil junto a la del juego.
+
 ### 4. Tabla de PINs (versiones/config FIJADAS — no tocar sin validar la matriz completa)
+
+Estos PIN fijan el **backend estable predeterminado**, no los entornos aislados de I+D por juego.
+Una alternativa puede convivir autocontenida en un perfil individual después de superar sus
+pruebas; sustituir un PIN global requiere validar toda la matriz correspondiente.
 
 | Pieza | Valor fijado | Razón | Test que lo protege |
 |---|---|---|---|
@@ -131,6 +164,7 @@ instante** (para eso está el backup) y repensar, no apilar otro cambio encima.
 | d3d11/dxgi/d3d10core | DXMT en system32 + wine-root, **SIN override `native`** | El override las marca "not found" | Steam tienda |
 | d3d11/dxgi de Apple | **NO** en system32 (solo d3d12*) | CEF muere | Steam tienda |
 | d3d9 | DXVK 1.10.3, override `native` sí (PE plana) | Funciona | Juego D3D9 |
+| Grim Dawn | D3DMetal completo por proceso; `d3d9/atidxx64/nvapi64/nvngx=builtin` | Evita mezcla DXVK y parpadeo | Gameplay + opciones + captura 3024×1964 |
 | RetinaMode | `n` (HKCU\Software\Wine\Mac Driver) | Alinea clicks | Click en tienda |
 | Fuentes | 55 TTFs (corefonts + CJK) en la botella | Sin ellas Steam crashea (assert Win32Font) | Steam arranca |
 | DLLs PE | **SIN strip** | El strip rompe unwind SEH y firma de módulos | Juegos Unity |
@@ -150,10 +184,26 @@ validación de su fila pasa entera con capturas, (3) hay backup del estado nuevo
 (4) README/AGENTS reflejan el cambio. Si solo cumples el punto 1, has arreglado una cosa y
 quizá roto otra — que es exactamente lo que este protocolo existe para evitar.
 
-## Estado rápido (2026-07-26)
+## Estado rápido (2026-07-27)
 
+- **Arquitectura operativa actual**: app nativa `LSUIElement` en barra de menús, CrossOver 26.3
+  como backend predeterminado, motor propio seleccionable, conmutación con cierre limpio y una
+  sola biblioteca física de juegos. El lanzador propio original está intacto en
+  `Regression.app/Contents/MacOS/regression-engine`.
+- **Aprendizaje local**: SQLite normalizada en
+  `~/Library/Application Support/Regression/Compatibility/compatibility.sqlite`; registra
+  sistema, comandos saneados, componentes, backend gráfico, configuración de juego y deltas.
+  Un exit code 0 queda **sin verificar**: solo una validación visual explícita crea un perfil
+  perfecto o con incidencias. Nada se aplica automáticamente al motor propio. Base, exportaciones,
+  recibos y logs son privados del usuario (`0700`/`0600`); se retienen como máximo 20 logs del
+  lanzador.
 - OK total con el wine de prefijo propio: **Steam completo, Moonlighter 2 (Unity IL2CPP),
   Palworld (personaje), Grim Dawn, Romestead**, DXVK D3D9. Estado blindado intacto.
+- **PIN: Grim Dawn = D3DMetal completo y aislado por ejecutable.** El perfil anterior mezclaba
+  DXVK/MoltenVK y parpadeaba; el actual renderiza gameplay Retina 3024×1964, conserva clics y
+  opciones y fue confirmado perfecto por el usuario. Evidencia y rollback local:
+  `backups/grimdawn-d3dmetal-perfect-20260727-1802/`. Método y expediente reproducible:
+  `docs/compatibility-research.md` y `docs/games/grim-dawn.md`.
 - **PIN: DXMT = v0.72 + parche cross-process** (versión exacta de CrossOver). `main` rompe los
   skeletal meshes de Palworld — NO actualizar sin probar Palworld.
 - **PIN: wine compilado con `--prefix` apuntando a la app** (Regression.app/Contents/SharedSupport/wine-root).
@@ -161,14 +211,25 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
 - **PIN: wine-root y system32 llevan la dxgi de DXMT** (pareja). Cambiar la builtin de
   wine-root por la de wine rompe la carga de la dxgi de DXMT en system32 (los juegos D3D11
   mueren al instante). D3D12 necesita la dxgi de wine → conflicto documentado en README §8.
-- **Cube World**: negro (D3D11, dos swapchains). **FFT**: "graphics card not supported" →
-  crash vkd3d→MoltenVK (compute). Diagnóstico completo y arquitectura CX en README §8.
+- **Cube World**: el usuario confirmó render, encuadre, interacción y gameplay perfectos en el
+  motor propio blindado; ese dato figura como mejor perfil conocido. En la botella CrossOver
+  reinstalada, las pruebas actuales base/DXVK/D3DMetal muestran pantalla negra y
+  "Could not initialize Direct3D"; no confundirlas con el éxito histórico de Regression.
+- **FFT**: funcionamiento perfecto confirmado por el usuario en el motor propio tras aceptar el
+  permiso de macOS. Conservar el registro respaldado; el diagnóstico antiguo de MoltenVK queda
+  como historia de la ruta que fallaba, no como estado final del juego.
 - **Steam Cloud desactivado** para 1128000/1004640 (el diálogo modal de sincronización
   bloquea el IPC de Steam y mata los lanzamientos — falso bug del motor).
-- Backups: `backups/regression-blindado-20260725.tar.gz` (**el de referencia**: app + docs +
-  parches + scripts, estado verificado OK al 100 %) y `backups/botella-config-20260725.tar.gz`
-  (registros + 55 fuentes + DLLs DXMT/DXVK de system32). Para volver a este punto: restaurar
-  ambos. Históricos: `regression-app-final-20260725.tar.gz` (solo app).
+- Backups consolidados: `backups/regression-last-good-20260726.tar.gz` (bundle exacto desde
+  el que se restauró el estado bueno, extracción y firma verificadas),
+  `backups/regression-blindado-20260725.tar.gz` (baseline blindado) y
+  `backups/botella-config-20260725.tar.gz` (registros + 55 fuentes + DLLs DXMT/DXVK).
+  El registro confirmado de FFT sigue en
+  `backups/regression-steam-user-fft-perfect-20260726.reg`; los saves preventivos viven en
+  `backups/user-data/`.
+- Limpieza 2026-07-27: quedan solo las fuentes fijadas 26.3.0; se eliminaron 26.2.0,
+  `stage/`, la botella local `bottles/test/` y backups experimentales redundantes. El árbol
+  quedó en ~5,4 GiB sin modificar la app ni la botella canónicas.
 - **Instalación**: `/Applications/Regression.app` → symlink a la app del proyecto (canónica).
   Lanzar con `open -a Regression` desde cualquier sitio.
 
@@ -176,8 +237,9 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
 
 ```bash
 open -a "$PWD/Regression.app"            # debe abrir Steam y renderizar la tienda
-swift /tmp/winid3.swift                  # id de la ventana "Steam" (si existe el script)
+swift tools/diagnostics/list-windows.swift steam
 screencapture -x -l <id> /tmp/check.png  # captura y revisar visualmente
+bash build/install-game-profiles.sh      # verifica hashes/perfil Grim Dawn y vuelve a firmar
 ```
 
 ## Build
