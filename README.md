@@ -41,7 +41,8 @@ y por qué no se redistribuyen. Licencia: LGPL-2.1+ (`LICENSE`).
    juegos se instalan una sola vez; credenciales, registro y datos externos a `steamapps` siguen
    separados de forma segura. El escáner resuelve ese enlace antes de leer los manifests para que
    ambos backends enumeren exactamente los mismos títulos.
-6. SQLite v11 guarda ejecuciones, configuraciones, huellas de DLL/runtime, variables permitidas,
+6. SQLite v12 guarda ejecuciones lógicas, todos sus procesos, configuraciones, huellas de
+   DLL/runtime, variables permitidas,
    resolución/configuración gráfica detectable, deltas y verificaciones. Además normaliza la
    identidad de cada motor para comparar resultados del mismo Wine/DXMT/DXVK/D3DMetal sin
    confundirlos con opciones propias del juego. Los perfiles se pueden consultar y exportar como
@@ -77,14 +78,21 @@ y por qué no se redistribuyen. Licencia: LGPL-2.1+ (`LICENSE`).
     placeholder temprano de telemetría. `Steam App <ID>` solo se usa mientras el título es
     realmente desconocido y nunca puede degradar el nombre histórico; cada escaneo reconcilia
     automáticamente las filas antiguas.
-14. El esquema v11 distingue candidatos tecnológicos de experimentos reales. Todo I+D puede
+14. El esquema v12 distingue candidatos tecnológicos de experimentos reales. Todo I+D puede
     persistir síntoma, referencia CrossOver, hipótesis, prueba de una variable, run exacto,
     matriz, evidencias y rollback; SQLite impide cerrar el expediente si falta una puerta.
-15. Antes de lanzar un juego, Regression ejecuta un preflight de solo lectura: comprueba base,
+15. Antes de lanzar un juego desde su panel, Regression ejecuta un preflight de solo lectura:
+    comprueba base,
     motor, aislamiento de Steam/Wine, instalación, servicios huérfanos, marcadores DXMT, espacio,
     logs y biblioteca. Un bloqueo inequívoco detiene la solicitud; los avisos se conservan. Cada
     ejecución iniciada enlaza una instantánea saneada y verificada por SHA-256, sin PID, rutas
-    personales ni comandos completos.
+    personales ni comandos completos. Si el usuario pulsa «Jugar» dentro del cliente completo de
+    Steam, el mismo diagnóstico se toma al observar su primer proceso y queda marcado como
+    `processStartBoundary`; nunca se presenta como una captura previa exacta.
+16. La telemetría agrupa launcher, ejecutable principal y helpers admitidos de un mismo App ID en
+    una sola sesión verificable. Cada PID conserva inicio, cierre, código y ejecutable en
+    `run_processes`; la sesión solo termina cuando finaliza el último proceso tras una breve
+    ventana de unión. Así una pulsación del usuario no infla perfiles ni estadísticas.
 
 Rutas principales:
 
@@ -101,6 +109,7 @@ Regression.app/Contents/SharedSupport/bin/regressionctl status
 Regression.app/Contents/SharedSupport/bin/regressionctl preflight
 Regression.app/Contents/SharedSupport/bin/regressionctl preflight 219990 --backend regression
 Regression.app/Contents/SharedSupport/bin/regressionctl runs
+Regression.app/Contents/SharedSupport/bin/regressionctl processes [RUN_ID]
 Regression.app/Contents/SharedSupport/bin/regressionctl profiles
 Regression.app/Contents/SharedSupport/bin/regressionctl engines
 Regression.app/Contents/SharedSupport/bin/regressionctl certifications

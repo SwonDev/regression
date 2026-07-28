@@ -120,6 +120,7 @@ final class CompatibilityCatalogTests: XCTestCase {
         XCTAssertTrue(health.isHealthy)
         XCTAssertEqual(health.certificationCount, VerifiedGameCatalog.all.count + 1)
         XCTAssertEqual(health.engineSnapshotCount, 1)
+        XCTAssertEqual(health.processCount, 1)
         XCTAssertEqual(health.runtimeTechnologyCount, RuntimeTechnologyCatalog.all.count)
         XCTAssertEqual(health.runtimeCandidateCount, 0)
         let migratedRuns = try await migrated.runDetails()
@@ -240,6 +241,13 @@ final class CompatibilityCatalogTests: XCTestCase {
         )
         XCTAssertEqual(exportedCertification.sourceRunID, context.id)
         XCTAssertEqual(exportedCertification.engineFingerprint, certification.engineFingerprint)
+        XCTAssertEqual(payload.processes.count, 1)
+        XCTAssertEqual(payload.processes.first?.runID, context.id)
+        let exactProcesses = try await reopenedRepository.runProcesses(
+            runID: context.id,
+            limit: 1
+        )
+        XCTAssertEqual(exactProcesses.map(\.runID), [context.id])
         XCTAssertEqual(payload.databaseHealth.schemaVersion, CompatibilityRepository.currentSchemaVersion)
         try await reopenedRepository.close()
     }

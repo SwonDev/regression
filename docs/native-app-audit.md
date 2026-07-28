@@ -275,3 +275,86 @@ ausencia de secretos y ausencia de envío propio a servidores.
 - La distribución notarizada con Developer ID queda fuera del proyecto personal actual. El bundle
   local usa una firma Apple Development estable; en una máquina sin certificado el script avisa
   antes de recurrir a firma ad hoc.
+
+## Ampliación v12: sesiones reales de Steam y preparación para probar juegos
+
+Esta ampliación sustituye el baseline operativo v11 anterior. El build canónico instalado es
+**Regression 1.7.0 (26)** y la base viva usa el esquema **v12**. No se modificaron Wine, DXMT,
+DXVK, D3DMetal, Apple GPTK, la botella ni ningún perfil blindado; tampoco se lanzó ningún juego.
+
+### Hallazgo y contrato
+
+El flujo real del usuario no siempre pasa por el botón `Jugar` del popover: también puede pulsar
+`Jugar` dentro del cliente completo de Steam. Además, un solo lanzamiento de Steam puede registrar
+primero un launcher y después el ejecutable real. La base v11 interpretaba cada PID como una
+ejecución independiente, lo que duplicaba pruebas como `DSClient.exe` y
+`DSClient-Win64-Shipping.exe` y podía separar la evidencia del proceso representativo.
+
+La documentación pública de Valve confirma que `steam://run/<AppID>` identifica una aplicación,
+pero no garantiza relanzar un ejecutable concreto, y que sus opciones de lanzamiento pueden
+seleccionar diferentes ejecutables y argumentos. Por tanto, la identidad verificable correcta es
+la sesión lógica `backend + Steam App ID`, no cada PID:
+
+- [Steamworks API overview](https://partner.steamgames.com/doc/sdk/api?l=english&language=english)
+- [Steam launch options](https://partner.steamgames.com/doc/features/steamvr/settings?language=english)
+
+### Esquema y captura
+
+- `run_processes` conserva todos los PID de una sesión, sus ejecutables saneados, inicio, fin,
+  código de salida y cuál fue el representativo. Un índice parcial impide dos representativos.
+- Una ventana de unión de tres segundos permite que el ejecutable real se incorpore después de que
+  termine el launcher. La ejecución solo se consolida cuando han terminado todos sus procesos.
+- El cierre limpio sigue siendo `unknown`: nunca crea un blindado ni demuestra render, entrada,
+  opciones o gameplay.
+- El preflight usa protocolo 2 y distingue `preLaunch` de `processStartBoundary`. El botón nativo
+  conserva la captura previa fuerte. Un lanzamiento iniciado dentro de Steam recibe una captura
+  pasiva al observar su primer proceso, con latencia explícita; jamás se presenta como anterior.
+- La migración v11→v12 es transaccional. Normalizó los 22 PID históricos que ya tenían las 25
+  ejecuciones sin fusionar ni reescribir el historial antiguo. Conservó 7 verificaciones,
+  2 observaciones, 3 certificaciones activas y 9 motores.
+- `regressionctl processes [RUN_ID]` consulta el run exacto dentro de SQLite y distingue un proceso
+  activo de otro terminado sin código de salida. La exportación JSON incluye la relación completa.
+
+### Migración, rollback y evidencia instalada
+
+- Backup transaccional v11 inmediatamente anterior a la migración, `quick_check=ok`, 25 runs y
+  permisos `0600`:
+  `~/Library/Application Support/Regression/Compatibility/Backups/compatibility-pre-v11-to-v12-2026-07-28T19-40-43Z-14722A7C.sqlite`,
+  SHA-256 `eb3f0d7f2c4f8199f8ad3ca28455328b1196084cba232792f28bc8f88f45e97a`.
+- Snapshot v12 previo al empaquetado final, `quick_check=ok` y permisos `0600`:
+  `~/Library/Application Support/Regression/Compatibility/Backups/compatibility-before-1.7.0-26-20260728-204312-14348.sqlite`,
+  SHA-256 `554e78c9286c88654aa9e1903e87f67b0a79cc62956e2be5922976094e8fab82`.
+- Rollback nativo inmediatamente anterior al empaquetado final:
+  `backups/native-packaging/regression-native-before-1.7.0-26-20260728-204312.tar.gz`,
+  SHA-256 `0743eda123bb4a529456ec85b23cd3e9faa8191575c4e1a9295993ee0510e728`.
+- Popover instalado con Regression activo y biblioteca compartida:
+  `backups/native-audit-20260728/popover-session-v12-1.7.0-26.png`, SHA-256
+  `c1fd0d24d6c672878178d66eb77114e098458a5da6c95fcfaab8da5258a74c02`.
+- Aprendizaje instalado con nombres reales, `Base íntegra · esquema v12`, 22 procesos y
+  mantenimiento verde:
+  `backups/native-audit-20260728/learning-maintenance-v12-1.7.0-26.png`, SHA-256
+  `3b7e71c6e3ed83a9c95d23ff655e546132736a58b43a7af85d1b33705f6f6eec`.
+- Steam del motor propio siguió renderizando a 3024×1740 durante el cierre/reapertura de la app
+  nativa:
+  `backups/native-audit-20260728/steam-render-1.7.0-26.png`, SHA-256
+  `b341bea0f3d35ac498c618a0cd7f5e02f88d0c1afe2fc3306ffbcc6beca8b74b`.
+
+### Gates v12
+
+- `swift test`: 80 casos, 79 ejecutados, 1 diagnóstico local optativo omitido y 0 fallos.
+- `swift test --sanitize=thread`: 80 casos, 0 carreras y 0 fallos.
+- Cobertura LLVM agregada: 87,90 % de líneas, 86,19 % de funciones y 79,13 % de regiones.
+- `swift build -Xswiftc -warnings-as-errors` y build release: correctos.
+- Migración ensayada primero sobre una copia SQLite de la base real y después sobre la base viva:
+  `quick_check=ok`, 0 claves foráneas huérfanas, 22 runs con PID, 22 filas normalizadas y
+  0 procesos representativos incoherentes.
+- Firma profunda, enlace canónico de `/Applications`, permisos privados y estado protegido de
+  app/botella: correctos después del empaquetado.
+- Estrés instalado: doce transiciones de Aprendizaje, 87 elementos AX y CPU en reposo. El gate
+  localiza el icono por `Regression:` y concede una estabilización suficiente antes de muestrear;
+  una muestra obtenida durante el ajuste confirmó el hilo principal dormido y ninguna actividad
+  de AttributeGraph. Se conserva localmente en
+  `backups/native-audit-20260728/popover-idle-sample-1.7.0-26.txt`, SHA-256
+  `adaf9341e7029fe4f72c021bc963132f9486f7bf178c73505d7ba7e342ef9b36`.
+- Validación visual real del popover, mantenimiento y tienda de Steam. No hubo gameplay en esta
+  ampliación: queda deliberadamente reservado para la siguiente fase juego por juego.

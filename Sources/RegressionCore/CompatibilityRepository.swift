@@ -20,7 +20,7 @@ private struct CertificationEvidenceRecord {
 }
 
 public actor CompatibilityRepository {
-    public static let currentSchemaVersion = 11
+    public static let currentSchemaVersion = 12
 
     private let databaseURL: URL
     private var database: OpaquePointer?
@@ -147,19 +147,128 @@ public actor CompatibilityRepository {
         }
     }
 
-    public func markLaunched(id: UUID, processID: Int32, executable: String, launchMilliseconds: Int?) throws {
+    public func markLaunched(
+        id: UUID,
+        processID: Int32,
+        executable: String,
+        startedAt: Date = Date(),
+        launchMilliseconds: Int?
+    ) throws {
         try ensurePrepared()
-        try execute(
-            "UPDATE runs SET result=?, process_id=?, executable=?, launch_ms=? WHERE id=?;",
-            bindings: [
-                RunResult.launched.rawValue,
-                processID,
-                executable,
-                launchMilliseconds ?? NSNull(),
-                id.uuidString
-            ]
-        )
-        try recordEvent(runID: id, phase: "process-started", value: executable)
+        let safeExecutable = PrivacySanitizer.redactedLogExcerpt(executable, limit: 1_000)
+        try transaction {
+            try execute(
+                "UPDATE runs SET result=?, process_id=?, executable=?, launch_ms=? WHERE id=?;",
+                bindings: [
+                    RunResult.launched.rawValue,
+                    processID,
+                    safeExecutable,
+                    launchMilliseconds ?? NSNull(),
+                    id.uuidString
+                ]
+            )
+            try execute(
+                "UPDATE run_processes SET is_representative=0 WHERE run_id=?;",
+                bindings: [id.uuidString]
+            )
+            try execute(
+                """
+                INSERT INTO run_processes(
+                    run_id, process_id, executable, started_at, is_representative
+                ) VALUES(?, ?, ?, ?, 1)
+                ON CONFLICT(run_id, process_id) DO UPDATE SET
+                    executable=excluded.executable,
+                    started_at=excluded.started_at,
+                    ended_at=NULL,
+                    exit_code=NULL,
+                    is_representative=1;
+                """,
+                bindings: [
+                    id.uuidString,
+                    processID,
+                    safeExecutable,
+                    dateFormatter.string(from: startedAt),
+                ]
+            )
+            try recordEvent(
+                runID: id,
+                phase: "process-started",
+                value: "pid=\(processID) executable=\(safeExecutable)"
+            )
+        }
+    }
+
+    public func markAdditionalProcessStarted(
+        id: UUID,
+        processID: Int32,
+        executable: String,
+        startedAt: Date
+    ) throws {
+        try ensurePrepared()
+        let safeExecutable = PrivacySanitizer.redactedLogExcerpt(executable, limit: 1_000)
+        try transaction {
+            try execute(
+                "UPDATE run_processes SET is_representative=0 WHERE run_id=?;",
+                bindings: [id.uuidString]
+            )
+            try execute(
+                """
+                INSERT INTO run_processes(
+                    run_id, process_id, executable, started_at, is_representative
+                ) VALUES(?, ?, ?, ?, 1)
+                ON CONFLICT(run_id, process_id) DO UPDATE SET
+                    executable=excluded.executable,
+                    started_at=excluded.started_at,
+                    ended_at=NULL,
+                    exit_code=NULL,
+                    is_representative=1;
+                """,
+                bindings: [
+                    id.uuidString,
+                    processID,
+                    safeExecutable,
+                    dateFormatter.string(from: startedAt),
+                ]
+            )
+            try execute(
+                "UPDATE runs SET process_id=?, executable=? WHERE id=?;",
+                bindings: [processID, safeExecutable, id.uuidString]
+            )
+            try recordEvent(
+                runID: id,
+                phase: "process-joined",
+                value: "pid=\(processID) executable=\(safeExecutable)"
+            )
+        }
+    }
+
+    public func markProcessEnded(
+        id: UUID,
+        processID: Int32,
+        endedAt: Date,
+        exitCode: Int32
+    ) throws {
+        try ensurePrepared()
+        try transaction {
+            try execute(
+                """
+                UPDATE run_processes
+                SET ended_at=?, exit_code=?
+                WHERE run_id=? AND process_id=?;
+                """,
+                bindings: [
+                    dateFormatter.string(from: endedAt),
+                    exitCode,
+                    id.uuidString,
+                    processID,
+                ]
+            )
+            try recordEvent(
+                runID: id,
+                phase: "process-ended",
+                value: "pid=\(processID) exit=\(exitCode)"
+            )
+        }
     }
 
     public func failRunBeforeLaunch(
@@ -243,7 +352,7 @@ public actor CompatibilityRepository {
                     afterFingerprint, try jsonString(delta), id.uuidString
                 ]
             )
-            try recordEvent(runID: id, phase: "process-ended", value: "exit=\(exitCode)")
+            try recordEvent(runID: id, phase: "session-ended", value: "exit=\(exitCode)")
         }
     }
 
@@ -647,6 +756,45 @@ public actor CompatibilityRepository {
         }
     }
 
+    public func runProcesses(
+        runID: UUID? = nil,
+        limit: Int = 100_000
+    ) throws -> [RunProcessRecord] {
+        try ensurePrepared()
+        let runFilter = runID == nil ? "" : "WHERE run_id=?"
+        var bindings: [Any] = []
+        if let runID {
+            bindings.append(runID.uuidString)
+        }
+        bindings.append(max(1, limit))
+        return try query(
+            """
+            SELECT run_id, process_id, executable, started_at, ended_at, exit_code,
+                   is_representative
+            FROM run_processes
+            \(runFilter)
+            ORDER BY started_at DESC, process_id DESC
+            LIMIT ?;
+            """,
+            bindings: bindings
+        ) { statement in
+            guard
+                let runID = UUID(uuidString: Self.text(statement, 0)),
+                let processID = Self.optionalInt32(statement, 1),
+                let startedAt = dateFormatter.date(from: Self.text(statement, 3))
+            else { return nil }
+            return RunProcessRecord(
+                runID: runID,
+                processID: processID,
+                executable: Self.text(statement, 2),
+                startedAt: startedAt,
+                endedAt: Self.optionalText(statement, 4).flatMap(dateFormatter.date(from:)),
+                exitCode: Self.optionalInt32(statement, 5),
+                isRepresentative: Self.optionalInt(statement, 6) == 1
+            )
+        }
+    }
+
     public func certifications(activeOnly: Bool = true) throws -> [VerifiedGameCertification] {
         try ensurePrepared()
         let activeClause = activeOnly ? "WHERE c.is_active=1" : ""
@@ -1046,6 +1194,7 @@ public actor CompatibilityRepository {
             foreignKeyViolations: violations,
             gameCount: try scalarInt("SELECT COUNT(*) FROM games;"),
             runCount: try scalarInt("SELECT COUNT(*) FROM runs;"),
+            processCount: try scalarInt("SELECT COUNT(*) FROM run_processes;"),
             verifiedRunCount: try scalarInt("SELECT COUNT(*) FROM run_verifications;"),
             observationCount: try scalarInt("SELECT COUNT(*) FROM compatibility_observations;"),
             certificationCount: try scalarInt(
@@ -1072,6 +1221,7 @@ public actor CompatibilityRepository {
             schemaVersion: Self.currentSchemaVersion,
             exportedAt: Date(),
             runs: try runDetails(),
+            processes: try runProcesses(),
             observations: try observations(),
             profiles: try compatibilityProfiles(),
             engines: try engineProfiles(),
@@ -1200,6 +1350,52 @@ public actor CompatibilityRepository {
                 )
                 try execute("PRAGMA user_version=11;")
             }
+            if startingVersion < 12 {
+                try executeScript(Self.processTrackingSchema)
+                try backfillRunProcesses()
+                try addPreflightCaptureColumns()
+                try recordMigration(
+                    version: 12,
+                    name: "sesiones multiproceso y procedencia temporal del diagnóstico"
+                )
+                try execute("PRAGMA user_version=12;")
+            }
+        }
+    }
+
+    private func backfillRunProcesses() throws {
+        try execute(
+            """
+            INSERT OR IGNORE INTO run_processes(
+                run_id, process_id, executable, started_at, ended_at, exit_code,
+                is_representative
+            )
+            SELECT id, process_id, COALESCE(executable, 'desconocido'), started_at,
+                   ended_at, exit_code, 1
+            FROM runs
+            WHERE process_id IS NOT NULL;
+            """
+        )
+    }
+
+    private func addPreflightCaptureColumns() throws {
+        if try !columnExists(table: "run_preflight_reports", column: "capture_phase") {
+            try execute(
+                """
+                ALTER TABLE run_preflight_reports
+                ADD COLUMN capture_phase TEXT NOT NULL DEFAULT 'preLaunch'
+                    CHECK(capture_phase IN ('preLaunch','processStartBoundary'));
+                """
+            )
+        }
+        if try !columnExists(table: "run_preflight_reports", column: "capture_delay_ms") {
+            try execute(
+                """
+                ALTER TABLE run_preflight_reports
+                ADD COLUMN capture_delay_ms INTEGER
+                    CHECK(capture_delay_ms IS NULL OR capture_delay_ms BETWEEN 0 AND 60000);
+                """
+            )
         }
     }
 
@@ -1740,6 +1936,21 @@ public actor CompatibilityRepository {
                 "Hay evidencias sin una identidad de motor normalizada"
             )
         }
+        let invalidRepresentativeProcesses = try scalarInt(
+            """
+            SELECT COUNT(*) FROM runs r
+            WHERE r.process_id IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM run_processes p
+                WHERE p.run_id=r.id AND p.process_id=r.process_id
+                  AND p.is_representative=1
+            );
+            """
+        )
+        guard invalidRepresentativeProcesses == 0 else {
+            throw RegressionCoreError.database(
+                "Hay ejecuciones cuyo proceso representativo no está normalizado"
+            )
+        }
         try validateRuntimeEvolutionData()
         try validateResearchData()
         try validatePreflightData()
@@ -2256,12 +2467,20 @@ public actor CompatibilityRepository {
             status TEXT NOT NULL CHECK(status IN ('ready','warning','blocked')),
             blocker_count INTEGER NOT NULL CHECK(blocker_count >= 0),
             warning_count INTEGER NOT NULL CHECK(warning_count >= 0),
+            capture_phase TEXT NOT NULL DEFAULT 'preLaunch'
+                CHECK(capture_phase IN ('preLaunch','processStartBoundary')),
+            capture_delay_ms INTEGER
+                CHECK(capture_delay_ms IS NULL OR capture_delay_ms BETWEEN 0 AND 60000),
             report_json TEXT NOT NULL CHECK(json_valid(report_json)),
             report_fingerprint TEXT NOT NULL CHECK(
                 length(report_fingerprint)=64
                 AND report_fingerprint NOT GLOB '*[^0-9a-f]*'
             ),
             created_at TEXT NOT NULL,
+            CHECK(
+                (capture_phase='preLaunch' AND capture_delay_ms IS NULL)
+                OR (capture_phase='processStartBoundary' AND capture_delay_ms IS NOT NULL)
+            ),
             CHECK(
                 (status='ready' AND blocker_count=0 AND warning_count=0)
                 OR (status='warning' AND blocker_count=0 AND warning_count>0)
@@ -2270,6 +2489,24 @@ public actor CompatibilityRepository {
         );
         CREATE INDEX IF NOT EXISTS run_preflight_reports_status_idx
             ON run_preflight_reports(status, created_at DESC);
+        """
+
+    private static let processTrackingSchema = """
+        CREATE TABLE IF NOT EXISTS run_processes(
+            run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+            process_id INTEGER NOT NULL CHECK(process_id > 0),
+            executable TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            ended_at TEXT,
+            exit_code INTEGER,
+            is_representative INTEGER NOT NULL DEFAULT 0 CHECK(is_representative IN (0,1)),
+            PRIMARY KEY(run_id, process_id),
+            CHECK(ended_at IS NOT NULL OR exit_code IS NULL)
+        );
+        CREATE INDEX IF NOT EXISTS run_processes_run_time_idx
+            ON run_processes(run_id, started_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS run_processes_one_representative_idx
+            ON run_processes(run_id) WHERE is_representative=1;
         """
 
     private static let certificationProvenanceIndexes = """
@@ -2306,6 +2543,7 @@ public struct CompatibilityExport: Codable, Sendable {
     public let schemaVersion: Int
     public let exportedAt: Date
     public let runs: [RunDetail]
+    public let processes: [RunProcessRecord]
     public let observations: [CompatibilityObservation]
     public let profiles: [CompatibilityProfile]
     public let engines: [EngineProfile]

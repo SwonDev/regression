@@ -35,6 +35,24 @@ public enum GameTestPreflightCheckID: String, Codable, CaseIterable, Sendable {
     case sharedLibrary
 }
 
+/// Indica en qué punto del lanzamiento se observó el entorno.
+///
+/// `preLaunch` es la garantía fuerte usada por los botones de Regression. Cuando el usuario
+/// pulsa «Jugar» dentro del cliente completo de Steam no existe un hook previo oficial; en ese
+/// caso se conserva una instantánea en el primer límite de proceso observado y se etiqueta como
+/// `processStartBoundary` para no presentar evidencia posterior como si fuese previa.
+public enum GameTestPreflightCapturePhase: String, Codable, CaseIterable, Sendable {
+    case preLaunch
+    case processStartBoundary
+
+    public var displayName: String {
+        switch self {
+        case .preLaunch: "Antes del lanzamiento"
+        case .processStartBoundary: "Al observar el inicio en Steam"
+        }
+    }
+}
+
 public struct GameTestPreflightCheck: Codable, Equatable, Identifiable, Sendable {
     public var id: GameTestPreflightCheckID { checkID }
 
@@ -59,13 +77,13 @@ public struct GameTestPreflightCheck: Codable, Equatable, Identifiable, Sendable
     }
 }
 
-/// Instantánea saneada del entorno inmediatamente anterior a una prueba.
+/// Instantánea saneada del entorno vinculada a una prueba y a su fase temporal exacta.
 ///
 /// No contiene comandos completos, rutas personales, nombres de cuenta ni PID. Su objetivo es
 /// distinguir una regresión del juego de un problema ambiental sin convertir la base local en
 /// una fuente de comandos ejecutables.
 public struct GameTestPreflightReport: Codable, Equatable, Identifiable, Sendable {
-    public static let protocolVersion = 1
+    public static let protocolVersion = 2
 
     public let id: UUID
     public let protocolVersion: Int
@@ -73,6 +91,8 @@ public struct GameTestPreflightReport: Codable, Equatable, Identifiable, Sendabl
     public let gameName: String?
     public let backend: BackendKind
     public let checkedAt: Date
+    public let capturePhase: GameTestPreflightCapturePhase
+    public let captureDelayMilliseconds: Int?
     public let checks: [GameTestPreflightCheck]
 
     public init(
@@ -82,6 +102,8 @@ public struct GameTestPreflightReport: Codable, Equatable, Identifiable, Sendabl
         gameName: String?,
         backend: BackendKind,
         checkedAt: Date = Date(),
+        capturePhase: GameTestPreflightCapturePhase = .preLaunch,
+        captureDelayMilliseconds: Int? = nil,
         checks: [GameTestPreflightCheck]
     ) {
         self.id = id
@@ -92,7 +114,60 @@ public struct GameTestPreflightReport: Codable, Equatable, Identifiable, Sendabl
         }
         self.backend = backend
         self.checkedAt = checkedAt
+        self.capturePhase = capturePhase
+        self.captureDelayMilliseconds = capturePhase == .processStartBoundary
+            ? max(0, captureDelayMilliseconds ?? 0)
+            : nil
         self.checks = checks
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case protocolVersion
+        case appID
+        case gameName
+        case backend
+        case checkedAt
+        case capturePhase
+        case captureDelayMilliseconds
+        case checks
+    }
+
+    /// Conserva la lectura de los informes v1. La fase ausente era necesariamente previa porque
+    /// esa versión solo se persistía desde el botón de lanzamiento de Regression.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
+        appID = try container.decodeIfPresent(String.self, forKey: .appID)
+        gameName = try container.decodeIfPresent(String.self, forKey: .gameName)
+        backend = try container.decode(BackendKind.self, forKey: .backend)
+        checkedAt = try container.decode(Date.self, forKey: .checkedAt)
+        capturePhase = try container.decodeIfPresent(
+            GameTestPreflightCapturePhase.self,
+            forKey: .capturePhase
+        ) ?? .preLaunch
+        captureDelayMilliseconds = try container.decodeIfPresent(
+            Int.self,
+            forKey: .captureDelayMilliseconds
+        )
+        checks = try container.decode([GameTestPreflightCheck].self, forKey: .checks)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(protocolVersion, forKey: .protocolVersion)
+        try container.encodeIfPresent(appID, forKey: .appID)
+        try container.encodeIfPresent(gameName, forKey: .gameName)
+        try container.encode(backend, forKey: .backend)
+        try container.encode(checkedAt, forKey: .checkedAt)
+        try container.encode(capturePhase, forKey: .capturePhase)
+        try container.encodeIfPresent(
+            captureDelayMilliseconds,
+            forKey: .captureDelayMilliseconds
+        )
+        try container.encode(checks, forKey: .checks)
     }
 
     public var status: GameTestReadinessStatus {
@@ -209,7 +284,11 @@ public actor GameTestPreflight {
         databaseHealth: CompatibilityDatabaseHealth,
         sharedLibraryAssessment: SharedLibraryAssessment?,
         game: SteamGame? = nil,
-        checkedAt: Date = Date()
+        targetAppID: String? = nil,
+        targetGameName: String? = nil,
+        checkedAt: Date = Date(),
+        capturePhase: GameTestPreflightCapturePhase = .preLaunch,
+        processStartedAt: Date? = nil
     ) async -> GameTestPreflightReport {
         let steamRootURL = selectedSteamRoot(
             backend: backend,
@@ -219,7 +298,11 @@ public actor GameTestPreflight {
             databaseCheck(databaseHealth),
             backendAvailabilityCheck(backend: backend, installations: installations),
             backendIsolationCheck(backend: backend, runningState: runningState),
-            gameInstallationCheck(game: game, steamRootURL: steamRootURL),
+            gameInstallationCheck(
+                game: game,
+                targetAppID: targetAppID,
+                steamRootURL: steamRootURL
+            ),
         ]
 
         let processResult = try? await runner.run(
@@ -263,10 +346,14 @@ public actor GameTestPreflight {
         ))
 
         return GameTestPreflightReport(
-            appID: game?.appID,
-            gameName: game?.name,
+            appID: game?.appID ?? targetAppID,
+            gameName: game?.name ?? targetGameName,
             backend: backend,
             checkedAt: checkedAt,
+            capturePhase: capturePhase,
+            captureDelayMilliseconds: processStartedAt.map {
+                max(0, Int(checkedAt.timeIntervalSince($0) * 1_000))
+            },
             checks: checks
         )
     }
@@ -422,9 +509,19 @@ public actor GameTestPreflight {
 
     private func gameInstallationCheck(
         game: SteamGame?,
+        targetAppID: String?,
         steamRootURL: URL?
     ) -> GameTestPreflightCheck {
         guard let game else {
+            if let targetAppID = targetAppID.flatMap(SteamAppID.normalized) {
+                return GameTestPreflightCheck(
+                    checkID: .gameInstallation,
+                    status: .warning,
+                    title: "Instalación del juego",
+                    detail: "Steam inició el App ID \(targetAppID), pero su manifest aún no estaba en el inventario de Regression.",
+                    recoveryAction: "Actualiza la biblioteca antes de certificar esta ejecución."
+                )
+            }
             return GameTestPreflightCheck(
                 checkID: .gameInstallation,
                 status: .ready,

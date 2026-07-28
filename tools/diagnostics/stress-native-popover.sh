@@ -1,8 +1,12 @@
 #!/bin/zsh
 set -euo pipefail
 
+if [[ -z "${ZSH_VERSION:-}" ]]; then
+    exec /bin/zsh "$0" "$@"
+fi
+
 readonly APP_NAME="Regression"
-readonly MAX_IDLE_ATTEMPTS=30
+readonly MAX_IDLE_ATTEMPTS=45
 readonly REQUIRED_IDLE_SAMPLES=3
 readonly IDLE_CPU_THRESHOLD=10
 
@@ -15,7 +19,23 @@ fi
 osascript <<'APPLESCRIPT'
 tell application "System Events"
     tell process "Regression"
-        set statusItem to menu bar item 1 of menu bar 2
+        set statusItem to missing value
+        repeat 10 times
+            repeat with barRef in menu bars
+                repeat with itemRef in menu bar items of barRef
+                    try
+                        if description of itemRef starts with "Regression:" then
+                            set statusItem to itemRef
+                            exit repeat
+                        end if
+                    end try
+                end repeat
+                if statusItem is not missing value then exit repeat
+            end repeat
+            if statusItem is not missing value then exit repeat
+            delay 0.5
+        end repeat
+        if statusItem is missing value then error "No se encontró el icono de Regression."
         set scrollArea to missing value
         repeat 3 times
             try
@@ -134,7 +154,23 @@ fi
 element_count="$(osascript <<'APPLESCRIPT'
 tell application "System Events"
     tell process "Regression"
-        set statusItem to menu bar item 1 of menu bar 2
+        set statusItem to missing value
+        repeat 10 times
+            repeat with barRef in menu bars
+                repeat with itemRef in menu bar items of barRef
+                    try
+                        if description of itemRef starts with "Regression:" then
+                            set statusItem to itemRef
+                            exit repeat
+                        end if
+                    end try
+                end repeat
+                if statusItem is not missing value then exit repeat
+            end repeat
+            if statusItem is not missing value then exit repeat
+            delay 0.5
+        end repeat
+        if statusItem is missing value then error "No se encontró el icono de Regression."
         set scrollArea to missing value
         repeat 3 times
             try

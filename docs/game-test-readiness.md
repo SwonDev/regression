@@ -14,7 +14,7 @@ La comprobación es deliberadamente conservadora:
 
 ## Contrato
 
-El protocolo v1 revisa diez dimensiones:
+El protocolo v2 revisa diez dimensiones y conserva también la procedencia temporal de la captura:
 
 | Dimensión | Qué demuestra | Bloquea cuando… |
 |---|---|---|
@@ -40,16 +40,28 @@ con nombre compuesto tampoco queda invisible. Esta regla complementa —no susti
 `Steam.exe`: el backend del cliente desacoplado sigue resolviéndose con sus ficheros abiertos
 mediante `lsof`, tal como exige `AGENTS.md`.
 
-## Persistencia y esquema v11
+## Persistencia y esquema v12
 
 Una comprobación general desde el popover solo actualiza el estado visible. Cuando el usuario
-lanza un juego desde Regression y el resultado es `ready` o `warning`:
+lanza un juego desde el botón de Regression y el resultado es `ready` o `warning`:
 
 1. se crea la ejecución con estado `preparing`;
 2. se inserta en `run_preflight_reports` la instantánea exacta;
 3. SQLite verifica App ID, backend, contadores y JSON;
 4. el JSON se firma lógicamente con SHA-256 y se vuelve a comprobar al leerlo;
 5. solo entonces se envía `-applaunch` a Steam.
+
+Ese contrato se guarda como `capturePhase=preLaunch` y SQLite lo rechaza si el proceso ya llegó a
+iniciarse. El cliente completo de Steam sigue siendo la interfaz principal y también permite
+pulsar «Jugar» directamente. Valve no ofrece a Regression un callback previo para ese gesto: al
+detectar el primer proceso en `gameprocess_log.txt`, la app ejecuta inmediatamente la misma matriz
+y persiste `capturePhase=processStartBoundary` junto a la latencia de observación. Se admite sobre
+un run que ya tenga PID, pero no se etiqueta ni se comunica como preparación previa exacta.
+
+Steam puede encadenar un launcher y el binario principal para un solo App ID. El esquema v12
+conserva cada uno en `run_processes`, actualiza cuál representa la sesión y espera a que terminen
+todos antes de cerrar el run. Los eventos siguen auditables y exportables, pero una pulsación del
+usuario produce una única prueba y una única posible verificación.
 
 Si la instantánea no puede persistirse, la intención de telemetría se cierra como fallo previo y
 el juego no se solicita. Las exportaciones incluyen `preflightSnapshots` por separado de los
@@ -93,6 +105,8 @@ Referencias oficiales:
 
 - [Game Porting Toolkit](https://developer.apple.com/games/game-porting-toolkit/)
 - [Repositorio oficial de Apple Game Porting Toolkit](https://github.com/apple/game-porting-toolkit/)
+- [Steamworks API: inicialización y relanzamiento por App ID](https://partner.steamgames.com/doc/sdk/api?l=latam)
+- [Steamworks: opciones de lanzamiento y ejecutables](https://partner.steamgames.com/doc/features/steamvr/settings?language=english)
 - [CrossOver Mac User Guide](https://www.codeweavers.com/support/docs/crossover-mac/index)
 - [OSLog](https://developer.apple.com/documentation/OSLog)
 

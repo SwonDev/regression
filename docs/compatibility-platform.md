@@ -1,6 +1,6 @@
 # Plataforma local de compatibilidad y aprendizaje
 
-Fecha de contrato: 28 de julio de 2026. Esquema SQLite actual: **v11**.
+Fecha de contrato: 28 de julio de 2026. Esquema SQLite actual: **v12**.
 
 Esta capa conserva evidencia reproducible de cada ejecución y permite comparar Regression con
 fuentes públicas. No altera el motor, la botella ni la configuración de un juego. La aplicación
@@ -30,7 +30,7 @@ integridad en cada apertura.
 | Área | Tablas | Responsabilidad |
 |---|---|---|
 | Juegos | `games` | Steam App ID y nombre público normalizado. |
-| Ejecuciones | `runs`, `run_events`, `run_verifications` | Comando saneado, sistema, tiempos, cierre y veredicto modal. |
+| Ejecuciones | `runs`, `run_processes`, `run_events`, `run_verifications` | Sesión lógica, cadena de PID, comando saneado, sistema, tiempos, cierre y veredicto modal. |
 | Evidencia histórica | `compatibility_observations` | Validaciones importadas anteriores a la telemetría. |
 | Configuración | `configuration_snapshots` | Snapshot completo y deduplicado por SHA-256. |
 | Motores | `engine_snapshots`, `engine_facts`, `run_engine_snapshots`, `observation_engine_snapshots` | Identidad consultable del stack y vínculo con cada evidencia. |
@@ -40,7 +40,7 @@ integridad en cada apertura.
 | Rendimiento | `optimization_assessments` | Métricas separadas de la certificación funcional. |
 | Requisitos y reparación | `game_runtime_requirements`, `repair_receipts` | Requisitos declarativos y recibos de recetas permitidas; nunca comandos aprendidos. |
 | Expedientes de I+D | `compatibility_research_cases`, `research_hypotheses`, `research_experiments`, `research_gate_results`, `research_artifacts` | Hipótesis falsables, pruebas de una variable, puertas funcionales y referencias privadas con huella. |
-| Preparación de pruebas | `run_preflight_reports` | Diagnóstico saneado y firmado lógicamente del entorno exacto anterior a cada lanzamiento. |
+| Preparación de pruebas | `run_preflight_reports` | Diagnóstico saneado, fase temporal, latencia y firma lógica del entorno asociado a cada lanzamiento. |
 | Migraciones | `schema_migrations` + `PRAGMA user_version` | Evolución atómica y auditable. |
 
 Dos triggers de inserción/actualización protegen tanto ejecuciones como observaciones: SQLite
@@ -75,13 +75,16 @@ artefactos con huella, identidades distintas de baseline/candidato y una certifi
 activa del mismo run de Regression. Los expedientes fallidos se conservan y una corrección del
 veredicto reabre automáticamente el que se había cerrado.
 
-Antes de cada lanzamiento, el protocolo v1 de preparación comprueba de forma no destructiva la
+Antes de cada lanzamiento, el protocolo v2 de preparación comprueba de forma no destructiva la
 base, el backend, la instalación del juego, el aislamiento de Steam y Wine, servicios huérfanos,
 marcadores de presentación, almacenamiento, telemetría y biblioteca compartida. Un bloqueo
 inequívoco impide crear una prueba contaminada; un aviso se permite y se conserva. Cada informe
 se vincula por App ID y backend al `run` exacto, se codifica como JSON canónico, se acompaña de
-SHA-256 y se revalida al leer y exportar. Un preflight verde no certifica render, entrada,
-opciones ni gameplay.
+SHA-256 y se revalida al leer y exportar. Desde el botón de Regression la fase es `preLaunch` y
+solo puede persistirse mientras el run continúa en `preparing`. Cuando el usuario inicia desde la
+interfaz completa de Steam, Regression no dispone de un hook previo oficial: toma la instantánea
+al detectar el primer proceso, almacena `processStartBoundary` y su latencia, y jamás la presenta
+como evidencia previa exacta. Un informe verde no certifica render, entrada, opciones ni gameplay.
 
 ## Identidad normalizada de motor
 
@@ -163,11 +166,17 @@ La v11 añade `run_preflight_reports` y exige que la preparación persistida coi
 y backend de la ejecución. Conserva únicamente resultados saneados —sin PID, comandos crudos,
 rutas personales ni datos de cuenta— y verifica contadores, versión de protocolo y huella al
 reabrir. La migración no crea diagnósticos retroactivos ni altera ejecuciones históricas.
+La v12 normaliza cada PID en `run_processes` y mantiene un único run por sesión activa de backend
+y App ID. El launcher, el binario principal y sus cierres siguen siendo auditables, pero ya no
+cuentan como pruebas independientes. También añade fase y latencia al diagnóstico: los informes
+v1 existentes migran como `preLaunch`, mientras que los futuros lanzamientos observados dentro de
+Steam se distinguen como `processStartBoundary`. El historial anterior no se fusiona ni reescribe.
 
 Comprobaciones:
 
 ```bash
 Regression.app/Contents/SharedSupport/bin/regressionctl database
+Regression.app/Contents/SharedSupport/bin/regressionctl processes [RUN_ID]
 Regression.app/Contents/SharedSupport/bin/regressionctl engines
 Regression.app/Contents/SharedSupport/bin/regressionctl technologies
 Regression.app/Contents/SharedSupport/bin/regressionctl candidates
@@ -211,3 +220,5 @@ canónica. Este override existe para diagnóstico y CI, no para dividir el histo
 - Confirmación de que una valoración pública 5/5 deja el estado local como no verificado.
 - Rechazo de informes de preparación vinculados a otro juego o backend.
 - Verificación SHA-256 y exportación del diagnóstico previo sin convertirlo en certificación.
+- Agrupación de launcher y ejecutable principal en un run con procesos exportables por separado.
+- Rechazo de una captura `preLaunch` añadida después de iniciar y de una captura observada sin PID.

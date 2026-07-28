@@ -850,9 +850,9 @@ final class RegressionAppModel {
     private func pollTelemetry() async -> Bool {
         guard let installations else { return false }
         let system = currentSystemSnapshot()
-        var changed = false
+        var outcome = TelemetryPollOutcome()
         if let crossOver = installations.crossOver {
-            changed = await telemetry.poll(
+            outcome.merge(await telemetry.poll(
                 backend: .crossOver,
                 logURL: crossOver.steamRootURL.appendingPathComponent("logs/gameprocess_log.txt"),
                 games: crossOverGames,
@@ -865,10 +865,10 @@ final class RegressionAppModel {
                     installations: installations,
                     backend: .crossOver
                 )
-            )
+            ))
         }
         let regression = installations.regression
-        let regressionChanged = await telemetry.poll(
+        outcome.merge(await telemetry.poll(
             backend: .regression,
             logURL: regression.steamRootURL.appendingPathComponent("logs/gameprocess_log.txt"),
             games: regressionGames,
@@ -877,8 +877,38 @@ final class RegressionAppModel {
             bottleURL: regression.bottleURL,
             bottleName: "Steam",
             providerVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
-        )
-        return changed || regressionChanged
+        ))
+
+        for issue in outcome.issues {
+            logger.error("Telemetría local: \(issue, privacy: .public)")
+        }
+        for start in outcome.unpreparedRunStarts {
+            await recordObservedSteamPreflight(start)
+        }
+        return outcome.changed
+    }
+
+    /// El cliente completo de Steam permite pulsar «Jugar» sin pasar por el botón de Regression.
+    /// No se finge un hook previo inexistente: la instantánea se toma en cuanto aparece el primer
+    /// proceso y queda etiquetada con su fase y latencia exactas.
+    private func recordObservedSteamPreflight(_ start: TelemetryObservedRunStart) async {
+        let availableGames = start.backend == .crossOver ? crossOverGames : regressionGames
+        let game = availableGames.first { $0.appID == start.appID }
+        do {
+            let report = try await collectTestReadiness(
+                for: game,
+                backend: start.backend,
+                targetAppID: start.appID,
+                targetGameName: start.gameName,
+                capturePhase: .processStartBoundary,
+                processStartedAt: start.processStartedAt
+            )
+            try await repository.recordPreflight(report, forRunID: start.runID)
+        } catch {
+            logger.error(
+                "No se pudo vincular el diagnóstico observado del App ID \(start.appID, privacy: .public): \(error.localizedDescription, privacy: .public)"
+            )
+        }
     }
 
     private func refreshStoredData(includeHealth: Bool = false) async {
@@ -1013,20 +1043,30 @@ final class RegressionAppModel {
     }
 
     private func collectTestReadiness(
-        for game: SteamGame?
+        for game: SteamGame?,
+        backend: BackendKind? = nil,
+        targetAppID: String? = nil,
+        targetGameName: String? = nil,
+        capturePhase: GameTestPreflightCapturePhase = .preLaunch,
+        processStartedAt: Date? = nil
     ) async throws -> GameTestPreflightReport {
         guard let installations else {
             throw RegressionCoreError.launchFailed("Las instalaciones aún no se han detectado")
         }
         let health = try await repository.databaseHealth()
         databaseHealth = health
+        let evaluatedBackend = backend ?? selectedBackend
         return await preflight.evaluate(
-            backend: selectedBackend,
+            backend: evaluatedBackend,
             installations: installations,
             runningState: runningState,
             databaseHealth: health,
             sharedLibraryAssessment: sharedLibraryAssessment,
-            game: game
+            game: game,
+            targetAppID: targetAppID,
+            targetGameName: targetGameName,
+            capturePhase: capturePhase,
+            processStartedAt: processStartedAt
         )
     }
 

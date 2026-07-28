@@ -74,7 +74,7 @@ El número exacto depende del fallo, pero debe declararse antes de ver el result
 
 ## Expediente persistente y estados
 
-El esquema local v11 separa los candidatos tecnológicos de los experimentos que realmente se han
+El esquema local v12 separa los candidatos tecnológicos de los experimentos que realmente se han
 ejecutado y conserva el estado previo de cada prueba:
 
 - `compatibility_research_cases`: problema, expectativa CrossOver, estado y conclusión;
@@ -85,6 +85,8 @@ ejecutado y conserva el estado previo de cada prueba:
 - `research_artifacts`: referencias privadas y huellas de capturas, inventarios, builds, tests,
   firma y rollback.
 - `run_preflight_reports`: diagnóstico saneado, fingerprint SHA-256 y vínculo con el run exacto.
+- `run_processes`: launcher, ejecutable principal y cierres de una única sesión lógica, sin
+  multiplicar el número de experimentos por PID.
 
 Los estados de un expediente son `open`, `investigating`, `validationPending`, `verified` y
 `pausedExternalDependency`. No existen “abandonado” ni “cerrado sin resolver”. Un experimento

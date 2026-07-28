@@ -27,7 +27,9 @@ pantalla capturada; primero cierra el juego limpiamente.
 - `stress-native-popover.sh` abre el panel instalado, despliega y pliega Aprendizaje doce veces,
   comprueba el árbol de accesibilidad y exige que Regression vuelva a reposo. Si macOS cierra el
   popover al cambiar el foco, el gate vuelve a resolver sus objetos AX en lugar de reutilizar una
-  referencia caducada. No toca Steam, la botella ni los juegos.
+  referencia caducada. El status item se localiza por su descripción accesible, no por el índice
+  volátil de la barra de menús, y el script se reejecuta con zsh aunque se invoque accidentalmente
+  mediante bash. No toca Steam, la botella ni los juegos.
 
 El estrés necesita que la terminal tenga permiso de Accesibilidad y que Regression esté abierta.
 

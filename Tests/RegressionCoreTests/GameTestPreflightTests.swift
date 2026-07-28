@@ -222,6 +222,112 @@ final class GameTestPreflightTests: XCTestCase {
         XCTAssertEqual(health.preflightReportCount, 0)
     }
 
+    func testCapturePhaseMustMatchTheExactRunLifecycle() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "regression-preflight-phase-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repository = CompatibilityRepository(
+            databaseURL: root.appendingPathComponent("compatibility.sqlite")
+        )
+        try await repository.prepare()
+        let context = RunContext(
+            appID: "219990",
+            gameName: "Grim Dawn",
+            backend: .regression,
+            bottleName: "Steam",
+            providerVersion: "1.6",
+            command: "$APP/regression-engine",
+            arguments: ["-applaunch", "219990"],
+            system: SystemSnapshot(
+                macOSVersion: "26.5",
+                architecture: "arm64",
+                deviceModel: "Mac",
+                displayWidth: 3024,
+                displayHeight: 1964,
+                displayScale: 2
+            ),
+            configuration: [:],
+            configurationFingerprint: ConfigurationCollector.fingerprint([:])
+        )
+        try await repository.beginRun(context)
+        try await repository.markLaunched(
+            id: context.id,
+            processID: 990,
+            executable: "C:\\Games\\Grim Dawn\\Grim Dawn.exe",
+            launchMilliseconds: 500
+        )
+        let checks = GameTestPreflightCheckID.allCases.map {
+            GameTestPreflightCheck(
+                checkID: $0,
+                status: .ready,
+                title: $0.rawValue,
+                detail: "Comprobación superada"
+            )
+        }
+        let tooLatePreLaunch = GameTestPreflightReport(
+            appID: context.appID,
+            gameName: context.gameName,
+            backend: context.backend,
+            checks: checks
+        )
+        do {
+            try await repository.recordPreflight(tooLatePreLaunch, forRunID: context.id)
+            XCTFail("No debe fingirse una captura previa después de iniciar el proceso")
+        } catch let error as RegressionCoreError {
+            guard case .invalidEvidence = error else {
+                return XCTFail("Error inesperado: \(error)")
+            }
+        }
+
+        let observedAtStart = GameTestPreflightReport(
+            appID: context.appID,
+            gameName: context.gameName,
+            backend: context.backend,
+            capturePhase: .processStartBoundary,
+            captureDelayMilliseconds: 750,
+            checks: checks
+        )
+        try await repository.recordPreflight(observedAtStart, forRunID: context.id)
+
+        let stored = try await repository.preflightSnapshots()
+        XCTAssertEqual(stored.count, 1)
+        XCTAssertEqual(stored[0].report.capturePhase, .processStartBoundary)
+        XCTAssertEqual(stored[0].report.captureDelayMilliseconds, 750)
+    }
+
+    func testVersionOneReportDecodesAsAnExactPreLaunchCapture() throws {
+        let report = GameTestPreflightReport(
+            appID: "219990",
+            gameName: "Grim Dawn",
+            backend: .regression,
+            checks: GameTestPreflightCheckID.allCases.map {
+                GameTestPreflightCheck(
+                    checkID: $0,
+                    status: .ready,
+                    title: $0.rawValue,
+                    detail: "Comprobación superada"
+                )
+            }
+        )
+        let encoded = try JSONEncoder().encode(report)
+        var legacy = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        legacy["protocolVersion"] = 1
+        legacy.removeValue(forKey: "capturePhase")
+        legacy.removeValue(forKey: "captureDelayMilliseconds")
+
+        let decoded = try JSONDecoder().decode(
+            GameTestPreflightReport.self,
+            from: JSONSerialization.data(withJSONObject: legacy)
+        )
+        XCTAssertEqual(decoded.protocolVersion, 1)
+        XCTAssertEqual(decoded.capturePhase, .preLaunch)
+        XCTAssertNil(decoded.captureDelayMilliseconds)
+    }
+
     private func healthyDatabase() -> CompatibilityDatabaseHealth {
         CompatibilityDatabaseHealth(
             schemaVersion: CompatibilityRepository.currentSchemaVersion,
@@ -229,6 +335,7 @@ final class GameTestPreflightTests: XCTestCase {
             foreignKeyViolations: 0,
             gameCount: 0,
             runCount: 0,
+            processCount: 0,
             verifiedRunCount: 0,
             observationCount: 0,
             certificationCount: 0,

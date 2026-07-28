@@ -227,6 +227,39 @@ enum RegressionControl {
                 )
             }
 
+        case "processes":
+            try await repository.prepare()
+            let requestedRunID: UUID?
+            if let rawRunID = arguments.dropFirst().first {
+                guard let parsed = UUID(uuidString: rawRunID) else {
+                    throw RegressionCoreError.launchFailed("Usa processes [RUN_ID]")
+                }
+                requestedRunID = parsed
+            } else {
+                requestedRunID = nil
+            }
+            let processes = try await repository.runProcesses(
+                runID: requestedRunID,
+                limit: requestedRunID == nil ? 1_000 : 10_000
+            )
+            for process in processes {
+                let lifecycle: String
+                if let exitCode = process.exitCode {
+                    lifecycle = "exit=\(exitCode)"
+                } else if process.endedAt != nil {
+                    lifecycle = "finalizado-sin-código"
+                } else {
+                    lifecycle = "activo"
+                }
+                print(
+                    process.runID.uuidString,
+                    "pid=\(process.processID)",
+                    process.isRepresentative ? "representativo" : "secundario",
+                    lifecycle,
+                    process.executable
+                )
+            }
+
         case "profiles":
             try await repository.prepare()
             let profiles = try await repository.compatibilityProfiles()
@@ -552,6 +585,7 @@ enum RegressionControl {
             print("Referencias huérfanas:", health.foreignKeyViolations)
             print("Juegos:", health.gameCount)
             print("Ejecuciones:", health.runCount)
+            print("Procesos observados:", health.processCount)
             print("Verificaciones:", health.verifiedRunCount)
             print("Observaciones:", health.observationCount)
             print("Certificaciones activas:", health.certificationCount)
@@ -745,7 +779,7 @@ enum RegressionControl {
             print("Exportación guardada en", PrivacySanitizer.normalizedPath(path))
 
         default:
-            print("Uso: regressionctl [status | preflight [APP_ID] [--backend crossOver|regression] | share-library --shutdown [--restart] | launch APP_ID [--backend crossOver|regression] | switch crossOver|regression | runs | profiles | engines | certifications | technologies | candidates | optimization | requirements | repair-receipts | research | research-protocol | research-open | research-hypothesis | research-stage | research-attach-run | research-gate | research-artifact | research-finish | research-complete | database | catalog | catalog-sync APP_ID [--force] | comparisons | verify RUN_ID perfect|playable|failed [--note TEXTO] | observe APP_ID perfect|playable|failed --backend MOTOR --name NOMBRE [--note TEXTO] | observations | export RUTA]")
+            print("Uso: regressionctl [status | preflight [APP_ID] [--backend crossOver|regression] | share-library --shutdown [--restart] | launch APP_ID [--backend crossOver|regression] | switch crossOver|regression | runs | processes [RUN_ID] | profiles | engines | certifications | technologies | candidates | optimization | requirements | repair-receipts | research | research-protocol | research-open | research-hypothesis | research-stage | research-attach-run | research-gate | research-artifact | research-finish | research-complete | database | catalog | catalog-sync APP_ID [--force] | comparisons | verify RUN_ID perfect|playable|failed [--note TEXTO] | observe APP_ID perfect|playable|failed --backend MOTOR --name NOMBRE [--note TEXTO] | observations | export RUTA]")
             exit(64)
         }
     }
@@ -819,6 +853,10 @@ enum RegressionControl {
     private static func printPreflight(_ report: GameTestPreflightReport) {
         print("Preparación:", report.status.displayName)
         print("Backend:", report.backend.displayName)
+        print("Captura:", report.capturePhase.displayName)
+        if let delay = report.captureDelayMilliseconds {
+            print("Latencia de observación:", "\(delay) ms")
+        }
         if let appID = report.appID, let gameName = report.gameName {
             print("Juego:", gameName, "(App ID \(appID))")
         }

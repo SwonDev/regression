@@ -50,7 +50,7 @@ Fuentes oficiales del snapshot:
 Las versiones se actualizan únicamente después de contrastar la fuente oficial y registrar la
 fecha. “Hay una versión nueva” significa **candidato de investigación**, no “actualizar estable”.
 
-## Esquema v11
+## Esquema v12
 
 La base local conserva las cinco áreas de evolución tecnológica de v9:
 
@@ -77,6 +77,11 @@ El esquema v11 añade `run_preflight_reports`: conserva el diagnóstico no destr
 anterior a cada lanzamiento, vinculado al App ID, backend y run exactos. Este informe permite
 separar una prueba contaminada de un fallo del candidato, pero nunca sustituye la matriz funcional
 ni convierte un entorno limpio en compatibilidad.
+
+El esquema v12 añade `run_processes` para que un launcher y el ejecutable real no se conviertan en
+dos experimentos ficticios. También distingue un preflight exacto anterior al lanzamiento de una
+instantánea tomada al observar el inicio desde la interfaz completa de Steam. Ambas rutas conservan
+la misma matriz; la procedencia temporal nunca modifica por sí sola un veredicto.
 
 Triggers de SQLite y la política Swift bloquean una promoción salvo que sea por juego, tenga
 fuente y huella verificadas, esté aislada, disponga de rollback, identifique baseline/candidato,

@@ -22,14 +22,33 @@ extension CompatibilityRepository {
                 "una preparación vinculada a ejecución necesita un Steam App ID"
             )
         }
-        let matchingRuns = try scalarInt(
-            "SELECT COUNT(*) FROM runs WHERE id=? AND app_id=? AND backend=?;",
+        let matchingRuns: [(RunResult, Bool)] = try query(
+            "SELECT result, process_id FROM runs WHERE id=? AND app_id=? AND backend=?;",
             bindings: [runID.uuidString, appID, report.backend.rawValue]
-        )
-        guard matchingRuns == 1 else {
+        ) { statement in
+            guard let result = RunResult(rawValue: Self.text(statement, 0)) else { return nil }
+            return (result, Self.optionalInt(statement, 1) != nil)
+        }
+        guard let run = matchingRuns.first, matchingRuns.count == 1 else {
             throw RegressionCoreError.invalidEvidence(
                 "la preparación no coincide con la ejecución exacta"
             )
+        }
+        switch report.capturePhase {
+        case .preLaunch:
+            guard run.0 == .preparing, report.captureDelayMilliseconds == nil else {
+                throw RegressionCoreError.invalidEvidence(
+                    "una preparación previa solo puede vincularse antes de iniciar el proceso"
+                )
+            }
+        case .processStartBoundary:
+            guard run.1,
+                  let delay = report.captureDelayMilliseconds,
+                  (0...60_000).contains(delay) else {
+                throw RegressionCoreError.invalidEvidence(
+                    "la instantánea observada por Steam no pertenece al límite de inicio"
+                )
+            }
         }
 
         let encoder = JSONEncoder()
@@ -43,8 +62,8 @@ extension CompatibilityRepository {
             """
             INSERT INTO run_preflight_reports(
                 run_id, protocol_version, status, blocker_count, warning_count,
-                report_json, report_fingerprint, created_at
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?);
+                capture_phase, capture_delay_ms, report_json, report_fingerprint, created_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
             bindings: [
                 runID.uuidString,
@@ -52,6 +71,8 @@ extension CompatibilityRepository {
                 report.status.rawValue,
                 report.blockerCount,
                 report.warningCount,
+                report.capturePhase.rawValue,
+                report.captureDelayMilliseconds ?? NSNull(),
                 String(decoding: reportData, as: UTF8.self),
                 fingerprint,
                 dateFormatter.string(from: report.checkedAt),
@@ -66,7 +87,8 @@ extension CompatibilityRepository {
             """
             SELECT p.run_id, p.report_fingerprint, p.report_json,
                    r.app_id, r.backend, p.protocol_version, p.status,
-                   p.blocker_count, p.warning_count
+                   p.blocker_count, p.warning_count, p.capture_phase,
+                   p.capture_delay_ms
             FROM run_preflight_reports p
             JOIN runs r ON r.id=p.run_id
             ORDER BY p.created_at DESC
@@ -84,6 +106,8 @@ extension CompatibilityRepository {
                 report.status.rawValue == Self.text(statement, 6),
                 report.blockerCount == Self.optionalInt(statement, 7),
                 report.warningCount == Self.optionalInt(statement, 8),
+                report.capturePhase.rawValue == Self.text(statement, 9),
+                report.captureDelayMilliseconds == Self.optionalInt(statement, 10),
                 report.hasCompleteCheckSet
             else { return nil }
 

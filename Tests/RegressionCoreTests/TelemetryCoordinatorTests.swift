@@ -74,7 +74,7 @@ final class TelemetryCoordinatorTests: XCTestCase {
             providerVersion: "1.5"
         )
 
-        XCTAssertTrue(changed)
+        XCTAssertTrue(changed.changed)
         let runs = try await fixture.repository.recentRuns()
         let run = try XCTUnwrap(runs.first)
         XCTAssertEqual(run.processID, 4242)
@@ -85,6 +85,135 @@ final class TelemetryCoordinatorTests: XCTestCase {
         let profile = try XCTUnwrap(profiles.first)
         XCTAssertEqual(profile.unverifiedRuns, 1)
         XCTAssertEqual(profile.perfectRuns, 0)
+    }
+
+    func testLauncherAndShippingExecutableRemainOneLogicalRun() async throws {
+        let fixture = try TelemetryFixture()
+        defer { fixture.remove() }
+        let logURL = fixture.root.appendingPathComponent("multiprocess-gameprocess_log.txt")
+        XCTAssertTrue(FileManager.default.createFile(atPath: logURL.path, contents: nil))
+        await fixture.telemetry.beginMonitoring(logURL: logURL)
+
+        let log = #"""
+        [2026-07-28 12:00:00] AppID 219990 adding PID 4242 as a tracked process "C:\Games\Grim Dawn\Launcher.exe"
+        [2026-07-28 12:00:01] AppID 219990 adding PID 4343 as a tracked process "C:\Games\Grim Dawn\Grim Dawn.exe"
+        [2026-07-28 12:00:02] AppID 219990 no longer tracking PID 4242, exit code 0
+        [2026-07-28 12:05:00] AppID 219990 no longer tracking PID 4343, exit code 0
+
+        """#
+        try Data(log.utf8).write(to: logURL)
+
+        let outcome = await fixture.telemetry.poll(
+            backend: .regression,
+            logURL: logURL,
+            games: [fixture.game],
+            system: fixture.context().system,
+            steamRootURL: fixture.root.appendingPathComponent("Steam", isDirectory: true),
+            bottleURL: fixture.bottleURL,
+            bottleName: "Steam",
+            providerVersion: "1.6"
+        )
+
+        XCTAssertTrue(outcome.changed)
+        XCTAssertEqual(outcome.unpreparedRunStarts.count, 1)
+        XCTAssertTrue(outcome.issues.isEmpty)
+        let runs = try await fixture.repository.runDetails()
+        XCTAssertEqual(runs.count, 1)
+        XCTAssertEqual(runs[0].processID, 4343)
+        XCTAssertEqual(runs[0].executable, "C:\\Games\\Grim Dawn\\Grim Dawn.exe")
+        XCTAssertEqual(runs[0].result, .unknown)
+
+        let processes = try await fixture.repository.runProcesses()
+        XCTAssertEqual(processes.count, 2)
+        XCTAssertEqual(Set(processes.map(\.processID)), Set([4242, 4343]))
+        XCTAssertEqual(processes.first { $0.isRepresentative }?.processID, 4343)
+        XCTAssertTrue(processes.allSatisfy { $0.endedAt != nil && $0.exitCode == 0 })
+    }
+
+    func testRegisteredLaunchIntentDoesNotRequestPassivePreflight() async throws {
+        let fixture = try TelemetryFixture()
+        defer { fixture.remove() }
+        let logURL = fixture.root.appendingPathComponent("intent-gameprocess_log.txt")
+        XCTAssertTrue(FileManager.default.createFile(atPath: logURL.path, contents: nil))
+        await fixture.telemetry.beginMonitoring(logURL: logURL)
+        let context = fixture.context()
+        try await fixture.telemetry.registerLaunchIntent(
+            context: context,
+            bottleURL: fixture.bottleURL
+        )
+        let log = #"""
+        [2026-07-28 12:00:00] AppID 219990 adding PID 4242 as a tracked process "C:\Games\Grim Dawn\Grim Dawn.exe"
+
+        """#
+        try Data(log.utf8).write(to: logURL)
+
+        let outcome = await fixture.telemetry.poll(
+            backend: .regression,
+            logURL: logURL,
+            games: [fixture.game],
+            system: context.system,
+            steamRootURL: fixture.root.appendingPathComponent("Steam", isDirectory: true),
+            bottleURL: fixture.bottleURL,
+            bottleName: "Steam",
+            providerVersion: "1.6"
+        )
+
+        XCTAssertTrue(outcome.changed)
+        XCTAssertTrue(outcome.unpreparedRunStarts.isEmpty)
+        XCTAssertTrue(outcome.issues.isEmpty)
+    }
+
+    func testChildProcessCanJoinAfterLauncherEndsWithoutCreatingAnotherRun() async throws {
+        let fixture = try TelemetryFixture(sessionJoinGrace: 60)
+        defer { fixture.remove() }
+        let logURL = fixture.root.appendingPathComponent("delayed-child-gameprocess_log.txt")
+        XCTAssertTrue(FileManager.default.createFile(atPath: logURL.path, contents: nil))
+        await fixture.telemetry.beginMonitoring(logURL: logURL)
+        let firstBatch = #"""
+        [2026-07-28 12:00:00] AppID 219990 adding PID 4242 as a tracked process "C:\Games\Grim Dawn\Launcher.exe"
+        [2026-07-28 12:00:01] AppID 219990 no longer tracking PID 4242, exit code 0
+
+        """#
+        try Data(firstBatch.utf8).write(to: logURL)
+
+        _ = await fixture.telemetry.poll(
+            backend: .regression,
+            logURL: logURL,
+            games: [fixture.game],
+            system: fixture.context().system,
+            steamRootURL: fixture.root.appendingPathComponent("Steam", isDirectory: true),
+            bottleURL: fixture.bottleURL,
+            bottleName: "Steam",
+            providerVersion: "1.6"
+        )
+        let runsAfterLauncher = try await fixture.repository.recentRuns()
+        XCTAssertEqual(runsAfterLauncher.first?.result, .launched)
+
+        let secondBatch = #"""
+        [2026-07-28 12:00:02] AppID 219990 adding PID 4343 as a tracked process "C:\Games\Grim Dawn\Grim Dawn.exe"
+
+        """#
+        let handle = try FileHandle(forWritingTo: logURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(secondBatch.utf8))
+        try handle.close()
+
+        _ = await fixture.telemetry.poll(
+            backend: .regression,
+            logURL: logURL,
+            games: [fixture.game],
+            system: fixture.context().system,
+            steamRootURL: fixture.root.appendingPathComponent("Steam", isDirectory: true),
+            bottleURL: fixture.bottleURL,
+            bottleName: "Steam",
+            providerVersion: "1.6"
+        )
+
+        let runs = try await fixture.repository.runDetails()
+        XCTAssertEqual(runs.count, 1)
+        XCTAssertEqual(runs[0].processID, 4343)
+        let processes = try await fixture.repository.runProcesses()
+        XCTAssertEqual(processes.count, 2)
     }
 
     func testEarlyTelemetryWithoutManifestCannotReplacePreviouslyDiscoveredGameName() async throws {
@@ -135,7 +264,7 @@ private final class TelemetryFixture {
         )
     }
 
-    init() throws {
+    init(sessionJoinGrace: TimeInterval = 0) throws {
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("regression-telemetry-\(UUID().uuidString)", isDirectory: true)
         bottleURL = root.appendingPathComponent("Bottle", isDirectory: true)
@@ -143,7 +272,11 @@ private final class TelemetryFixture {
         repository = CompatibilityRepository(
             databaseURL: root.appendingPathComponent("compatibility.sqlite")
         )
-        telemetry = TelemetryCoordinator(repository: repository, monitor: SteamLogMonitor())
+        telemetry = TelemetryCoordinator(
+            repository: repository,
+            monitor: SteamLogMonitor(),
+            sessionJoinGrace: sessionJoinGrace
+        )
     }
 
     func context() -> RunContext {

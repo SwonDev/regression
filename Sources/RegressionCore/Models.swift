@@ -575,6 +575,41 @@ public struct RunDetail: Codable, Equatable, Identifiable, Sendable {
     public let verification: RunVerification?
 }
 
+/// Proceso observado como parte de una sesión lógica de juego.
+///
+/// Un App ID puede arrancar un launcher y, después, el ejecutable real del juego. Ambos forman
+/// una sola ejecución verificable, pero se conservan por separado para que el aprendizaje no
+/// pierda la cadena de procesos ni atribuya dos pruebas al usuario.
+public struct RunProcessRecord: Codable, Equatable, Identifiable, Sendable {
+    public var id: String { "\(runID.uuidString):\(processID)" }
+
+    public let runID: UUID
+    public let processID: Int32
+    public let executable: String
+    public let startedAt: Date
+    public let endedAt: Date?
+    public let exitCode: Int32?
+    public let isRepresentative: Bool
+
+    public init(
+        runID: UUID,
+        processID: Int32,
+        executable: String,
+        startedAt: Date,
+        endedAt: Date? = nil,
+        exitCode: Int32? = nil,
+        isRepresentative: Bool
+    ) {
+        self.runID = runID
+        self.processID = processID
+        self.executable = executable
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+        self.exitCode = exitCode
+        self.isRepresentative = isRepresentative
+    }
+}
+
 public struct CompatibilityProfile: Codable, Equatable, Identifiable, Sendable {
     public var id: String { "\(appID)-\(backend.rawValue)-\(configurationFingerprint)" }
     public let appID: String
@@ -625,6 +660,7 @@ public struct CompatibilityDatabaseHealth: Codable, Equatable, Sendable {
     public let foreignKeyViolations: Int
     public let gameCount: Int
     public let runCount: Int
+    public let processCount: Int
     public let verifiedRunCount: Int
     public let observationCount: Int
     public let certificationCount: Int

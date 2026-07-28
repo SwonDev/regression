@@ -478,7 +478,7 @@ struct MenuBarView: View {
                                 Image(systemName: health.isHealthy ? "checkmark.shield" : "exclamationmark.triangle")
                             }
                             Spacer()
-                            Text("\(health.preflightReportCount) diagnósticos")
+                            Text("\(health.processCount) procesos · \(health.preflightReportCount) diagnósticos")
                                 .font(.caption2.monospacedDigit())
                                 .foregroundStyle(.tertiary)
                         }
