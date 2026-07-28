@@ -9,7 +9,7 @@ el build necesitas obtenerlos tú mismo:
 | Componente | Versión | Origen | Licencia |
 |---|---|---|---|
 | CrossOver Sources (fork de Wine) | **26.3.0** | https://www.codeweavers.com/crossover/source | LGPL-2.1+ |
-| DXMT | **v0.72** | https://github.com/doitsujin/dxmt | LGPL-2.1 |
+| DXMT | **v0.72** | https://github.com/3Shain/dxmt | LGPL-2.1+ |
 | DXVK | 1.10.3 | https://github.com/doitsujin/dxvk | Zlib |
 | MoltenVK (build CX) | 1.2.10 | incluido en CrossOver Sources | Apache-2.0 |
 | LLVM | 15 | https://llvm.org | Apache-2.0 + LLVM exceptions |
@@ -35,6 +35,15 @@ checkout `v0.72` y aplica `patches/dxmt-v0.72-cross-process-present.patch`.
   `build/toolchain-b-gstreamer.sh` (gnutls, gstreamer, freetype, SDL2…).
 - La botella de Steam — datos del usuario, vive fuera del repo en
   `~/Library/Application Support/Regression/Bottles/Steam`.
+
+## Metadatos públicos consultados en ejecución
+
+La comparación opcional usa fichas web públicas y JSON-LD de la
+[CodeWeavers Compatibility Database](https://www.codeweavers.com/compatibility). Regression
+almacena localmente solo metadatos normalizados, respeta su cadencia publicada y enlaza a la
+fuente original. Este repositorio no incluye una copia de la base, `cxcompatdb`, crossties privados
+ni contenido protegido de CodeWeavers. Sus valoraciones son contexto externo y no certifican el
+motor propio.
 
 ## Licencia del contenido de este repo
 

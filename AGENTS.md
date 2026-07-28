@@ -52,7 +52,9 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
 
 ### Reglas técnicas duras (errores que YA se han cometido y NO se repiten)
 
-1. **Backup antes de tocar botella o bundle** (`backups/`). Sin excepciones.
+1. **Backup antes de tocar botella o bundle** (`backups/`). Sin excepciones. Antes y después de
+   empaquetar, ejecutar `build/verify-protected-state.sh`; añadir `--include-bottle` cuando la
+   botella canónica esté disponible.
 2. **Validación visual obligatoria tras cualquier cambio gráfico**: relanzar app, capturar
    ventana de Steam (screencapture por CGWindowID), confirmar que la tienda renderiza. Si está
    negra → revertir al instante.
@@ -86,12 +88,25 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
     código existente.
 14. **Todo juego confirmado perfecto debe quedar visible como blindado.** Inmediatamente después
     de la confirmación visual, verificar la ejecución exacta en la base local con veredicto
-    `perfect` (render, entrada y opciones en `passed`) y refrescar la app hasta comprobar la fila
+    `perfect` (render, entrada, opciones y gameplay en `passed`) y refrescar la app hasta comprobar la fila
     verde `Verificado perfecto: Regression`. Los fallos anteriores se conservan como historial;
     el perfil perfecto tiene prioridad. Si la validación es histórica y anterior a la telemetría,
     registrar una observación importada con App ID, nombre, backend, nota y evidencia/rollback.
     Un exit code 0 jamás crea este estado por sí solo. La confirmación modal del veredicto
-    perfecto es una salvaguarda deliberada y no se elimina.
+    perfecto es una salvaguarda deliberada y no se elimina. Tampoco puede certificarse un run que
+    siga en `preparing` o no tenga PID: cualquier marca heredada así se anula, no se promociona.
+15. **Una referencia pública nunca es una certificación local.** CodeWeavers aporta contexto
+    externo mediante páginas públicas y metadatos normalizados. No se copia su base propietaria,
+    no se aplica configuración y un 5/5 jamás crea `Verificado perfecto`. Mantener fuente, caché,
+    cadencia y vínculo separados por App ID; ver `docs/compatibility-platform.md`.
+16. **No atribuir un Steam Wine solo por el texto de `ps`.** Tras desacoplarse, macOS suele
+    mostrar únicamente `C:\...\Steam.exe`, sin ruta del runtime ni padre útil. El inspector debe
+    excluir `steamwebhelper.exe` y resolver el backend mediante los ficheros abiertos del cliente
+    real (`lsof`). Un wineserver vivo por sí solo no demuestra que Steam esté activo.
+17. **La terminación nativa no espera indefinidamente a la red.** Cancelar monitorización y
+    catálogo, serializar reconciliación/cierre SQLite y responder entonces a AppKit. Esperar el
+    `.value` de una tarea URLSession cancelada dejó una instancia `LSUIElement` imposible de
+    relanzar; el cierre limpio instalado debe probarse después de tocar este flujo.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 
@@ -184,19 +199,27 @@ validación de su fila pasa entera con capturas, (3) hay backup del estado nuevo
 (4) README/AGENTS reflejan el cambio. Si solo cumples el punto 1, has arreglado una cosa y
 quizá roto otra — que es exactamente lo que este protocolo existe para evitar.
 
-## Estado rápido (2026-07-27)
+## Estado rápido (2026-07-28)
 
 - **Arquitectura operativa actual**: app nativa `LSUIElement` en barra de menús, CrossOver 26.3
   como backend predeterminado, motor propio seleccionable, conmutación con cierre limpio y una
   sola biblioteca física de juegos. El lanzador propio original está intacto en
   `Regression.app/Contents/MacOS/regression-engine`.
-- **Aprendizaje local**: SQLite normalizada en
+- **Aprendizaje local**: SQLite v6 normalizada en
   `~/Library/Application Support/Regression/Compatibility/compatibility.sqlite`; registra
   sistema, comandos saneados, componentes, backend gráfico, configuración de juego y deltas.
+  La identidad de motor excluye `gameconfig.*`, de modo que una resolución distinta no crea un
+  stack falso, mientras que cambiar Wine/DLL/registro sí. Las migraciones son transaccionales,
+  crean backup privado y no dejan evidencias sin motor asociado. Cada blindado local referencia
+  su evidencia, configuración y motor exactos; corregir el último veredicto perfecto lo desactiva
+  sin borrar el historial.
   Un exit code 0 queda **sin verificar**: solo una validación visual explícita crea un perfil
   perfecto o con incidencias. Nada se aplica automáticamente al motor propio. Base, exportaciones,
   recibos y logs son privados del usuario (`0700`/`0600`); se retienen como máximo 20 logs del
   lanzador.
+- **Referencia pública**: CodeWeavers Compatibility Database se consulta opcionalmente con sesión
+  efímera, coincidencia exacta, caché, ETag y cadencia persistente. Solo se almacenan metadatos
+  públicos normalizados y su comparación nunca modifica el veredicto local.
 - OK total con el wine de prefijo propio: **Steam completo, Moonlighter 2 (Unity IL2CPP),
   Palworld (personaje), Grim Dawn, Romestead**, DXVK D3D9. Estado blindado intacto.
 - **PIN: Grim Dawn = D3DMetal completo y aislado por ejecutable.** El perfil anterior mezclaba
@@ -227,9 +250,9 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   El registro confirmado de FFT sigue en
   `backups/regression-steam-user-fft-perfect-20260726.reg`; los saves preventivos viven en
   `backups/user-data/`.
-- Limpieza 2026-07-27: quedan solo las fuentes fijadas 26.3.0; se eliminaron 26.2.0,
-  `stage/`, la botella local `bottles/test/` y backups experimentales redundantes. El árbol
-  quedó en ~5,4 GiB sin modificar la app ni la botella canónicas.
+- Revisión de almacenamiento 2026-07-27: quedan solo las fuentes fijadas 26.3.0. El árbol ocupa
+  ~6,0 GiB, incluidos ~1,8 GiB de app local y ~1,5 GiB de backups/evidencia. El expediente final
+  de Grim Dawn explica el crecimiento posterior a la limpieza; no hay otra Regression instalada.
 - **Instalación**: `/Applications/Regression.app` → symlink a la app del proyecto (canónica).
   Lanzar con `open -a Regression` desde cualquier sitio.
 
@@ -240,6 +263,7 @@ open -a "$PWD/Regression.app"            # debe abrir Steam y renderizar la tien
 swift tools/diagnostics/list-windows.swift steam
 screencapture -x -l <id> /tmp/check.png  # captura y revisar visualmente
 bash build/install-game-profiles.sh      # verifica hashes/perfil Grim Dawn y vuelve a firmar
+bash build/verify-protected-state.sh --include-bottle  # verifica PINs sin lanzar juegos
 ```
 
 ## Build

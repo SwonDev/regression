@@ -1,0 +1,154 @@
+# Plataforma local de compatibilidad y aprendizaje
+
+Fecha de contrato: 28 de julio de 2026. Esquema SQLite actual: **v6**.
+
+Esta capa conserva evidencia reproducible de cada ejecución y permite comparar Regression con
+fuentes públicas. No altera el motor, la botella ni la configuración de un juego. La aplicación
+automática de perfiles queda expresamente fuera de alcance hasta que exista un protocolo separado
+con rollback y matriz de validación.
+
+## Fuentes de verdad y precedencia
+
+1. **Certificación local perfecta**: confirmación visual explícita de render, precisión de entrada,
+   opciones gráficas persistentes y gameplay. Es la única fuente que muestra
+   `Verificado perfecto: Regression`.
+2. **Ejecuciones y observaciones locales**: conservan éxitos, incidencias, fallos y estados sin
+   verificar. Un código de salida 0 nunca se convierte por sí solo en compatibilidad.
+3. **Catálogo público externo**: contexto de investigación. Una valoración alta de CodeWeavers no
+   certifica Regression, no instala dependencias y no aplica configuraciones.
+
+Los fallos históricos no se borran cuando aparece un perfil perfecto: sirven para comparar qué
+cambió. La certificación perfecta tiene prioridad visual, pero no reescribe el historial.
+
+## Modelo de datos
+
+La base vive en
+`~/Library/Application Support/Regression/Compatibility/compatibility.sqlite` con directorios
+`0700`, archivos `0600`, claves foráneas activas, WAL, `synchronous=FULL` y comprobación de
+integridad en cada apertura.
+
+| Área | Tablas | Responsabilidad |
+|---|---|---|
+| Juegos | `games` | Steam App ID y nombre público normalizado. |
+| Ejecuciones | `runs`, `run_events`, `run_verifications` | Comando saneado, sistema, tiempos, cierre y veredicto modal. |
+| Evidencia histórica | `compatibility_observations` | Validaciones importadas anteriores a la telemetría. |
+| Configuración | `configuration_snapshots` | Snapshot completo y deduplicado por SHA-256. |
+| Motores | `engine_snapshots`, `engine_facts`, `run_engine_snapshots`, `observation_engine_snapshots` | Identidad consultable del stack y vínculo con cada evidencia. |
+| Blindados | `verified_game_certifications` | Catálogo canónico y certificaciones locales con procedencia, configuración y motor exactos. |
+| Fuentes públicas | `external_catalog_sources`, `external_catalog_sync_state`, `external_game_records`, `external_game_links` | Caché, cadencia, ficha normalizada y vínculo local. |
+| Migraciones | `schema_migrations` + `PRAGMA user_version` | Evolución atómica y auditable. |
+
+Dos triggers de inserción/actualización protegen tanto ejecuciones como observaciones: SQLite
+rechaza cualquier veredicto `perfect` si una de las cuatro dimensiones no vale `passed`. La misma
+regla existe en Swift y se vuelve a comprobar tras migrar, de modo que un error de una capa no
+puede degradar silenciosamente el contrato.
+
+Una ejecución debe haber recibido un PID real y haber salido de `preparing` antes de aceptar un
+veredicto perfecto. La migración v6 anula como `invalidated` cualquier marca heredada que incumpla
+esa regla; el evento original se conserva para auditoría, pero no crea perfil verde ni blindado.
+
+Una certificación creada desde una verificación local guarda su ejecución u observación de origen,
+el fingerprint completo de configuración y el fingerprint normalizado del motor. Al corregir el
+último veredicto perfecto, esa certificación pasa a inactiva; no se borra y continúa disponible en
+la exportación histórica. Los blindados embebidos conservan su expediente canónico y se enlazan
+automáticamente a evidencia local cuando existe.
+
+## Identidad normalizada de motor
+
+El fingerprint de motor se calcula solo con:
+
+- backend y versión del proveedor;
+- configuración permitida de botella y registro;
+- backend gráfico observado;
+- firmas SHA-256 y tamaños de DLLs gráficas y componentes runtime.
+
+Las claves `gameconfig.*` se excluyen deliberadamente. Cambiar la resolución de Grim Dawn no crea
+un motor nuevo; cambiar `dxgi.dll`, Wine, DXMT, DXVK, D3DMetal o una clave del registro sí. El
+snapshot completo del juego permanece asociado a la ejecución, por lo que ambas dimensiones se
+pueden comparar sin mezclarlas.
+
+`regressionctl engines` agrega por motor juegos observados y resultados perfectos, con
+incidencias, fallidos o pendientes. Esto permite responder qué stack produjo el mejor resultado
+sin asumir que todos los perfiles de un mismo backend son equivalentes.
+
+## Referencia pública de CodeWeavers
+
+La integración usa exclusivamente páginas públicas de la
+[Compatibility Database](https://www.codeweavers.com/compatibility) y su JSON-LD de Schema.org.
+No consulta ni copia `cxcompatdb`, crossties privados, binarios, datos de licencia ni bases internas.
+
+Proceso de enlace:
+
+1. Prioriza un mapeo conocido y revisable por Steam App ID cuando existe.
+2. Prueba una URL de ficha probable derivada del nombre público.
+3. Si no coincide exactamente, usa la búsqueda pública y acepta únicamente título normalizado
+   exacto o Steam App ID exacto.
+4. Rechaza redirecciones, fichas canónicas o enlaces fuera de HTTPS y de
+   `codeweavers.com/compatibility`.
+5. Guarda solo nombre, compañía/categoría públicas, Steam App ID, valoración macOS/Linux,
+   versión de CrossOver, fecha, URL, validadores HTTP y fingerprint del JSON-LD.
+
+Las valoraciones públicas se conservan en su escala original 0–5. La comparación derivada puede
+indicar acuerdo, que Regression supera la referencia o que la referencia pública supera el
+resultado local; si falta evidencia local o pública, queda como `insufficientEvidence`.
+
+### Red, caché y privacidad
+
+- Sesión efímera sin cookies, caché del sistema ni credenciales.
+- Límite de respuesta de 3 MB, timeouts y lista cerrada de hosts/rutas.
+- `ETag`/`Last-Modified` para no descargar fichas sin cambios.
+- Caché positiva de 7 días y negativa de 30 días.
+- Cadencia persistente mínima de 100 segundos entre peticiones, incluso entre reinicios, conforme
+  al `Crawl-delay` público observado; la sincronización es secuencial y nunca bloquea Steam.
+- La opción puede desactivarse desde “Aprendizaje local”. La app envía únicamente el nombre
+  público del juego cuando necesita buscarlo y conserva los metadatos normalizados localmente.
+- Un fallo de red mantiene la última ficha válida y se muestra como incidencia recuperable.
+
+## Migraciones y recuperación
+
+La apertura es transaccional. Antes de elevar una base existente con datos, se crea mediante la
+API de backup de SQLite una copia íntegra en `Compatibility/Backups/`, se valida y se protege en
+`0600`. Si una migración falla, la transacción se revierte y la aplicación conserva el backup.
+
+El empaquetador realiza además un snapshot independiente antes de instalar una versión nueva. La
+migración v5 reconstruye las identidades de motor para todas las ejecuciones y observaciones
+existentes. La v6 enlaza los blindados con su procedencia exacta y recupera como certificaciones
+locales solo los veredictos perfectos históricos asociados a un lanzamiento real. La validación
+final exige que ninguna evidencia quede
+sin motor asociado y que ningún blindado local activo apunte a un veredicto incompleto u obsoleto.
+
+Comprobaciones:
+
+```bash
+Regression.app/Contents/SharedSupport/bin/regressionctl database
+Regression.app/Contents/SharedSupport/bin/regressionctl engines
+Regression.app/Contents/SharedSupport/bin/regressionctl catalog
+Regression.app/Contents/SharedSupport/bin/regressionctl comparisons
+Regression.app/Contents/SharedSupport/bin/regressionctl export /tmp/regression.json
+```
+
+Para ensayar una migración sobre una copia, `regressionctl` admite únicamente por terminal
+`REGRESSION_COMPATIBILITY_DATABASE_PATH=/ruta/copia.sqlite`; la app instalada siempre usa la ruta
+canónica. Este override existe para diagnóstico y CI, no para dividir el historial del usuario.
+
+## Cómo añadir otra fuente pública
+
+1. Implementar `ExternalCompatibilityProviding` con modelo normalizado y lista cerrada de URLs.
+2. Definir cadencia, TTL y página informativa oficiales en `ExternalCatalogSource`.
+3. Añadir tests de parser con HTML mínimo, redirecciones hostiles, documentos incompletos y
+   coincidencias ambiguas.
+4. Mantener la fuente identificada en todas las claves. Nunca combinar entradas solo por App ID.
+5. Elegir explícitamente qué fuente alimenta cada comparación; ninguna puede producir una
+   certificación local.
+
+## Gates de esta capa
+
+- Migración desde un esquema legado con backup privado.
+- Rechazo de perfectos incompletos en Swift y SQLite.
+- Alta y desactivación reversible de un blindado local ligado a evidencia/configuración/motor.
+- Reconciliación de observaciones interrumpidas como `unknown`, nunca como éxito o fallo inferido.
+- Normalización de dos configuraciones gráficas de juego bajo un mismo motor.
+- Caché y cadencia persistente.
+- Parser JSON-LD macOS/Linux y filtrado de enlaces.
+- Rechazo de una URL canónica que imita el dominio oficial.
+- Confirmación de que una valoración pública 5/5 deja el estado local como no verificado.

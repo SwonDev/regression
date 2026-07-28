@@ -76,20 +76,25 @@ public actor ProcessLauncher {
 
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
         let logURL = logDirectoryURL.appendingPathComponent(
-            "\(backend.rawValue)-\(formatter.string(from: Date())).log"
+            "\(backend.rawValue)-\(formatter.string(from: Date()))-\(UUID().uuidString.prefix(8)).log"
         )
         try PrivateStorage.createFile(at: logURL)
         let handle = try FileHandle(forWritingTo: logURL)
+        defer { try? handle.close() }
 
         let process = Process()
         process.executableURL = executableURL
         process.arguments = arguments
         process.standardOutput = handle
         process.standardError = handle
-        try process.run()
-        try? handle.close()
+        do {
+            try process.run()
+        } catch {
+            try? FileManager.default.removeItem(at: logURL)
+            throw error
+        }
         ownedProcesses[process.processIdentifier] = process
 
         return BackendLaunch(
@@ -131,6 +136,7 @@ public actor ProcessLauncher {
 
 public actor ProcessInspector {
     private let runner: ProcessRunner
+    private var cachedBackendsBySteamPID: [Int32: BackendKind] = [:]
 
     public init(runner: ProcessRunner) {
         self.runner = runner
@@ -143,7 +149,59 @@ public actor ProcessInspector {
         ) else {
             return RunningBackendState()
         }
-        return Self.parseProcessList(result.standardOutput)
+
+        let parsed = Self.parseProcessList(result.standardOutput)
+        var crossOver = Set(parsed.crossOverPIDs)
+        var regression = Set(parsed.regressionPIDs)
+        let steamClientPIDs = Set(Self.steamClientProcessIDs(result.standardOutput))
+        cachedBackendsBySteamPID = cachedBackendsBySteamPID.filter {
+            steamClientPIDs.contains($0.key)
+        }
+
+        for pid in crossOver {
+            cachedBackendsBySteamPID[pid] = .crossOver
+        }
+        for pid in regression {
+            cachedBackendsBySteamPID[pid] = .regression
+        }
+
+        // Wine desacopla los procesos Windows del launcher y macOS termina mostrando solo
+        // `C:\...\Steam.exe` en `ps`. Para esos clientes anónimos, identifica el backend
+        // mediante el runtime que realmente tienen abierto, no mediante un wineserver stale.
+        for pid in steamClientPIDs where !crossOver.contains(pid) && !regression.contains(pid) {
+            if let cachedBackend = cachedBackendsBySteamPID[pid] {
+                switch cachedBackend {
+                case .crossOver:
+                    crossOver.insert(pid)
+                case .regression:
+                    regression.insert(pid)
+                }
+                continue
+            }
+
+            guard let openFiles = try? await runner.run(
+                executableURL: URL(fileURLWithPath: "/usr/sbin/lsof"),
+                arguments: ["-n", "-P", "-Fn", "-p", String(pid)]
+            ) else {
+                continue
+            }
+
+            switch Self.backend(fromOpenFileList: openFiles.standardOutput) {
+            case .crossOver:
+                crossOver.insert(pid)
+                cachedBackendsBySteamPID[pid] = .crossOver
+            case .regression:
+                regression.insert(pid)
+                cachedBackendsBySteamPID[pid] = .regression
+            case nil:
+                continue
+            }
+        }
+
+        return RunningBackendState(
+            crossOverPIDs: crossOver.sorted(),
+            regressionPIDs: regression.sorted()
+        )
     }
 
     public static func parseProcessList(_ output: String) -> RunningBackendState {
@@ -156,7 +214,7 @@ public actor ProcessInspector {
             let pidText = trimmed[..<separator]
             guard let pid = Int32(pidText) else { continue }
             let command = trimmed[separator...].lowercased()
-            guard command.contains("steam.exe") else { continue }
+            guard isSteamClientCommand(command) else { continue }
 
             if command.contains("crossover.app/contents/sharedsupport/crossover") {
                 crossOver.insert(pid)
@@ -170,5 +228,37 @@ public actor ProcessInspector {
             crossOverPIDs: crossOver.sorted(),
             regressionPIDs: regression.sorted()
         )
+    }
+
+    public static func steamClientProcessIDs(_ output: String) -> [Int32] {
+        var processIDs: Set<Int32> = []
+
+        for line in output.split(whereSeparator: \.isNewline) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard let separator = trimmed.firstIndex(where: \.isWhitespace) else { continue }
+            let pidText = trimmed[..<separator]
+            guard let pid = Int32(pidText) else { continue }
+            let command = trimmed[separator...].lowercased()
+            guard isSteamClientCommand(command) else { continue }
+            processIDs.insert(pid)
+        }
+
+        return processIDs.sorted()
+    }
+
+    public static func backend(fromOpenFileList output: String) -> BackendKind? {
+        let paths = output.lowercased()
+        if paths.contains("crossover.app/contents/sharedsupport/crossover") {
+            return .crossOver
+        }
+        if paths.contains("regression.app/contents/sharedsupport/wine-root")
+            || paths.contains("application support/regression/bottles") {
+            return .regression
+        }
+        return nil
+    }
+
+    private static func isSteamClientCommand(_ command: String) -> Bool {
+        command.contains("steam.exe") && !command.contains("steamwebhelper.exe")
     }
 }

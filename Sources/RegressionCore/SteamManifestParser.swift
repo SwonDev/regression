@@ -98,16 +98,36 @@ public enum PrivacySanitizer {
     }
 
     public static func redactedLogExcerpt(_ text: String, limit: Int = 2_000) -> String {
-        let withoutURLs = text.replacingOccurrences(
+        var redacted = text.replacingOccurrences(
             of: #"https?://\S+"#,
             with: "<url-redactada>",
             options: .regularExpression
         )
-        let withoutHome = withoutURLs.replacingOccurrences(
+        redacted = redacted.replacingOccurrences(
             of: FileManager.default.homeDirectoryForCurrentUser.path,
             with: "$HOME"
         )
-        return String(withoutHome.prefix(limit))
+        redacted = redacted.replacingOccurrences(
+            of: #"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+"#,
+            with: "Bearer <secreto-redactado>",
+            options: .regularExpression
+        )
+        redacted = redacted.replacingOccurrences(
+            of: #"(?i)\b(password|passwd|token|access[_-]?token|refresh[_-]?token|authorization|cookie|session(?:id)?|steamloginsecure)\b\s*[:=]\s*(\"[^\"]*\"|'[^']*'|[^\s,;]+)"#,
+            with: "$1=<secreto-redactado>",
+            options: .regularExpression
+        )
+        redacted = redacted.replacingOccurrences(
+            of: #"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b"#,
+            with: "<correo-redactado>",
+            options: .regularExpression
+        )
+        redacted = redacted.replacingOccurrences(
+            of: #"(?i)C:\\users\\[^\\\s\"']+"#,
+            with: "<ruta-de-usuario-redactada>",
+            options: .regularExpression
+        )
+        return String(redacted.prefix(limit))
     }
 }
 

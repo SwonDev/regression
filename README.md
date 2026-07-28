@@ -24,7 +24,7 @@ y por qué no se redistribuyen. Licencia: LGPL-2.1+ (`LICENSE`).
 
 ---
 
-## 0. Arquitectura operativa temporal (2026-07-27)
+## 0. Arquitectura operativa temporal (2026-07-28)
 
 1. `Regression.app` se inicia como `LSUIElement`: aparece en la barra de menús y no en el Dock.
 2. Detecta CrossOver, su versión, la botella que contiene Steam, el estado de la botella y el
@@ -34,25 +34,35 @@ y por qué no se redistribuyen. Licencia: LGPL-2.1+ (`LICENSE`).
    La interfaz general de CrossOver solo se abre para instalación, actualización, reparación o
    licencia.
 4. El selector cambia entre CrossOver y Regression cerrando primero el Steam activo; nunca deben
-   coexistir dos procesos que escriban en la biblioteca.
+   coexistir dos procesos que escriban en la biblioteca. Como Wine desacopla `Steam.exe`, el
+   backend activo se atribuye por el runtime que el cliente real mantiene abierto; no por un
+   wineserver residual ni por una ruta que `ps` puede ocultar.
 5. La carpeta `steamapps` del motor propio enlaza a la biblioteca canónica de CrossOver. Los
    juegos se instalan una sola vez; credenciales, registro y datos externos a `steamapps` siguen
    separados de forma segura.
-6. SQLite guarda ejecuciones, configuraciones, huellas de DLL/runtime, variables permitidas,
-   resolución/configuración gráfica detectable, deltas y verificaciones. Los perfiles se pueden
-   consultar y exportar como JSON, pero no se aplican automáticamente.
+6. SQLite v6 guarda ejecuciones, configuraciones, huellas de DLL/runtime, variables permitidas,
+   resolución/configuración gráfica detectable, deltas y verificaciones. Además normaliza la
+   identidad de cada motor para comparar resultados del mismo Wine/DXMT/DXVK/D3DMetal sin
+   confundirlos con opciones propias del juego. Los perfiles se pueden consultar y exportar como
+   JSON, pero no se aplican automáticamente. Cada blindado local enlaza la ejecución u observación,
+   la configuración y el motor exactos que lo justifican; corregir el último veredicto perfecto
+   desactiva la certificación sin borrar su historia.
 7. Una validación visual perfecta se registra sobre la ejecución concreta. La lista muestra
    entonces `Verificado perfecto: Regression` en verde; los intentos fallidos se conservan para
    investigación, pero no degradan el mejor perfil ya confirmado. La app exige una segunda
    confirmación explícita antes de guardar un veredicto perfecto para evitar certificaciones
    accidentales.
-8. La base, sus exportaciones, los recibos y los logs técnicos se guardan con permisos exclusivos
+8. La referencia pública opcional de CodeWeavers se consulta en segundo plano, con caché y
+   cadencia persistente, y se mantiene separada de los veredictos locales: nunca certifica ni
+   reconfigura Regression.
+9. La base, sus exportaciones, los recibos y los logs técnicos se guardan con permisos exclusivos
    del usuario (`0700` para directorios y `0600` para archivos). El lanzador conserva como máximo
    20 logs propios y no registra credenciales ni argumentos no permitidos.
 
 Rutas principales:
 
 - Base: `~/Library/Application Support/Regression/Compatibility/compatibility.sqlite`
+- Backups automáticos de migración: `~/Library/Application Support/Regression/Compatibility/Backups/`
 - Backups de la unificación: `~/Library/Application Support/Regression/Backups/SharedLibrary/`
 - CLI de mantenimiento: `Regression.app/Contents/SharedSupport/bin/regressionctl`
 - Motor propio preservado: `Regression.app/Contents/MacOS/regression-engine`
@@ -63,9 +73,30 @@ Consulta local (sin modificar perfiles automáticamente):
 Regression.app/Contents/SharedSupport/bin/regressionctl status
 Regression.app/Contents/SharedSupport/bin/regressionctl runs
 Regression.app/Contents/SharedSupport/bin/regressionctl profiles
+Regression.app/Contents/SharedSupport/bin/regressionctl engines
+Regression.app/Contents/SharedSupport/bin/regressionctl catalog
+Regression.app/Contents/SharedSupport/bin/regressionctl comparisons
 Regression.app/Contents/SharedSupport/bin/regressionctl observations
 Regression.app/Contents/SharedSupport/bin/regressionctl export /tmp/regression-compatibilidad.json
 ```
+
+Controles de calidad de la capa nativa (no lanzan juegos):
+
+```bash
+swift test
+swift build -c release
+bash build/verify-protected-state.sh --include-bottle
+bash Scripts/package_regression.sh
+codesign --verify --deep --strict Regression.app
+```
+
+`verify-protected-state.sh` detiene el proceso si cambia un PIN del runtime, el perfil aislado de
+Grim Dawn, la pareja DXMT de la botella o la firma. El empaquetador crea primero un backup pequeño
+de la capa nativa y una copia APFS temporal del bundle completo; si falla, restaura el bundle
+anterior. La auditoría de arquitectura, privacidad, accesibilidad y errores está en
+[`docs/native-app-audit.md`](docs/native-app-audit.md). El contrato completo del esquema,
+certificaciones, motores y referencia pública vive en
+[`docs/compatibility-platform.md`](docs/compatibility-platform.md).
 
 Cerrar una validación perfecta desde terminal —la app ofrece la misma acción en “Ejecuciones
 recientes”—:
@@ -91,8 +122,8 @@ backend y nota de evidencia. Nunca se infiere “perfecto” de un cierre normal
   opciones gráficas confirmados sin parpadeo; **Romestead** (Unity) in-game.
 - **D3D9**: DXVK 1.10.3.
 - **Packaging**: app autocontenida (~1,8 GB, PE sin strip — el strip rompía el unwind SEH),
-  firmada adhoc, icono propio. Backup canónico actual:
-  `backups/regression-last-good-20260726.tar.gz`.
+  firmada adhoc, icono propio. `regression-last-good-20260726.tar.gz` conserva la base general
+  restaurable y `grimdawn-d3dmetal-perfect-20260727-1802/` el perfil posterior verificado.
 
 ### Las dos claves de la paridad (aprendidas a las malas)
 1. **DXMT = v0.72** (versión exacta de CX; `main` tiene una regresión que hace invisibles los
@@ -163,16 +194,20 @@ clicks desalineados y contenido negro. **No tocar esto sin leer la sección 6.**
 |---|---|---|---|
 | Wine 11 (fork CX 26.3.0) | `media.codeweavers.com/pub/crossover/source/crossover-sources-26.3.0.tar.gz` | LGPL | Compilado tal cual + parche winemac (consumer) |
 | gnutls/nettle/gmp, glib, gstreamer, freetype, moltenvk, vkd3d, dxvk | mismo tarball oficial | LGPL/Apache | Compilados x86_64 |
-| DXMT | github.com/3Shain/dxmt (main) | zlib | Compilado + parche cross-process propio |
+| DXMT | github.com/3Shain/dxmt (**v0.72**) | LGPL-2.1+ | Compilado + parche cross-process propio |
 | LLVM 15.0.7 | llvm-project | Apache | Backend airconv de DXMT |
 | SPIRV-Headers, libffi, pcre2, SDL2, corefonts | repos oficiales / SourceForge | varias | toolchain/botella |
-| D3DMetal.framework, libd3dshared, PE d3d12* | bundle de CrossOver instalado (Apple GPTK) | Apple | Binarios locales, uso personal (NO redistribuible) |
+| D3DMetal.framework, libd3dshared, PE d3d12* | Game Porting Toolkit instalado localmente | Apple | Binarios locales, uso personal (NO redistribuible) |
 | Fuente CJK (msyh, simsun, SourceHan) | botella Steam de CrossOver del usuario | MS/OFL | Copia local |
 
 **Lo que NO se usa**: GUI de CrossOver, gestor de botellas, sistema de licencias, su fork privado
 de DXMT ni de SPIRV-Cross (no públicos). CrossOver compila todo **x86_64 bajo Rosetta** (su CI:
 `tools/gitlab/build-mac` → `arch -x86_64 ../configure --enable-win64`). Nosotros igual, pero con
 `--enable-archs=i386,x86_64` (wow64 completo, necesario para SteamSetup.exe PE32).
+
+La comparación de catálogo usa únicamente metadatos públicos normalizados de las fichas web de
+la [Compatibility Database de CodeWeavers](https://www.codeweavers.com/compatibility). No copia
+su base interna ni usa esos datos para aplicar perfiles automáticamente.
 
 ---
 
@@ -388,9 +423,11 @@ pasar con otro juego: mismo arreglo.
 
 ---
 
-## 10. Estado de almacenamiento (2026-07-27)
+## 10. Estado de almacenamiento (2026-07-27, revisión final)
 
-- Árbol del proyecto: **~5,4 GiB** medidos con `du`.
+- Árbol del proyecto: **~6,0 GiB** medidos con `du`; incluye ~1,8 GiB de app local y ~1,5 GiB
+  de backups/evidencia privada. El crecimiento respecto a la limpieza inicial corresponde al
+  expediente reproducible de Grim Dawn y a puntos de rollback conservados, no a apps duplicadas.
 - Biblioteca canónica actual: `steamapps` de la botella CrossOver `Steam` (~80 GB en la medición
   de esta migración). Regression apunta a esos mismos archivos mediante enlace simbólico.
 - La antigua `steamapps` propia (~4 MB) se movió de forma recuperable a
@@ -398,4 +435,5 @@ pasar con otro juego: mismo arreglo.
 - Se retiraron `stage/`, `bottles/test/`, las fuentes y el tarball residuales de 26.2.0,
   siete bundles de respaldo redundantes/fallidos y artefactos de experimentación.
 - Se conservaron la app canónica firmada, las fuentes 26.3.0, el toolchain, el motor y la botella
-  propios blindados, los puntos de recuperación y los backups de partidas.
+  propios blindados, los puntos de recuperación, la evidencia A/B y los backups de partidas. El
+  inventario actualizado y la clasificación recuperación/evidencia están en `backups/README.md`.

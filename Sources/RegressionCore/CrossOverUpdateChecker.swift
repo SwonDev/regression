@@ -47,17 +47,26 @@ public actor CrossOverUpdateChecker {
             var request = URLRequest(url: feedURL)
             request.timeoutInterval = 8
             request.cachePolicy = .reloadRevalidatingCacheData
-            let (data, _) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode) else {
+                throw UpdateCheckFailure.invalidResponse
+            }
             let delegate = AppcastVersionParser()
             let parser = XMLParser(data: data)
             parser.delegate = delegate
-            parser.parse()
-            let latest = delegate.versions.max {
-                $0.compare($1, options: .numeric) == .orderedAscending
+            guard parser.parse(), parser.parserError == nil else {
+                throw UpdateCheckFailure.invalidAppcast
             }
-            let updateAvailable = latest.map {
-                installation.version.compare($0, options: .numeric) == .orderedAscending
-            } ?? false
+            guard let latest = delegate.versions.max(by: {
+                $0.compare($1, options: .numeric) == .orderedAscending
+            }) else {
+                throw UpdateCheckFailure.missingVersion
+            }
+            let updateAvailable = installation.version.compare(
+                latest,
+                options: .numeric
+            ) == .orderedAscending
             return CrossOverUpdateStatus(
                 installedVersion: installation.version,
                 availableVersion: latest,
@@ -77,9 +86,14 @@ public actor CrossOverUpdateChecker {
     }
 }
 
+private enum UpdateCheckFailure: Error {
+    case invalidResponse
+    case invalidAppcast
+    case missingVersion
+}
+
 private final class AppcastVersionParser: NSObject, XMLParserDelegate {
     var versions: [String] = []
-    private var activeElement = ""
     private var buffer = ""
 
     func parser(
@@ -89,7 +103,6 @@ private final class AppcastVersionParser: NSObject, XMLParserDelegate {
         qualifiedName qName: String?,
         attributes attributeDict: [String: String] = [:]
     ) {
-        activeElement = qName ?? elementName
         buffer = ""
         if let version = attributeDict["sparkle:shortVersionString"] ?? attributeDict["shortVersionString"] {
             versions.append(version)
@@ -111,7 +124,6 @@ private final class AppcastVersionParser: NSObject, XMLParserDelegate {
             let value = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
             if !value.isEmpty { versions.append(value) }
         }
-        activeElement = ""
         buffer = ""
     }
 }

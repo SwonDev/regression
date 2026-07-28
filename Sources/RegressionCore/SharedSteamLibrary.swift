@@ -51,7 +51,8 @@ public actor SharedSteamLibraryManager {
             } else {
                 resolved = regressionSteamApps.deletingLastPathComponent().appendingPathComponent(destination)
             }
-            let ready = resolved.standardizedFileURL == crossOverSteamApps.standardizedFileURL
+            let ready = resolved.standardizedFileURL.resolvingSymlinksInPath()
+                == crossOverSteamApps.standardizedFileURL.resolvingSymlinksInPath()
             return SharedLibraryAssessment(
                 status: ready ? .ready : .blocked("steamapps ya apunta a otra ubicación"),
                 regressionSteamAppsURL: regressionSteamApps,
@@ -106,7 +107,7 @@ public actor SharedSteamLibraryManager {
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyyMMdd-HHmmss"
         let backupURL = backupRootURL.appendingPathComponent(
-            "steamapps-regression-\(formatter.string(from: Date()))",
+            "steamapps-regression-\(formatter.string(from: Date()))-\(UUID().uuidString.prefix(8))",
             isDirectory: true
         )
         try PrivateStorage.ensureDirectory(at: backupRootURL, fileManager: fileManager)
@@ -116,11 +117,13 @@ public actor SharedSteamLibraryManager {
             try fileManager.moveItem(at: assessment.regressionSteamAppsURL, to: backupURL)
         }
 
+        var linkCreated = false
         do {
             try fileManager.createSymbolicLink(
                 at: assessment.regressionSteamAppsURL,
                 withDestinationURL: assessment.crossOverSteamAppsURL
             )
+            linkCreated = true
             let receipt = SharedLibraryReceipt(
                 configuredAt: Date(),
                 regressionSteamApps: PrivacySanitizer.normalizedPath(assessment.regressionSteamAppsURL.path),
@@ -130,18 +133,50 @@ public actor SharedSteamLibraryManager {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             encoder.dateEncodingStrategy = .iso8601
-            try encoder.encode(receipt).write(
-                to: backupRootURL.appendingPathComponent("shared-library-receipt.json"),
-                options: .atomic
-            )
-            try PrivateStorage.secureFile(
-                at: backupRootURL.appendingPathComponent("shared-library-receipt.json"),
+            try PrivateStorage.write(
+                encoder.encode(receipt),
+                atomicallyTo: backupRootURL.appendingPathComponent("shared-library-receipt.json"),
                 fileManager: fileManager
             )
             return assessment.regressionSteamAppsURL
         } catch {
-            if sourceExists, !fileManager.fileExists(atPath: assessment.regressionSteamAppsURL.path) {
-                try? fileManager.moveItem(at: backupURL, to: assessment.regressionSteamAppsURL)
+            var rollbackFailures: [String] = []
+            if linkCreated {
+                do {
+                    try fileManager.removeItem(at: assessment.regressionSteamAppsURL)
+                } catch {
+                    rollbackFailures.append("no se pudo retirar el enlace incompleto: \(error.localizedDescription)")
+                }
+            }
+
+            if sourceExists {
+                let destinationStillExists = fileManager.fileExists(
+                    atPath: assessment.regressionSteamAppsURL.path
+                ) || (try? fileManager.destinationOfSymbolicLink(
+                    atPath: assessment.regressionSteamAppsURL.path
+                )) != nil
+                if destinationStillExists {
+                    rollbackFailures.append("steamapps sigue ocupado y no puede restaurarse la copia")
+                } else if fileManager.fileExists(atPath: backupURL.path) {
+                    do {
+                        try fileManager.moveItem(
+                            at: backupURL,
+                            to: assessment.regressionSteamAppsURL
+                        )
+                    } catch {
+                        rollbackFailures.append("no se pudo restaurar steamapps: \(error.localizedDescription)")
+                    }
+                } else {
+                    rollbackFailures.append("no se encontró la copia temporal de steamapps")
+                }
+            }
+
+            if !rollbackFailures.isEmpty {
+                let original = error.localizedDescription
+                throw RegressionCoreError.unsafeLibraryState(
+                    "Falló la unificación (\(original)) y el rollback necesita atención: "
+                        + rollbackFailures.joined(separator: "; ")
+                )
             }
             throw error
         }

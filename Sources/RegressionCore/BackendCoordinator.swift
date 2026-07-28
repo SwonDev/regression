@@ -77,8 +77,7 @@ public actor BackendCoordinator {
 
         let steamArguments: [String]
         if let appID {
-            let normalized = appID.filter(\.isNumber)
-            guard !normalized.isEmpty else {
+            guard let normalized = SteamAppID.normalized(appID) else {
                 throw RegressionCoreError.launchFailed("El Steam App ID no es válido")
             }
             steamArguments = ["-applaunch", normalized]

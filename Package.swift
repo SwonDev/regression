@@ -33,7 +33,7 @@ let package = Package(
         ),
         .testTarget(
             name: "RegressionCoreTests",
-            dependencies: ["RegressionCore"],
+            dependencies: ["RegressionCore", "CSQLite"],
             path: "Tests/RegressionCoreTests"
         )
     ]

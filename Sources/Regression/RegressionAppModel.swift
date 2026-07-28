@@ -32,6 +32,19 @@ struct UserFacingFailure: Equatable {
     let recovery: Recovery
 }
 
+enum PublicCatalogOperation: Equatable {
+    case disabled
+    case idle
+    case syncing(current: Int, total: Int, gameName: String)
+    case upToDate(Date?)
+    case completedWithIssues(Int)
+
+    var isSyncing: Bool {
+        if case .syncing = self { return true }
+        return false
+    }
+}
+
 @MainActor
 @Observable
 final class RegressionAppModel {
@@ -42,6 +55,13 @@ final class RegressionAppModel {
     var games: [SteamGame] = []
     var recentRuns: [RunSummary] = []
     var profiles: [CompatibilityProfile] = []
+    var engineProfiles: [EngineProfile] = []
+    var certifications: [VerifiedGameCertification] = VerifiedGameCatalog.all
+    var externalCatalogEntries: [String: ExternalCompatibilityEntry] = [:]
+    var compatibilityComparisons: [CompatibilityComparison] = []
+    var databaseHealth: CompatibilityDatabaseHealth?
+    var publicCatalogOperation: PublicCatalogOperation = .idle
+    var publicCatalogEnabled: Bool
     var sharedLibraryAssessment: SharedLibraryAssessment?
     var updateStatus: CrossOverUpdateStatus?
     var failure: UserFacingFailure?
@@ -55,6 +75,7 @@ final class RegressionAppModel {
     @ObservationIgnored private let coordinator: BackendCoordinator
     @ObservationIgnored private let repository: CompatibilityRepository
     @ObservationIgnored private let telemetry: TelemetryCoordinator
+    @ObservationIgnored private let externalCatalog: ExternalCatalogSynchronizer
     @ObservationIgnored private let sharedLibrary: SharedSteamLibraryManager
     @ObservationIgnored private let updateChecker = CrossOverUpdateChecker()
     @ObservationIgnored private let logger = Logger(
@@ -62,8 +83,17 @@ final class RegressionAppModel {
         category: "lifecycle"
     )
     @ObservationIgnored private var monitoringTask: Task<Void, Never>?
+    @ObservationIgnored private var externalCatalogTask: Task<Void, Never>?
+    @ObservationIgnored private var externalCatalogSyncID: UUID?
     @ObservationIgnored private var didBootstrap = false
     @ObservationIgnored private var periodicRefreshCount = 0
+    @ObservationIgnored private var profilesByAppID: [String: [CompatibilityProfile]] = [:]
+    @ObservationIgnored private var certificationsByAppID = Dictionary(
+        grouping: VerifiedGameCatalog.all,
+        by: \.appID
+    )
+    @ObservationIgnored private var crossOverGames: [SteamGame] = []
+    @ObservationIgnored private var regressionGames: [SteamGame] = []
 
     init() {
         let defaults = UserDefaults.standard
@@ -74,6 +104,12 @@ final class RegressionAppModel {
             defaults.set(true, forKey: "autoLaunchEnabled")
         }
         autoLaunchEnabled = defaults.bool(forKey: "autoLaunchEnabled")
+        if defaults.object(forKey: "publicCatalogEnabled") == nil {
+            defaults.set(true, forKey: "publicCatalogEnabled")
+        }
+        let isPublicCatalogEnabled = defaults.bool(forKey: "publicCatalogEnabled")
+        publicCatalogEnabled = isPublicCatalogEnabled
+        publicCatalogOperation = isPublicCatalogEnabled ? .idle : .disabled
 
         let applicationSupport = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/Regression", isDirectory: true)
@@ -94,19 +130,10 @@ final class RegressionAppModel {
             repository: repository,
             monitor: SteamLogMonitor()
         )
+        externalCatalog = ExternalCatalogSynchronizer(repository: repository)
         sharedLibrary = SharedSteamLibraryManager(
             backupRootURL: applicationSupport.appendingPathComponent("Backups/SharedLibrary", isDirectory: true)
         )
-
-    }
-
-    var menuBarSymbol: String {
-        switch operation {
-        case .error: "exclamationmark.triangle.fill"
-        case .discovering, .preparing, .switching: "arrow.triangle.2.circlepath"
-        case .running: "play.circle.fill"
-        case .ready: "rectangle.connected.to.line.below"
-        }
     }
 
     var statusTitle: String {
@@ -139,11 +166,12 @@ final class RegressionAppModel {
     }
 
     func learnedSummary(for game: SteamGame) -> String? {
-        if let certification = VerifiedGameCatalog.certification(for: game.appID) {
+        if let certification = certificationsByAppID[game.appID]?.first
+            ?? VerifiedGameCatalog.certification(for: game.appID) {
             return "Verificado perfecto: \(certification.backend.displayName)"
         }
 
-        let candidates = profiles.filter { $0.appID == game.appID }
+        let candidates = profilesByAppID[game.appID] ?? []
         guard !candidates.isEmpty else { return nil }
         if let verified = candidates
             .filter({ $0.perfectRuns > 0 || $0.playableRuns > 0 })
@@ -161,6 +189,45 @@ final class RegressionAppModel {
         return failures > 0 ? "\(failures) prueba(s) con incidencias" : "Pendiente de verificación visual"
     }
 
+    func externalSummary(for game: SteamGame) -> String? {
+        guard publicCatalogEnabled else { return nil }
+        guard let entry = externalCatalogEntries[game.appID] else {
+            return publicCatalogOperation.isSyncing ? "CodeWeavers: consulta pendiente" : nil
+        }
+        if let record = entry.record {
+            let rating = record.macOSRating.value.map { "\($0)/5" } ?? "sin valoración Mac"
+            let version = record.macOSRating.testedCrossOverVersion.map { " · CX \($0)" } ?? ""
+            return "CodeWeavers: \(rating)\(version)"
+        }
+        switch entry.status {
+        case .noMatch: return "CodeWeavers: sin coincidencia exacta"
+        case .failed, .unavailable: return "CodeWeavers: consulta no disponible"
+        case .pending: return "CodeWeavers: consulta pendiente"
+        case .linked: return nil
+        }
+    }
+
+    func externalURL(for game: SteamGame) -> URL? {
+        externalCatalogEntries[game.appID]?.record?.canonicalURL
+    }
+
+    var publicCatalogStatusText: String {
+        switch publicCatalogOperation {
+        case .disabled:
+            "Comparación pública desactivada"
+        case .idle:
+            "Preparado para comparar la biblioteca instalada"
+        case let .syncing(current, total, gameName):
+            "Comparando \(current) de \(total): \(gameName)"
+        case let .upToDate(date):
+            date.map {
+                "Actualizado \($0.formatted(date: .abbreviated, time: .shortened))"
+            } ?? "Datos públicos al día"
+        case let .completedWithIssues(count):
+            "Comparación terminada con \(count) consulta(s) pendiente(s)"
+        }
+    }
+
     func bootstrap() async {
         guard !didBootstrap else { return }
         didBootstrap = true
@@ -171,6 +238,10 @@ final class RegressionAppModel {
 
         do {
             try await repository.prepare()
+            let reconciled = try await repository.reconcileInterruptedRuns()
+            if reconciled > 0 {
+                logger.notice("Se cerraron \(reconciled) observaciones interrumpidas")
+            }
         } catch {
             present(error)
         }
@@ -181,7 +252,8 @@ final class RegressionAppModel {
         await beginTelemetryMonitoring()
         await refreshRuntimeState()
         logger.info("Estado de procesos: CrossOver=\(self.runningState.crossOverIsRunning), Regression=\(self.runningState.regressionIsRunning)")
-        await refreshStoredData()
+        await refreshStoredData(includeHealth: true)
+        schedulePublicCatalogSync()
 
         // La red nunca debe retrasar la función principal de la aplicación.
         // CrossOver sigue gestionando sus propias actualizaciones; esta consulta
@@ -193,6 +265,7 @@ final class RegressionAppModel {
         monitoringTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { return }
                 guard let self else { return }
                 await self.periodicRefresh()
             }
@@ -232,8 +305,9 @@ final class RegressionAppModel {
         statusDetail = "Actualizando instalaciones y estado…"
         await refreshDiscovery()
         await refreshRuntimeState()
-        await refreshStoredData()
+        await refreshStoredData(includeHealth: true)
         await refreshUpdateStatus()
+        schedulePublicCatalogSync()
         if failure == nil {
             operation = runningState.activeBackend.map(AppOperation.running) ?? .ready
             statusDetail = "Estado actualizado."
@@ -270,6 +344,34 @@ final class RegressionAppModel {
         }
     }
 
+    func stopSteam() async {
+        guard let installations, let activeBackend = runningState.activeBackend else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "¿Cerrar Steam?"
+        alert.informativeText = "Regression solicitará un cierre normal de Steam con \(activeBackend.displayName). Los juegos que sigan abiertos también deben cerrarse primero."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Cerrar Steam")
+        alert.addButton(withTitle: "Cancelar")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        failure = nil
+        operation = .preparing("Cerrando Steam")
+        statusDetail = "Esperando a que Steam termine de forma segura…"
+        do {
+            try await coordinator.requestShutdown(
+                backend: activeBackend,
+                installations: installations
+            )
+            runningState = await coordinator.runningState()
+            operation = .ready
+            statusDetail = "Steam se cerró correctamente. Regression continúa disponible."
+            await refreshStoredData()
+        } catch {
+            present(error)
+        }
+    }
+
     func selectBackend(_ backend: BackendKind) async {
         guard backend != selectedBackend, let installations else { return }
         failure = nil
@@ -297,6 +399,7 @@ final class RegressionAppModel {
         failure = nil
         operation = .preparing("Iniciando \(game.name)")
         statusDetail = "Registrando la configuración de compatibilidad antes del lanzamiento…"
+        var registeredContext: RunContext?
         do {
             if let active = runningState.activeBackend, active != selectedBackend {
                 let steamLaunch = try await coordinator.switchBackend(
@@ -307,12 +410,15 @@ final class RegressionAppModel {
                 try await confirmSteamLaunch(steamLaunch)
             }
 
-            let launch = try await coordinator.launchSteam(
-                backend: selectedBackend,
+            let metadata = try backendMetadata(
                 installations: installations,
+                backend: selectedBackend
+            )
+            let preparedCommand = try gameLaunchCommand(
+                installations: installations,
+                backend: selectedBackend,
                 appID: game.appID
             )
-            let metadata = backendMetadata(installations: installations, backend: selectedBackend)
             var configuration = ConfigurationCollector.snapshot(
                 bottleURL: metadata.bottleURL,
                 backend: selectedBackend,
@@ -331,16 +437,34 @@ final class RegressionAppModel {
                 backend: selectedBackend,
                 bottleName: metadata.bottleName,
                 providerVersion: metadata.providerVersion,
-                command: launch.command,
-                arguments: launch.arguments,
+                command: PrivacySanitizer.normalizedPath(preparedCommand.executableURL.path),
+                arguments: PrivacySanitizer.safeArguments(preparedCommand.arguments),
                 system: currentSystemSnapshot(),
                 configuration: configuration,
                 configurationFingerprint: ConfigurationCollector.fingerprint(configuration)
             )
             try await telemetry.registerLaunchIntent(context: context, bottleURL: metadata.bottleURL)
+            registeredContext = context
+            _ = try await coordinator.launchSteam(
+                backend: selectedBackend,
+                installations: installations,
+                appID: game.appID
+            )
             operation = .running(selectedBackend)
             statusDetail = "Solicitud enviada a Steam. Regression observará el resultado localmente."
         } catch {
+            if let registeredContext {
+                do {
+                    try await telemetry.cancelLaunchIntent(
+                        context: registeredContext,
+                        reason: error.localizedDescription
+                    )
+                } catch {
+                    logger.error(
+                        "No se pudo cerrar la intención fallida de telemetría: \(error.localizedDescription, privacy: .public)"
+                    )
+                }
+            }
             presentLaunchError(error)
         }
     }
@@ -440,6 +564,7 @@ final class RegressionAppModel {
                 rendering: .passed,
                 inputPrecision: .passed,
                 graphicsSettings: .passed,
+                gameplay: .passed,
                 source: .user,
                 notes: "Verificación manual completa"
             )
@@ -458,11 +583,13 @@ final class RegressionAppModel {
                 source: .user,
                 notes: notes
             )
+        case .invalidated:
+            return
         }
 
         do {
             try await repository.verifyRun(verification)
-            await refreshStoredData()
+            await refreshStoredData(includeHealth: true)
             statusDetail = "La verificación de \(run.gameName) quedó guardada localmente."
         } catch {
             present(error)
@@ -472,6 +599,68 @@ final class RegressionAppModel {
     func toggleAutoLaunch(_ enabled: Bool) {
         autoLaunchEnabled = enabled
         UserDefaults.standard.set(enabled, forKey: "autoLaunchEnabled")
+    }
+
+    func togglePublicCatalog(_ enabled: Bool) {
+        publicCatalogEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: "publicCatalogEnabled")
+        if enabled {
+            publicCatalogOperation = .idle
+            schedulePublicCatalogSync()
+        } else {
+            externalCatalogTask?.cancel()
+            externalCatalogTask = nil
+            externalCatalogSyncID = nil
+            publicCatalogOperation = .disabled
+        }
+    }
+
+    func refreshPublicCatalog() {
+        guard publicCatalogEnabled, externalCatalogTask == nil else { return }
+        schedulePublicCatalogSync(force: true)
+    }
+
+    func shutdown() async {
+        logger.notice("Cancelando tareas de monitorización y catálogo")
+        let monitoring = monitoringTask
+        monitoringTask = nil
+        monitoring?.cancel()
+
+        let catalog = externalCatalogTask
+        externalCatalogTask = nil
+        externalCatalogSyncID = nil
+        catalog?.cancel()
+
+        // No esperar indefinidamente a tareas de red ya canceladas. Las operaciones SQLite
+        // pendientes se serializan en el actor del repositorio antes del cierre; al terminar
+        // esta función AppKit finalizará el proceso y no podrá aparecer trabajo nuevo.
+        await Task.yield()
+        do {
+            try await repository.reconcileInterruptedRuns(
+                reason: "Regression se cerró antes de recibir el cierre del proceso."
+            )
+            try await repository.close()
+            logger.notice("Base local cerrada limpiamente")
+        } catch {
+            logger.error(
+                "No se pudo cerrar limpiamente la base local: \(error.localizedDescription, privacy: .public)"
+            )
+        }
+    }
+
+    func openPublicCatalog() {
+        NSWorkspace.shared.open(CodeWeaversCompatibilityProvider.codeWeaversSource.baseURL)
+    }
+
+    func openExternalCompatibility(for game: SteamGame) {
+        if let url = externalURL(for: game) {
+            NSWorkspace.shared.open(url)
+        } else {
+            NSWorkspace.shared.open(
+                CodeWeaversCompatibilityProvider.publicSearchURL(for: game.name)
+                    ?? CodeWeaversCompatibilityProvider.codeWeaversSource.baseURL
+            )
+        }
     }
 
     func openCrossOver() {
@@ -495,6 +684,12 @@ final class RegressionAppModel {
             let name = application.localizedName?.lowercased() ?? ""
             let path = application.executableURL?.path.lowercased() ?? ""
             return name.contains("steam") && (path.contains("crossover") || path.contains("regression"))
+        }
+        .sorted { left, right in
+            let leftScore = steamActivationScore(left)
+            let rightScore = steamActivationScore(right)
+            if leftScore != rightScore { return leftScore > rightScore }
+            return left.processIdentifier < right.processIdentifier
         }
         if let application = candidates.first {
             application.activate(options: [.activateAllWindows])
@@ -530,11 +725,20 @@ final class RegressionAppModel {
     private func periodicRefresh() async {
         periodicRefreshCount += 1
         await refreshRuntimeState()
-        await pollTelemetry()
+        let telemetryChanged = await pollTelemetry()
         await processLauncher.reapFinishedProcesses()
         if periodicRefreshCount.isMultiple(of: 5) {
             await refreshSharedLibraryAssessment()
-            await refreshStoredData()
+        }
+        if periodicRefreshCount.isMultiple(of: 30) {
+            let previousAppIDs = Set(games.map(\.appID))
+            refreshGames()
+            if Set(games.map(\.appID)) != previousAppIDs {
+                schedulePublicCatalogSync()
+            }
+        }
+        if telemetryChanged || periodicRefreshCount.isMultiple(of: 15) {
+            await refreshStoredData(includeHealth: periodicRefreshCount.isMultiple(of: 900))
         }
     }
 
@@ -553,16 +757,23 @@ final class RegressionAppModel {
 
     private func refreshGames() {
         guard let installations else {
+            crossOverGames = []
+            regressionGames = []
             games = []
             return
         }
+        crossOverGames = installations.crossOver.map {
+            SteamManifestParser.games(in: $0.steamRootURL, backend: .crossOver)
+        } ?? []
+        regressionGames = SteamManifestParser.games(
+            in: installations.regression.steamRootURL,
+            backend: .regression
+        )
         var byID: [String: SteamGame] = [:]
-        if let crossOver = installations.crossOver {
-            for game in SteamManifestParser.games(in: crossOver.steamRootURL, backend: .crossOver) {
-                byID[game.appID] = game
-            }
+        for game in crossOverGames {
+            byID[game.appID] = game
         }
-        for game in SteamManifestParser.games(in: installations.regression.steamRootURL, backend: .regression) {
+        for game in regressionGames {
             if byID[game.appID] == nil || selectedBackend == .regression {
                 byID[game.appID] = game
             }
@@ -584,15 +795,15 @@ final class RegressionAppModel {
         )
     }
 
-    private func pollTelemetry() async {
-        guard let installations else { return }
+    private func pollTelemetry() async -> Bool {
+        guard let installations else { return false }
         let system = currentSystemSnapshot()
+        var changed = false
         if let crossOver = installations.crossOver {
-            let crossGames = SteamManifestParser.games(in: crossOver.steamRootURL, backend: .crossOver)
-            await telemetry.poll(
+            changed = await telemetry.poll(
                 backend: .crossOver,
                 logURL: crossOver.steamRootURL.appendingPathComponent("logs/gameprocess_log.txt"),
-                games: crossGames,
+                games: crossOverGames,
                 system: system,
                 steamRootURL: crossOver.steamRootURL,
                 bottleURL: crossOver.bottleURL,
@@ -605,22 +816,116 @@ final class RegressionAppModel {
             )
         }
         let regression = installations.regression
-        let ownGames = SteamManifestParser.games(in: regression.steamRootURL, backend: .regression)
-        await telemetry.poll(
+        let regressionChanged = await telemetry.poll(
             backend: .regression,
             logURL: regression.steamRootURL.appendingPathComponent("logs/gameprocess_log.txt"),
-            games: ownGames,
+            games: regressionGames,
             system: system,
             steamRootURL: regression.steamRootURL,
             bottleURL: regression.bottleURL,
             bottleName: "Steam",
             providerVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
         )
+        return changed || regressionChanged
     }
 
-    private func refreshStoredData() async {
-        recentRuns = (try? await repository.recentRuns()) ?? []
-        profiles = (try? await repository.compatibilityProfiles()) ?? []
+    private func refreshStoredData(includeHealth: Bool = false) async {
+        do {
+            let refreshedRuns = try await repository.recentRuns()
+            let refreshedProfiles = try await repository.compatibilityProfiles()
+            let refreshedEngines = try await repository.engineProfiles()
+            let refreshedCertifications = try await repository.certifications()
+            let refreshedExternalEntries = try await repository.externalEntries(
+                sourceID: CodeWeaversCompatibilityProvider.codeWeaversSource.id
+            )
+            let refreshedComparisons = try await repository.compatibilityComparisons()
+            let refreshedHealth = includeHealth ? try await repository.databaseHealth() : nil
+            recentRuns = refreshedRuns
+            profiles = refreshedProfiles
+            engineProfiles = refreshedEngines
+            certifications = refreshedCertifications
+            profilesByAppID = Dictionary(grouping: refreshedProfiles, by: \.appID)
+            certificationsByAppID = Dictionary(grouping: refreshedCertifications, by: \.appID)
+            externalCatalogEntries = Dictionary(
+                uniqueKeysWithValues: refreshedExternalEntries.map { ($0.appID, $0) }
+            )
+            compatibilityComparisons = refreshedComparisons
+            if let refreshedHealth { databaseHealth = refreshedHealth }
+        } catch {
+            // Una lectura transitoria no debe borrar en pantalla el último estado válido.
+            logger.error(
+                "No se pudieron actualizar los datos locales: \(error.localizedDescription, privacy: .public)"
+            )
+        }
+    }
+
+    private func schedulePublicCatalogSync(force: Bool = false) {
+        guard publicCatalogEnabled, externalCatalogTask == nil, !games.isEmpty else {
+            if !publicCatalogEnabled { publicCatalogOperation = .disabled }
+            return
+        }
+        let gamesToSync = games
+        let syncID = UUID()
+        externalCatalogSyncID = syncID
+        externalCatalogTask = Task { [weak self] in
+            guard let self else { return }
+            await self.runPublicCatalogSync(games: gamesToSync, force: force, syncID: syncID)
+        }
+    }
+
+    private func runPublicCatalogSync(games: [SteamGame], force: Bool, syncID: UUID) async {
+        var failures = 0
+        var lastSuccess: Date?
+        for (offset, game) in games.enumerated() {
+            guard !Task.isCancelled else { break }
+            publicCatalogOperation = .syncing(
+                current: offset + 1,
+                total: games.count,
+                gameName: game.name
+            )
+            switch await externalCatalog.refresh(game: game, force: force) {
+            case .freshCache:
+                break
+            case .updated:
+                lastSuccess = Date()
+            case .noMatch:
+                break
+            case .failed:
+                // Si la fuente no responde, insistir con el resto de la biblioteca solo
+                // alargaría la espera y consumiría peticiones sin aportar información.
+                failures += games.count - offset
+                finishPublicCatalogSync(
+                    syncID: syncID,
+                    failures: failures,
+                    lastSuccess: lastSuccess
+                )
+                return
+            case .cancelled:
+                finishPublicCatalogSync(syncID: syncID, failures: failures, lastSuccess: lastSuccess)
+                return
+            }
+            await refreshStoredData()
+        }
+        finishPublicCatalogSync(syncID: syncID, failures: failures, lastSuccess: lastSuccess)
+    }
+
+    private func finishPublicCatalogSync(
+        syncID: UUID,
+        failures: Int,
+        lastSuccess: Date?
+    ) {
+        // Una tarea cancelada no puede borrar ni reemplazar el estado de una
+        // sincronización nueva que el usuario haya iniciado inmediatamente después.
+        guard externalCatalogSyncID == syncID else { return }
+        externalCatalogTask = nil
+        externalCatalogSyncID = nil
+        guard publicCatalogEnabled else {
+            publicCatalogOperation = .disabled
+            return
+        }
+        publicCatalogOperation = failures > 0
+            ? .completedWithIssues(failures)
+            : .upToDate(lastSuccess)
     }
 
     private func refreshSharedLibraryAssessment() async {
@@ -645,16 +950,44 @@ final class RegressionAppModel {
     private func backendMetadata(
         installations: InstallationSnapshot,
         backend: BackendKind
-    ) -> (bottleURL: URL, bottleName: String, providerVersion: String) {
+    ) throws -> (bottleURL: URL, bottleName: String, providerVersion: String) {
         switch backend {
         case .crossOver:
-            let crossOver = installations.crossOver!
+            guard let crossOver = installations.crossOver else {
+                throw RegressionCoreError.crossOverNotInstalled
+            }
             return (crossOver.bottleURL, crossOver.bottleName, crossOver.version)
         case .regression:
             return (
                 installations.regression.bottleURL,
                 "Steam",
                 Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
+            )
+        }
+    }
+
+    private func gameLaunchCommand(
+        installations: InstallationSnapshot,
+        backend: BackendKind,
+        appID: String
+    ) throws -> SteamCommand {
+        guard let normalizedAppID = SteamAppID.normalized(appID) else {
+            throw RegressionCoreError.launchFailed("El Steam App ID no es válido")
+        }
+        let arguments = ["-applaunch", normalizedAppID]
+        switch backend {
+        case .crossOver:
+            guard let crossOver = installations.crossOver else {
+                throw RegressionCoreError.crossOverNotInstalled
+            }
+            return BackendCommandFactory.crossOver(
+                installation: crossOver,
+                steamArguments: arguments
+            )
+        case .regression:
+            return BackendCommandFactory.regression(
+                installation: installations.regression,
+                steamArguments: arguments
             )
         }
     }
@@ -666,6 +999,21 @@ final class RegressionAppModel {
         guard backend == .crossOver,
               let value = installations.crossOver?.defaultGraphicsBackend else { return [:] }
         return ["graphics.crossover.default_probe": value]
+    }
+
+    private func steamActivationScore(_ application: NSRunningApplication) -> Int {
+        let name = application.localizedName?.lowercased() ?? ""
+        let path = application.executableURL?.path.lowercased() ?? ""
+        var score = 0
+        if name == "steam" || name == "steam.exe" { score += 100 }
+        if !name.contains("webhelper") && !name.contains("service") { score += 20 }
+        if application.activationPolicy == .regular { score += 10 }
+        switch runningState.activeBackend {
+        case .crossOver where path.contains("crossover"): score += 5
+        case .regression where path.contains("regression"): score += 5
+        default: break
+        }
+        return score
     }
 
     private func currentSystemSnapshot() -> SystemSnapshot {

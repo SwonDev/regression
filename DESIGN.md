@@ -70,13 +70,17 @@ components:
     typography: "{typography.caption}"
     rounded: "{rounded.control}"
     padding: "{spacing.compact}"
+  menu-bar-icon:
+    width: 18px
+    height: 18px
+    padding: 1px
 ---
 
 ## Overview
 
 Regression es una utilidad nativa de macOS que vive en la barra de menús. Su panel debe sentirse como una extensión discreta del sistema, no como un gestor de botellas ni como una réplica visual de CrossOver. La jerarquía prioriza el estado operativo, la acción principal para abrir Steam y la selección consciente del motor.
 
-El panel usa controles SwiftUI y materiales de macOS. No se crean imitaciones personalizadas de Liquid Glass, barras de título ni ventanas flotantes superpuestas. La interfaz general de CrossOver solo se abre como acción de reparación, licencia o actualización.
+El panel usa controles SwiftUI y materiales de macOS. No se crean imitaciones personalizadas de Liquid Glass, barras de título ni ventanas flotantes superpuestas. La interfaz general de CrossOver solo se abre como acción de reparación, licencia o actualización. La identidad propia se concentra en la R de la barra de menús, con una variante estática y nítida para cada estado real de la aplicación.
 
 ## Colors
 
@@ -97,28 +101,30 @@ El panel tiene un ancho ideal de 380 puntos y una altura flexible con desplazami
 
 Orden de contenido:
 
-1. Estado actual y progreso.
-2. Acción principal para abrir o mostrar Steam.
-3. Selector del motor.
-4. Juegos detectados y lanzamiento por App ID.
-5. Datos locales, exportación y diagnóstico.
-6. Reparación, actualización y salida.
+1. Identidad, estado actual y progreso.
+2. Acciones para abrir, mostrar, actualizar o cerrar Steam de forma segura.
+3. Motor y estado de la biblioteca compartida en una misma tarjeta operativa.
+4. Resumen de juegos, verificaciones y motores observados.
+5. Juegos detectados y lanzamiento por App ID.
+6. Aprendizaje local y mantenimiento bajo divulgación progresiva.
+7. Versión, privacidad local y salida.
 
 ## Elevation & Depth
 
-La profundidad procede del material nativo del `MenuBarExtra` y de separadores del sistema. Las tarjetas internas usan fondos secundarios discretos; no se apilan materiales ni sombras fuertes. El foco visual se obtiene con espaciado y tipografía.
+La profundidad procede del material nativo del `NSPopover` y de separadores del sistema. Las tarjetas internas usan fondos secundarios discretos; no se apilan materiales ni sombras fuertes. El foco visual se obtiene con espaciado y tipografía.
 
 ## Shapes
 
-Los controles conservan su forma nativa. Los contenedores auxiliares usan radios de 10 a 12 puntos. No se mezclan píldoras, rectángulos y círculos sin función semántica. Los iconos proceden de SF Symbols.
+Los controles conservan su forma nativa. Los contenedores auxiliares usan radios de 10 a 12 puntos. No se mezclan píldoras, rectángulos y círculos sin función semántica. Los iconos funcionales proceden de SF Symbols; la marca R de Regression usa sus cuatro assets estáticos propios.
 
 ## Components
 
-- **Estado:** símbolo, resumen legible y detalle técnico opcional.
+- **Icono de barra de menús:** lienzo exacto de 18 puntos con variante Retina de 36 píxeles. La huella alfa mide 32 píxeles Retina de alto, queda centrada horizontalmente y aplica una corrección óptica vertical de un píxel hacia arriba. Una `NSImageView` decorativa y transparente a eventos conserva ese tamaño exacto dentro del `NSStatusBarButton` nativo y corrige el centro vertical en −0,5 puntos. Usa cuatro imágenes estáticas: `ready`, `working`, `running` y `error`. Los PNG se tratan como plantillas para adaptarse a las apariencias clara y oscura.
+- **Estado:** el icono cambia sin animación al cambiar el estado operativo. El panel mantiene además resumen legible, insignia semántica y detalle técnico; la imagen nunca es el único canal de información.
 - **Acción principal:** un botón prominente cuyo texto cambia entre “Abrir Steam”, “Mostrar Steam” y “Reintentar”.
 - **Selector de motor:** selector nativo que explica que cambiar de motor cerrará primero el Steam activo.
-- **Juegos:** filas compactas con nombre, App ID y botón de reproducción; no muestran datos privados de la cuenta.
-- **Historial:** resumen de ejecuciones locales, comparación y exportación bajo demanda.
+- **Juegos:** filas compactas con nombre, App ID y botón de reproducción; no muestran datos privados de la cuenta. La certificación local verde y la referencia pública azul/gris son líneas independientes y siempre etiquetadas.
+- **Historial:** resumen de ejecuciones, perfiles y motores locales, comparación pública opcional y exportación bajo demanda. La sincronización muestra progreso y conserva el último dato válido si falla la red.
 - **Errores:** mensaje comprensible, causa técnica desplegable y una acción concreta como “Abrir CrossOver” o “Usar motor de Regression”.
 
 ## Do's and Don'ts
@@ -126,15 +132,20 @@ Los controles conservan su forma nativa. Los contenedores auxiliares usan radios
 ### Do
 
 - Mostrar progreso durante detección, preparación, cambio de motor y lanzamiento.
+- Cambiar automáticamente la variante estática de la R al cambiar el estado operativo.
 - Mantener una sola instancia de Steam activa.
 - Explicar cualquier cambio de botella, biblioteca o licencia antes de ejecutarlo.
 - Usar etiquetas, ayuda contextual y accesibilidad para todos los controles.
 - Conservar el motor propio visible como alternativa, sin activarlo silenciosamente.
+- Explicar qué dato público se consulta y permitir desactivar o actualizar la referencia.
 
 ### Don't
 
 - No mostrar la aplicación en el Dock durante el uso normal.
+- No reproducir, interpolar ni fundir fotogramas en la barra de menús.
+- No animar información decorativa dentro del panel.
 - No abrir la interfaz general de CrossOver salvo reparación, actualización o licencia.
 - No crear ni instalar otra botella o copia de Steam automáticamente.
 - No almacenar credenciales, identificadores de cuenta ni registros sin filtrar.
 - No iniciar simultáneamente Steam de CrossOver y Steam de Regression.
+- No presentar una valoración de CodeWeavers como veredicto o certificación de Regression.

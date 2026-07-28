@@ -20,9 +20,13 @@ enum RegressionControl {
         let launcher = ProcessLauncher()
         let inspector = ProcessInspector(runner: runner)
         let discovery = InstallationDiscovery(runner: runner)
-        let applicationURL = URL(
-            fileURLWithPath: ProcessInfo.processInfo.environment["REGRESSION_APP_PATH"]
-                ?? FileManager.default.currentDirectoryPath + "/Regression.app"
+        let applicationURL = regressionApplicationURL(
+            environment: ProcessInfo.processInfo.environment,
+            executablePath: CommandLine.arguments[0],
+            currentDirectoryURL: URL(
+                fileURLWithPath: FileManager.default.currentDirectoryPath,
+                isDirectory: true
+            )
         )
         let installations = await discovery.discover(regressionApplicationURL: applicationURL)
         let support = FileManager.default.homeDirectoryForCurrentUser
@@ -33,9 +37,10 @@ enum RegressionControl {
             inspector: inspector,
             logDirectoryURL: support.appendingPathComponent("Logs/Launcher", isDirectory: true)
         )
-        let repository = CompatibilityRepository(
-            databaseURL: support.appendingPathComponent("Compatibility/compatibility.sqlite")
-        )
+        let databaseURL = ProcessInfo.processInfo.environment["REGRESSION_COMPATIBILITY_DATABASE_PATH"]
+            .flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
+            ?? support.appendingPathComponent("Compatibility/compatibility.sqlite")
+        let repository = CompatibilityRepository(databaseURL: databaseURL)
 
         switch command {
         case "status":
@@ -54,6 +59,8 @@ enum RegressionControl {
                 )
                 if case .ready = assessment.status {
                     print("Biblioteca compartida: lista")
+                } else if case let .blocked(reason) = assessment.status {
+                    print("Biblioteca compartida: bloqueada —", reason)
                 } else {
                     print("Biblioteca compartida: pendiente")
                 }
@@ -64,9 +71,10 @@ enum RegressionControl {
                 throw RegressionCoreError.crossOverNotInstalled
             }
             var running = await coordinator.runningState()
+            let previouslyActive = running.activeBackend
             guard !running.hasConflict else { throw RegressionCoreError.backendConflict }
 
-            if let active = running.activeBackend {
+            if let active = previouslyActive {
                 guard arguments.contains("--shutdown") else {
                     throw RegressionCoreError.unsafeLibraryState(
                         "Steam está activo; repite con --shutdown para cerrarlo limpiamente"
@@ -100,15 +108,17 @@ enum RegressionControl {
             print("Biblioteca compartida:", PrivacySanitizer.normalizedPath(link.path))
 
             if arguments.contains("--restart") {
-                print("Reabriendo Steam con CrossOver…")
+                let restartBackend = previouslyActive ?? .crossOver
+                print("Reabriendo Steam con", restartBackend.displayName + "…")
                 _ = try await coordinator.launchSteam(
-                    backend: .crossOver,
+                    backend: restartBackend,
                     installations: installations
                 )
             }
 
         case "launch":
-            guard let appID = arguments.dropFirst().first, !appID.filter(\.isNumber).isEmpty else {
+            guard let rawAppID = arguments.dropFirst().first,
+                  let appID = SteamAppID.normalized(rawAppID) else {
                 throw RegressionCoreError.launchFailed("Falta un Steam App ID válido")
             }
             let running = await coordinator.runningState()
@@ -134,7 +144,7 @@ enum RegressionControl {
                 installations: installations,
                 appID: appID
             )
-            print("Solicitud enviada para App ID", appID.filter(\.isNumber), "con", backend.displayName)
+            print("Solicitud enviada para App ID", appID, "con", backend.displayName)
 
         case "switch":
             guard let name = arguments.dropFirst().first,
@@ -180,15 +190,113 @@ enum RegressionControl {
                 )
             }
 
+        case "engines":
+            try await repository.prepare()
+            for engine in try await repository.engineProfiles() {
+                print(
+                    engine.backend.displayName,
+                    engine.providerVersion,
+                    "juegos=\(engine.gameCount)",
+                    "perfectas=\(engine.perfectRuns)",
+                    "con-incidencias=\(engine.playableRuns)",
+                    "fallidas=\(engine.failedRuns)",
+                    "sin-verificar=\(engine.unverifiedRuns)",
+                    "motor=\(engine.fingerprint)"
+                )
+            }
+
         case "certifications":
-            for certification in VerifiedGameCatalog.all {
+            try await repository.prepare()
+            for certification in try await repository.certifications() {
                 print(
                     certification.appID,
                     certification.gameName,
                     certification.backend.displayName,
                     certification.verifiedAt,
+                    "origen=\(certification.origin.rawValue)",
+                    "config=\(certification.configurationFingerprint ?? "histórica")",
+                    "motor=\(certification.engineFingerprint ?? "histórico")",
                     certification.evidence
                 )
+            }
+
+        case "database":
+            try await repository.prepare()
+            let health = try await repository.databaseHealth()
+            print("Esquema:", health.schemaVersion)
+            print("Integridad:", health.integrity)
+            print("Referencias huérfanas:", health.foreignKeyViolations)
+            print("Juegos:", health.gameCount)
+            print("Ejecuciones:", health.runCount)
+            print("Verificaciones:", health.verifiedRunCount)
+            print("Observaciones:", health.observationCount)
+            print("Certificaciones activas:", health.certificationCount)
+            print("Fichas públicas:", health.externalRecordCount)
+            print("Motores normalizados:", health.engineSnapshotCount)
+            if let backup = await repository.lastMigrationBackup() {
+                print("Backup de migración:", PrivacySanitizer.normalizedPath(backup.path))
+            }
+
+        case "catalog":
+            try await repository.prepare()
+            let entries = try await repository.externalEntries()
+            if entries.isEmpty {
+                print("Todavía no hay referencias públicas almacenadas.")
+            }
+            for entry in entries {
+                let rating = entry.record?.macOSRating.value.map(String.init) ?? "sin valorar"
+                let version = entry.record?.macOSRating.testedCrossOverVersion ?? "n/a"
+                print(
+                    entry.appID,
+                    entry.gameName,
+                    entry.sourceID,
+                    entry.status.rawValue,
+                    "mac=\(rating)",
+                    "crossover=\(version)",
+                    entry.record?.canonicalURL.absoluteString ?? "sin-ficha"
+                )
+            }
+
+        case "comparisons":
+            try await repository.prepare()
+            for comparison in try await repository.compatibilityComparisons() {
+                print(
+                    comparison.appID,
+                    comparison.gameName,
+                    "local=\(comparison.localState.rawValue)",
+                    "public=\(comparison.publicMacRating.map(String.init) ?? "n/a")",
+                    "alineación=\(comparison.alignment.rawValue)"
+                )
+            }
+
+        case "catalog-sync":
+            guard let rawAppID = arguments.dropFirst().first,
+                  let appID = SteamAppID.normalized(rawAppID) else {
+                throw RegressionCoreError.launchFailed("Usa catalog-sync APP_ID")
+            }
+            try await repository.prepare()
+            let allGames = (installations.crossOver.map {
+                SteamManifestParser.games(in: $0.steamRootURL, backend: .crossOver)
+            } ?? []) + SteamManifestParser.games(
+                in: installations.regression.steamRootURL,
+                backend: .regression
+            )
+            guard let game = allGames.first(where: { $0.appID == appID }) else {
+                throw RegressionCoreError.launchFailed("El juego no está instalado en la biblioteca detectada")
+            }
+            print("Consultando CodeWeavers con su cadencia pública…")
+            let synchronizer = ExternalCatalogSynchronizer(repository: repository)
+            let outcome = await synchronizer.refresh(
+                game: game,
+                force: arguments.contains("--force")
+            )
+            switch outcome {
+            case .freshCache: print("La referencia almacenada sigue vigente.")
+            case let .updated(entry):
+                print("Ficha actualizada:", entry.record?.canonicalURL.absoluteString ?? entry.status.rawValue)
+            case .noMatch: print("No se encontró una coincidencia exacta.")
+            case let .failed(detail): throw RegressionCoreError.externalCatalog(detail)
+            case .cancelled: throw CancellationError()
             }
 
         case "verify":
@@ -205,11 +313,18 @@ enum RegressionControl {
             } else {
                 note = "Verificación visual local"
             }
-            let dimensions: (VerificationDimension, VerificationDimension, VerificationDimension)
+            let dimensions: (
+                VerificationDimension,
+                VerificationDimension,
+                VerificationDimension,
+                VerificationDimension
+            )
             switch verdict {
-            case .perfect: dimensions = (.passed, .passed, .passed)
-            case .playableWithIssues: dimensions = (.notTested, .notTested, .notTested)
-            case .failed: dimensions = (.failed, .notTested, .notTested)
+            case .perfect: dimensions = (.passed, .passed, .passed, .passed)
+            case .playableWithIssues:
+                dimensions = (.notTested, .notTested, .notTested, .notTested)
+            case .failed: dimensions = (.failed, .notTested, .notTested, .notTested)
+            case .invalidated: dimensions = (.notTested, .notTested, .notTested, .notTested)
             }
             try await repository.verifyRun(RunVerification(
                 runID: runID,
@@ -217,6 +332,7 @@ enum RegressionControl {
                 rendering: dimensions.0,
                 inputPrecision: dimensions.1,
                 graphicsSettings: dimensions.2,
+                gameplay: dimensions.3,
                 source: .visualInspection,
                 notes: note
             ))
@@ -224,13 +340,12 @@ enum RegressionControl {
 
         case "observe":
             guard arguments.count >= 3,
-                  !arguments[1].filter(\.isNumber).isEmpty,
+                  let appID = SteamAppID.normalized(arguments[1]),
                   let verdict = verificationVerdict(arguments[2]) else {
                 throw RegressionCoreError.launchFailed(
                     "Usa observe APP_ID perfect|playable|failed --backend crossOver|regression --name NOMBRE [--note TEXTO]"
                 )
             }
-            let appID = arguments[1].filter(\.isNumber)
             let backendName = option("--backend", in: arguments) ?? "crossOver"
             guard let backend = BackendKind(rawValue: backendName) else {
                 throw RegressionCoreError.launchFailed("Usa --backend crossOver o --backend regression")
@@ -265,11 +380,18 @@ enum RegressionControl {
             if backend == .crossOver, let graphics = installations.crossOver?.defaultGraphicsBackend {
                 configuration["graphics.crossover.default_probe"] = graphics
             }
-            let dimensions: (VerificationDimension, VerificationDimension, VerificationDimension)
+            let dimensions: (
+                VerificationDimension,
+                VerificationDimension,
+                VerificationDimension,
+                VerificationDimension
+            )
             switch verdict {
-            case .perfect: dimensions = (.passed, .passed, .passed)
-            case .playableWithIssues: dimensions = (.notTested, .notTested, .notTested)
-            case .failed: dimensions = (.failed, .notTested, .notTested)
+            case .perfect: dimensions = (.passed, .passed, .passed, .passed)
+            case .playableWithIssues:
+                dimensions = (.notTested, .notTested, .notTested, .notTested)
+            case .failed: dimensions = (.failed, .notTested, .notTested, .notTested)
+            case .invalidated: dimensions = (.notTested, .notTested, .notTested, .notTested)
             }
             try await repository.recordObservation(CompatibilityObservation(
                 appID: appID,
@@ -280,6 +402,7 @@ enum RegressionControl {
                 rendering: dimensions.0,
                 inputPrecision: dimensions.1,
                 graphicsSettings: dimensions.2,
+                gameplay: dimensions.3,
                 configurationFingerprint: ConfigurationCollector.fingerprint(configuration),
                 configuration: configuration,
                 source: .imported,
@@ -309,7 +432,7 @@ enum RegressionControl {
             print("Exportación guardada en", PrivacySanitizer.normalizedPath(path))
 
         default:
-            print("Uso: regressionctl [status | share-library --shutdown [--restart] | launch APP_ID [--backend crossOver|regression] | switch crossOver|regression | runs | profiles | certifications | verify RUN_ID perfect|playable|failed [--note TEXTO] | observe APP_ID perfect|playable|failed --backend MOTOR --name NOMBRE [--note TEXTO] | observations | export RUTA]")
+            print("Uso: regressionctl [status | share-library --shutdown [--restart] | launch APP_ID [--backend crossOver|regression] | switch crossOver|regression | runs | profiles | engines | certifications | database | catalog | catalog-sync APP_ID [--force] | comparisons | verify RUN_ID perfect|playable|failed [--note TEXTO] | observe APP_ID perfect|playable|failed --backend MOTOR --name NOMBRE [--note TEXTO] | observations | export RUTA]")
             exit(64)
         }
     }
@@ -328,5 +451,36 @@ enum RegressionControl {
             return nil
         }
         return arguments[index + 1]
+    }
+
+    private static func regressionApplicationURL(
+        environment: [String: String],
+        executablePath: String,
+        currentDirectoryURL: URL
+    ) -> URL {
+        if let override = environment["REGRESSION_APP_PATH"], !override.isEmpty {
+            return URL(fileURLWithPath: override, isDirectory: true).standardizedFileURL
+        }
+
+        let executableURL: URL
+        if executablePath.hasPrefix("/") {
+            executableURL = URL(fileURLWithPath: executablePath)
+        } else {
+            executableURL = currentDirectoryURL.appendingPathComponent(executablePath)
+        }
+        let bundledCandidate = executableURL
+            .standardizedFileURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        if bundledCandidate.pathExtension == "app",
+           FileManager.default.fileExists(
+               atPath: bundledCandidate.appendingPathComponent("Contents/Info.plist").path
+           ) {
+            return bundledCandidate
+        }
+
+        return currentDirectoryURL.appendingPathComponent("Regression.app", isDirectory: true)
     }
 }

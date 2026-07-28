@@ -61,6 +61,20 @@ public enum ConfigurationCollector {
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
+    /// Extrae únicamente la identidad del motor y de la botella. Las opciones del juego se
+    /// conservan en el snapshot completo, pero no deben crear falsos motores distintos.
+    public static func engineValues(from configuration: [String: String]) -> [String: String] {
+        let exactKeys: Set<String> = ["backend", "provider.version"]
+        let prefixes = ["bottle.", "registry.", "component.", "graphics.", "runtime."]
+        return configuration.filter { key, _ in
+            exactKeys.contains(key) || prefixes.contains(where: key.hasPrefix)
+        }
+    }
+
+    public static func engineFingerprint(for configuration: [String: String]) -> String {
+        fingerprint(engineValues(from: configuration))
+    }
+
     private static func collectBottleConfiguration(at bottleURL: URL, into values: inout [String: String]) {
         let configURL = bottleURL.appendingPathComponent("cxbottle.conf")
         guard let contents = try? String(contentsOf: configURL, encoding: .utf8) else { return }

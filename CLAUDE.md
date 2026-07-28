@@ -11,11 +11,14 @@
 
 ---
 
-## 1. Estado conseguido (2026-07-27)
+## 1. Estado conseguido (2026-07-28)
 
 **Funciona (verificado con capturas):**
 - Integración oficial con la botella Steam de CrossOver, conmutación segura de backend, app
-  `LSUIElement` sin Dock, biblioteca compartida y base SQLite de aprendizaje exportable. Los
+  `LSUIElement` sin Dock, biblioteca compartida y base SQLite v6 de aprendizaje exportable. La
+  base normaliza motores por Wine/componentes/registro, separa opciones del juego, vincula cada
+  blindado con su evidencia/configuración/motor exactos y compara de
+  forma no vinculante con metadatos públicos de CodeWeavers. Los
   datos técnicos locales usan permisos `0700`/`0600` y los logs del lanzador tienen retención
   acotada.
 - Steam completo: tienda, login, biblioteca, navegación, clicks precisos (CEF/Chromium vía
@@ -28,10 +31,9 @@
 - Repo privado en GitHub: `SwonDev/regression` (docs + scripts + parches propios; sin
   binarios de Apple ni fuentes de CrossOver, ver `NOTICE.md`).
 - Icono oficial del usuario integrado (`assets/icon/oficial/`).
-- Backups consolidados: `backups/regression-last-good-20260726.tar.gz` (bundle exacto del
-  último estado bueno), `backups/regression-blindado-20260725.tar.gz` (baseline anterior) y
-  `backups/botella-config-20260725.tar.gz` (registros + fuentes + DLLs). El manifiesto y los
-  hashes están en `backups/README.md`.
+- Backups consolidados: base general en `regression-last-good-20260726.tar.gz`, perfil posterior
+  verificado en `grimdawn-d3dmetal-perfect-20260727-1802/`, baseline anterior y configuración de
+  botella. `backups/README.md` distingue recuperación, evidencia rechazada y datos de usuario.
 - Catálogo canónico `VerifiedGameCatalog`: Cube World, FFT y Grim Dawn permanecen marcados como
   `Verificado perfecto: Regression` aunque se regenere SQLite. La base conserva todos los runs,
   configuraciones e incidencias que explican cómo se blindó cada perfil.
@@ -99,8 +101,15 @@
 11. **Tras `make install` o tocar el bundle: `codesign --force --deep --sign - Regression.app`**.
 12. **PE sin strip** (el strip rompe unwind SEH y la firma de módulos builtin).
 13. **No cambiar el modelo de IA ni el stack decidido** sin permiso explícito del usuario.
-13. Responde siempre en **español**, con tildes. Código y comentarios del repo en el idioma
+14. Responde siempre en **español**, con tildes. Código y comentarios del repo en el idioma
     del código existente.
+15. **No atribuir un Steam Wine solo por el texto de `ps`.** macOS puede mostrar únicamente
+    `C:\...\Steam.exe` tras el desacople. Excluir `steamwebhelper.exe`, resolver el backend por
+    los ficheros abiertos del cliente real (`lsof`) y no tratar un wineserver vivo como prueba
+    suficiente de que Steam está activo.
+16. **La terminación nativa no espera indefinidamente a la red.** Cancelar las tareas, serializar
+    reconciliación y cierre SQLite, y responder entonces a AppKit. Validar el cierre instalado
+    después de tocar este flujo.
 
 ---
 
@@ -131,6 +140,7 @@
 ```bash
 bash build/build-wine.sh    # wine CX 26.3.0 + parche winemac → instala en Regression.app
 bash build/install-game-profiles.sh  # verifica/fija Grim Dawn y firma el bundle
+bash build/verify-protected-state.sh --include-bottle  # comprueba todos los PIN sin lanzar juegos
 # DXMT: meson compile -C build/toolchain/dxmt72  (fuente: build/toolchain/dxmt-src, v0.72 + parches)
 codesign --force --deep --sign - Regression.app   # SIEMPRE tras instalar
 open -a Regression            # validación visual obligatoria
@@ -149,7 +159,7 @@ open -a Regression            # validación visual obligatoria
    desde el menú de Regression; no inferir éxito por exit code.
 2. Iniciar sesión una vez en el Steam propio y revalidar Cube World desde la biblioteca
    compartida, manteniendo su perfil blindado sin cambios globales.
-3. Comparar configuraciones verificadas en SQLite/JSON y trasladarlas al motor propio solo
+3. Comparar configuraciones y motores verificados en SQLite/JSON y trasladarlos al motor propio solo
    desde fuentes públicas o reimplementación legal, de forma aislada por juego.
 4. Mantener MoltenVK/D3D12 y `cxcompatdb` como investigación del motor propio, sin invalidar
    FFT ni otros juegos ya confirmados por rutas distintas.

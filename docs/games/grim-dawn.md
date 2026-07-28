@@ -137,8 +137,8 @@ sirve para I+D local y no se comparte por privacidad y licencia.
 
 La app pasó `codesign --verify --deep --strict`. El parche se aplicó con `patch -p1 --dry-run`
 sobre el `loader.c` original del tarball 26.3.0 y el resultado fue idéntico a la fuente compilada.
-El paquete Swift pasó 10 casos registrados —9 ejecutados y 1 diagnóstico local omitido por
-diseño— sin fallos, y compiló en modo Release.
+El paquete Swift pasó 23 casos registrados —22 ejecutados y 1 diagnóstico local omitido por
+diseño— sin fallos, y compiló en modo Release durante la auditoría nativa posterior.
 
 ## Rollback
 

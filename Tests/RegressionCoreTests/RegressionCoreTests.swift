@@ -91,12 +91,35 @@ final class RegressionCoreTests: XCTestCase {
         let list = """
           100 /Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine64-preloader C:\\Steam\\steam.exe
           200 /project/Regression.app/Contents/SharedSupport/wine-root/bin/wine64-preloader C:\\Steam\\Steam.exe
+          201 /project/Regression.app/Contents/SharedSupport/wine-root/bin/wine64-preloader C:\\Steam\\steamwebhelper.exe -steampath=C:\\Steam\\steam.exe
           300 /Applications/Steam.app/Contents/MacOS/steam_osx
         """
         let state = ProcessInspector.parseProcessList(list)
         XCTAssertEqual(state.crossOverPIDs, [100])
         XCTAssertEqual(state.regressionPIDs, [200])
         XCTAssertTrue(state.hasConflict)
+    }
+
+    func testProcessInspectorFindsDetachedSteamClientWithoutCountingHelpers() {
+        let list = """
+          410 C:\\Program Files (x86)\\Steam\\Steam.exe
+          411 C:\\Program Files (x86)\\Steam\\bin\\cef\\steamwebhelper.exe -steampath=C:\\Program Files (x86)\\Steam\\steam.exe
+          412 /Applications/Steam.app/Contents/MacOS/steam_osx
+        """
+
+        XCTAssertEqual(ProcessInspector.steamClientProcessIDs(list), [410])
+        XCTAssertEqual(
+            ProcessInspector.backend(
+                fromOpenFileList: "n/Users/test/Regression.app/Contents/SharedSupport/wine-root/lib/wine.dylib"
+            ),
+            .regression
+        )
+        XCTAssertEqual(
+            ProcessInspector.backend(
+                fromOpenFileList: "n/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/lib/wine.dylib"
+            ),
+            .crossOver
+        )
     }
 
     func testCrossOverCommandUsesOfficialBottleInterface() {
@@ -122,6 +145,19 @@ final class RegressionCoreTests: XCTestCase {
             command.arguments,
             ["--bottle", "Steam", "--cx-app", #"C:\Program Files (x86)\Steam\steam.exe"#, "-applaunch", "219990"]
         )
+    }
+
+    func testCrossOverGraphicsBackendUsesStaticBottleConfiguration() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-crossover-config-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data(#"""
+"OTHER" = "value"
+"CX_GRAPHICS_BACKEND" = "d3dmetal"
+"""#.utf8).write(to: root.appendingPathComponent("cxbottle.conf"))
+
+        XCTAssertEqual(CrossOverBottleConfiguration.graphicsBackend(at: root), "d3dmetal")
     }
 
     func testConfigurationDelta() {
@@ -237,6 +273,7 @@ final class RegressionCoreTests: XCTestCase {
             rendering: .passed,
             inputPrecision: .passed,
             graphicsSettings: .passed,
+            gameplay: .passed,
             source: .visualInspection,
             notes: "Render e interacción verificados"
         ))
@@ -250,6 +287,7 @@ final class RegressionCoreTests: XCTestCase {
             rendering: .passed,
             inputPrecision: .passed,
             graphicsSettings: .passed,
+            gameplay: .passed,
             configurationFingerprint: ConfigurationCollector.fingerprint(regressionConfiguration),
             configuration: regressionConfiguration,
             source: .imported,

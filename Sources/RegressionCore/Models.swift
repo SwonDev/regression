@@ -14,6 +14,14 @@ public enum BackendKind: String, Codable, CaseIterable, Identifiable, Sendable {
     }
 }
 
+public enum SteamAppID {
+    public static func normalized(_ value: String) -> String? {
+        let candidate = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !candidate.isEmpty, candidate.allSatisfy(\.isNumber) else { return nil }
+        return candidate
+    }
+}
+
 public enum InstallationHealth: String, Codable, Sendable {
     case ready
     case updateRequired
@@ -247,12 +255,14 @@ public enum VerificationVerdict: String, Codable, CaseIterable, Sendable {
     case perfect
     case playableWithIssues
     case failed
+    case invalidated
 
     public var displayName: String {
         switch self {
         case .perfect: "Perfecto"
         case .playableWithIssues: "Funciona con incidencias"
         case .failed: "No funciona"
+        case .invalidated: "Verificación anulada"
         }
     }
 }
@@ -275,6 +285,7 @@ public struct RunVerification: Codable, Equatable, Sendable {
     public let rendering: VerificationDimension
     public let inputPrecision: VerificationDimension
     public let graphicsSettings: VerificationDimension
+    public let gameplay: VerificationDimension
     public let source: VerificationSource
     public let notes: String
     public let verifiedAt: Date
@@ -285,6 +296,7 @@ public struct RunVerification: Codable, Equatable, Sendable {
         rendering: VerificationDimension = .notTested,
         inputPrecision: VerificationDimension = .notTested,
         graphicsSettings: VerificationDimension = .notTested,
+        gameplay: VerificationDimension = .notTested,
         source: VerificationSource,
         notes: String = "",
         verifiedAt: Date = Date()
@@ -294,9 +306,19 @@ public struct RunVerification: Codable, Equatable, Sendable {
         self.rendering = rendering
         self.inputPrecision = inputPrecision
         self.graphicsSettings = graphicsSettings
+        self.gameplay = gameplay
         self.source = source
         self.notes = notes
         self.verifiedAt = verifiedAt
+    }
+
+    public var hasCompletePerfectEvidence: Bool {
+        verdict != .perfect || (
+            rendering == .passed
+                && inputPrecision == .passed
+                && graphicsSettings == .passed
+                && gameplay == .passed
+        )
     }
 }
 
@@ -310,6 +332,7 @@ public struct CompatibilityObservation: Codable, Equatable, Identifiable, Sendab
     public let rendering: VerificationDimension
     public let inputPrecision: VerificationDimension
     public let graphicsSettings: VerificationDimension
+    public let gameplay: VerificationDimension
     public let configurationFingerprint: String
     public let configuration: [String: String]
     public let source: VerificationSource
@@ -326,6 +349,7 @@ public struct CompatibilityObservation: Codable, Equatable, Identifiable, Sendab
         rendering: VerificationDimension = .notTested,
         inputPrecision: VerificationDimension = .notTested,
         graphicsSettings: VerificationDimension = .notTested,
+        gameplay: VerificationDimension = .notTested,
         configurationFingerprint: String,
         configuration: [String: String],
         source: VerificationSource,
@@ -341,11 +365,21 @@ public struct CompatibilityObservation: Codable, Equatable, Identifiable, Sendab
         self.rendering = rendering
         self.inputPrecision = inputPrecision
         self.graphicsSettings = graphicsSettings
+        self.gameplay = gameplay
         self.configurationFingerprint = configurationFingerprint
         self.configuration = configuration
         self.source = source
         self.notes = notes
         self.observedAt = observedAt
+    }
+
+    public var hasCompletePerfectEvidence: Bool {
+        verdict != .perfect || (
+            rendering == .passed
+                && inputPrecision == .passed
+                && graphicsSettings == .passed
+                && gameplay == .passed
+        )
     }
 }
 
@@ -471,6 +505,52 @@ public struct CompatibilityProfile: Codable, Equatable, Identifiable, Sendable {
     public let lastSuccessfulAt: Date?
 }
 
+/// Identidad normalizada de un stack de ejecución observado.
+///
+/// El fingerprint excluye la configuración propia del juego. Por ello varias ejecuciones y
+/// juegos pueden compararse contra el mismo Wine/DXMT/DXVK/D3DMetal y la misma configuración
+/// de botella sin confundir cambios de resolución o calidad del título.
+public struct EngineProfile: Codable, Equatable, Identifiable, Sendable {
+    public var id: String { fingerprint }
+
+    public let fingerprint: String
+    public let backend: BackendKind
+    public let providerVersion: String
+    public let values: [String: String]
+    public let gameCount: Int
+    public let perfectRuns: Int
+    public let playableRuns: Int
+    public let failedRuns: Int
+    public let unverifiedRuns: Int
+    public let lastObservedAt: Date?
+
+    public var graphicsBackend: String? {
+        values["bottle.CX_GRAPHICS_BACKEND"]
+            ?? values["bottle.CX_D3DMETAL"]
+            ?? values["bottle.WINED3DMETAL"]
+            ?? values["bottle.CX_DXVK"]
+            ?? values["bottle.WINEDXVK"]
+            ?? values["graphics.crossover.default_probe"]
+    }
+}
+
+public struct CompatibilityDatabaseHealth: Codable, Equatable, Sendable {
+    public let schemaVersion: Int
+    public let integrity: String
+    public let foreignKeyViolations: Int
+    public let gameCount: Int
+    public let runCount: Int
+    public let verifiedRunCount: Int
+    public let observationCount: Int
+    public let certificationCount: Int
+    public let externalRecordCount: Int
+    public let engineSnapshotCount: Int
+
+    public var isHealthy: Bool {
+        integrity == "ok" && foreignKeyViolations == 0
+    }
+}
+
 public struct ConfigurationDelta: Codable, Equatable, Sendable {
     public let added: [String: String]
     public let removed: [String: String]
@@ -493,6 +573,8 @@ public enum RegressionCoreError: LocalizedError, Sendable {
     case launchFailed(String)
     case shutdownTimedOut(BackendKind)
     case unsafeLibraryState(String)
+    case invalidEvidence(String)
+    case externalCatalog(String)
     case database(String)
 
     public var errorDescription: String? {
@@ -517,6 +599,10 @@ public enum RegressionCoreError: LocalizedError, Sendable {
             "\(backend.displayName) no cerró Steam a tiempo. Ciérralo manualmente y vuelve a intentarlo."
         case let .unsafeLibraryState(detail):
             "No se puede unificar la biblioteca de forma segura: \(detail)"
+        case let .invalidEvidence(detail):
+            "La verificación no es válida: \(detail)"
+        case let .externalCatalog(detail):
+            "No se pudo consultar el catálogo público: \(detail)"
         case let .database(detail):
             "La base de compatibilidad no está disponible: \(detail)"
         }

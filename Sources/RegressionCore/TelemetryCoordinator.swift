@@ -35,13 +35,29 @@ public actor TelemetryCoordinator {
     }
 
     public func registerLaunchIntent(context: RunContext, bottleURL: URL) async throws {
+        let key = Self.pendingKey(backend: context.backend, appID: context.appID)
+        if let previous = pending[key] {
+            try await repository.failRunBeforeLaunch(
+                id: previous.context.id,
+                reason: "La solicitud pendiente fue sustituida por un nuevo lanzamiento."
+            )
+            pending.removeValue(forKey: key)
+        }
         try await repository.beginRun(context)
-        pending[Self.pendingKey(backend: context.backend, appID: context.appID)] = PendingRun(
+        pending[key] = PendingRun(
             context: context,
             bottleURL: bottleURL
         )
     }
 
+    public func cancelLaunchIntent(context: RunContext, reason: String) async throws {
+        let key = Self.pendingKey(backend: context.backend, appID: context.appID)
+        guard pending[key]?.context.id == context.id else { return }
+        pending.removeValue(forKey: key)
+        try await repository.failRunBeforeLaunch(id: context.id, reason: reason)
+    }
+
+    @discardableResult
     public func poll(
         backend: BackendKind,
         logURL: URL,
@@ -52,10 +68,12 @@ public actor TelemetryCoordinator {
         bottleName: String,
         providerVersion: String,
         configurationOverrides: [String: String] = [:]
-    ) async {
+    ) async -> Bool {
         let events = await monitor.readNewEvents(from: logURL)
+        guard !events.isEmpty else { return false }
         let gameNames = Dictionary(uniqueKeysWithValues: games.map { ($0.appID, $0.name) })
         let gamesByID = Dictionary(uniqueKeysWithValues: games.map { ($0.appID, $0) })
+        var changed = false
 
         for event in events {
             switch event {
@@ -111,6 +129,7 @@ public actor TelemetryCoordinator {
                     game: gamesByID[appID],
                     steamRootURL: steamRootURL
                 )
+                changed = true
 
             case let .ended(timestamp, appID, processID, exitCode):
                 let activeKey = Self.activeKey(backend: backend, appID: appID, processID: processID)
@@ -136,8 +155,10 @@ public actor TelemetryCoordinator {
                     afterConfiguration: after,
                     delta: delta
                 )
+                changed = true
             }
         }
+        return changed
     }
 
     private static func pendingKey(backend: BackendKind, appID: String) -> String {

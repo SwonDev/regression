@@ -11,6 +11,10 @@ public enum GameConfigurationCollector {
         "height", "quality", "refresh", "renderer", "resolution", "scale",
         "shadow", "texture", "ui", "vsync", "width", "window"
     ]
+    private static let sensitiveKeyMarkers = [
+        "account", "email", "login", "name", "password", "path", "profile",
+        "session", "token", "user"
+    ]
 
     public static func snapshot(
         bottleURL: URL,
@@ -117,6 +121,7 @@ public enum GameConfigurationCollector {
                   let valueRange = Range(match.range(at: 2), in: text) else { continue }
             let key = normalizedKey(String(text[keyRange]))
             guard settingMarkers.contains(where: { key.contains($0) }) else { continue }
+            guard !sensitiveKeyMarkers.contains(where: { key.contains($0) }) else { continue }
             guard let value = safeValue(String(text[valueRange])) else { continue }
             values["\(prefix).\(key)"] = value
             stored += 1
@@ -140,9 +145,11 @@ public enum GameConfigurationCollector {
             !lowercased.contains("https://"),
             !lowercased.contains("token"),
             !lowercased.contains("password"),
+            !lowercased.contains("bearer "),
+            !lowercased.contains("c:\\users\\"),
+            !lowercased.contains("/users/"),
             !value.contains("@"),
-            !value.contains(#":\"#),
-            !value.contains("/Users/")
+            !value.contains(#":\"#)
         else { return nil }
         return value
     }

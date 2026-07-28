@@ -20,7 +20,8 @@ public actor InstallationDiscovery {
     }
 
     private func discoverCrossOver() async -> (installation: CrossOverInstallation?, issue: InstallationIssue?) {
-        guard let applicationURL = crossOverApplications().first else {
+        let applications = crossOverApplications()
+        guard !applications.isEmpty else {
             return (
                 nil,
                 InstallationIssue(
@@ -30,6 +31,8 @@ public actor InstallationDiscovery {
                 )
             )
         }
+        let applicationURL = applications.first(where: hasRequiredCrossOverTools)
+            ?? applications[0]
 
         let bottleRoot = fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/CrossOver/Bottles", isDirectory: true)
@@ -113,10 +116,7 @@ public actor InstallationDiscovery {
             healthDetail = "Estado de botella no concluyente"
         }
 
-        let graphicsBackend = await probeDefaultGraphicsBackend(
-            wineCLI: wineCLI,
-            bottleName: bottleURL.lastPathComponent
-        )
+        let graphicsBackend = CrossOverBottleConfiguration.graphicsBackend(at: bottleURL)
 
         let installation = CrossOverInstallation(
             applicationURL: applicationURL,
@@ -133,37 +133,6 @@ public actor InstallationDiscovery {
             healthDetail: healthDetail
         )
         return (installation, nil)
-    }
-
-    private func probeDefaultGraphicsBackend(wineCLI: URL, bottleName: String) async -> String? {
-        let logURL = fileManager.temporaryDirectory
-            .appendingPathComponent("regression-crossover-probe-\(UUID().uuidString).log")
-        defer { try? fileManager.removeItem(at: logURL) }
-
-        guard let result = try? await runner.run(
-            executableURL: wineCLI,
-            arguments: [
-                "--bottle", bottleName,
-                "--no-update",
-                "--no-gui",
-                "--debugmsg", "+process",
-                "--cx-log", logURL.path,
-                "--cx-app", #"C:\windows\system32\cmd.exe"#,
-                "/c", "exit"
-            ]
-        ), result.exitCode == 0,
-        let log = try? String(contentsOf: logURL, encoding: .utf8)
-        else { return nil }
-
-        for line in log.split(whereSeparator: \.isNewline).reversed() {
-            let marker = "set_graphics_backend using "
-            guard let markerRange = line.range(of: marker) else { continue }
-            let suffix = line[markerRange.upperBound...]
-            guard let end = suffix.range(of: " as the graphics backend") else { continue }
-            let value = suffix[..<end.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
-            if !value.isEmpty { return value }
-        }
-        return nil
     }
 
     private func discoverRegression(applicationURL: URL?) -> RegressionInstallation {
@@ -221,10 +190,9 @@ public actor InstallationDiscovery {
             for url in contents where url.pathExtension == "app" {
                 let bundle = Bundle(url: url)
                 let identifier = bundle?.bundleIdentifier?.lowercased() ?? ""
-                let hasCLI = fileManager.isExecutableFile(
-                    atPath: url.appendingPathComponent("Contents/SharedSupport/CrossOver/bin/wine").path
-                )
-                if hasCLI && (identifier.contains("codeweavers.crossover") || url.lastPathComponent.lowercased().hasPrefix("crossover")) {
+                let isCrossOver = identifier.contains("codeweavers.crossover")
+                    || url.lastPathComponent.lowercased().hasPrefix("crossover")
+                if isCrossOver {
                     candidates.append(url)
                 }
             }
@@ -237,10 +205,39 @@ public actor InstallationDiscovery {
         }
     }
 
+    private func hasRequiredCrossOverTools(_ applicationURL: URL) -> Bool {
+        let toolsRoot = applicationURL.appendingPathComponent(
+            "Contents/SharedSupport/CrossOver/bin",
+            isDirectory: true
+        )
+        return fileManager.isExecutableFile(atPath: toolsRoot.appendingPathComponent("wine").path)
+            && fileManager.isExecutableFile(atPath: toolsRoot.appendingPathComponent("cxbottle").path)
+    }
+
     private static func preferSteamBottle(_ lhs: URL, _ rhs: URL) -> Bool {
         let leftIsSteam = lhs.lastPathComponent.caseInsensitiveCompare("Steam") == .orderedSame
         let rightIsSteam = rhs.lastPathComponent.caseInsensitiveCompare("Steam") == .orderedSame
         if leftIsSteam != rightIsSteam { return leftIsSteam }
         return lhs.lastPathComponent.localizedCaseInsensitiveCompare(rhs.lastPathComponent) == .orderedAscending
+    }
+}
+
+enum CrossOverBottleConfiguration {
+    static func graphicsBackend(
+        at bottleURL: URL,
+        fileManager: FileManager = .default
+    ) -> String? {
+        let configurationURL = bottleURL.appendingPathComponent("cxbottle.conf")
+        guard fileManager.fileExists(atPath: configurationURL.path),
+              let contents = try? String(contentsOf: configurationURL, encoding: .utf8) else {
+            return nil
+        }
+        let pattern = #"(?m)^\s*"CX_GRAPHICS_BACKEND"\s*=\s*"([^"]+)"\s*$"#
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let range = NSRange(contents.startIndex..<contents.endIndex, in: contents)
+        guard let match = expression.firstMatch(in: contents, range: range),
+              let valueRange = Range(match.range(at: 1), in: contents) else { return nil }
+        let value = contents[valueRange].trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
     }
 }

@@ -6,16 +6,16 @@ public enum SteamGameProcessEvent: Equatable, Sendable {
 }
 
 public enum SteamGameProcessLogParser {
-    private static let startedExpression = try! NSRegularExpression(
+    private static let startedExpression = try? NSRegularExpression(
         pattern: #"^\[([^]]+)\] AppID ([0-9]+) adding PID ([0-9]+) as a tracked process "(.*)"$"#
     )
-    private static let endedExpression = try! NSRegularExpression(
+    private static let endedExpression = try? NSRegularExpression(
         pattern: #"^\[([^]]+)\] AppID ([0-9]+) no longer tracking PID ([0-9]+), exit code (-?[0-9]+)$"#
     )
 
     public static func parse(line: String) -> SteamGameProcessEvent? {
         let fullRange = NSRange(line.startIndex..<line.endIndex, in: line)
-        if let match = startedExpression.firstMatch(in: line, range: fullRange),
+        if let match = startedExpression?.firstMatch(in: line, range: fullRange),
            let timestamp = capture(1, match: match, in: line).flatMap(parseDate),
            let appID = capture(2, match: match, in: line),
            let pidText = capture(3, match: match, in: line),
@@ -29,7 +29,7 @@ public enum SteamGameProcessLogParser {
             )
         }
 
-        if let match = endedExpression.firstMatch(in: line, range: fullRange),
+        if let match = endedExpression?.firstMatch(in: line, range: fullRange),
            let timestamp = capture(1, match: match, in: line).flatMap(parseDate),
            let appID = capture(2, match: match, in: line),
            let pidText = capture(3, match: match, in: line),
@@ -79,33 +79,73 @@ public enum SteamGameProcessLogParser {
 }
 
 public actor SteamLogMonitor {
-    private var offsets: [URL: UInt64] = [:]
+    private struct LogState: Sendable {
+        var offset: UInt64
+        var pendingBytes: Data
+        var fileNumber: UInt64?
+    }
+
+    private static let maximumPendingBytes = 256 * 1_024
+    private var states: [URL: LogState] = [:]
 
     public init() {}
 
     public func beginMonitoringAtEnd(of logURL: URL) {
-        guard offsets[logURL] == nil else { return }
-        let attributes = try? FileManager.default.attributesOfItem(atPath: logURL.path)
-        offsets[logURL] = (attributes?[.size] as? NSNumber)?.uint64Value ?? 0
+        let key = logURL.standardizedFileURL
+        guard states[key] == nil else { return }
+        let attributes = try? FileManager.default.attributesOfItem(atPath: key.path)
+        states[key] = LogState(
+            offset: (attributes?[.size] as? NSNumber)?.uint64Value ?? 0,
+            pendingBytes: Data(),
+            fileNumber: (attributes?[.systemFileNumber] as? NSNumber)?.uint64Value
+        )
     }
 
     public func readNewEvents(from logURL: URL) -> [SteamGameProcessEvent] {
-        guard let handle = try? FileHandle(forReadingFrom: logURL) else { return [] }
+        let key = logURL.standardizedFileURL
+        guard let handle = try? FileHandle(forReadingFrom: key) else { return [] }
         defer { try? handle.close() }
 
-        let previousOffset = offsets[logURL] ?? 0
-        let attributes = try? FileManager.default.attributesOfItem(atPath: logURL.path)
+        let attributes = try? FileManager.default.attributesOfItem(atPath: key.path)
         let currentSize = (attributes?[.size] as? NSNumber)?.uint64Value ?? 0
-        let safeOffset = previousOffset <= currentSize ? previousOffset : 0
+        let currentFileNumber = (attributes?[.systemFileNumber] as? NSNumber)?.uint64Value
+        var state = states[key] ?? LogState(
+            offset: 0,
+            pendingBytes: Data(),
+            fileNumber: currentFileNumber
+        )
+
+        let fileWasReplaced = state.fileNumber != nil
+            && currentFileNumber != nil
+            && state.fileNumber != currentFileNumber
+        if fileWasReplaced || state.offset > currentSize {
+            state.offset = 0
+            state.pendingBytes.removeAll(keepingCapacity: true)
+        }
+        state.fileNumber = currentFileNumber ?? state.fileNumber
+
         do {
-            try handle.seek(toOffset: safeOffset)
+            try handle.seek(toOffset: state.offset)
             let data = try handle.readToEnd() ?? Data()
-            offsets[logURL] = safeOffset + UInt64(data.count)
-            let text = String(decoding: data, as: UTF8.self)
+            state.offset += UInt64(data.count)
+
+            var completeBuffer = state.pendingBytes
+            completeBuffer.append(data)
+            guard let finalNewline = completeBuffer.lastIndex(of: 0x0A) else {
+                state.pendingBytes = Data(completeBuffer.suffix(Self.maximumPendingBytes))
+                states[key] = state
+                return []
+            }
+
+            let completeData = completeBuffer[...finalNewline]
+            state.pendingBytes = Data(completeBuffer[completeBuffer.index(after: finalNewline)...])
+            states[key] = state
+            let text = String(decoding: completeData, as: UTF8.self)
             return text.split(whereSeparator: \.isNewline).compactMap {
                 SteamGameProcessLogParser.parse(line: String($0))
             }
         } catch {
+            states[key] = state
             return []
         }
     }
