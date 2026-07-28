@@ -1,6 +1,6 @@
 # Plataforma local de compatibilidad y aprendizaje
 
-Fecha de contrato: 28 de julio de 2026. Esquema SQLite actual: **v6**.
+Fecha de contrato: 28 de julio de 2026. Esquema SQLite actual: **v9**.
 
 Esta capa conserva evidencia reproducible de cada ejecución y permite comparar Regression con
 fuentes públicas. No altera el motor, la botella ni la configuración de un juego. La aplicación
@@ -36,6 +36,9 @@ integridad en cada apertura.
 | Motores | `engine_snapshots`, `engine_facts`, `run_engine_snapshots`, `observation_engine_snapshots` | Identidad consultable del stack y vínculo con cada evidencia. |
 | Blindados | `verified_game_certifications` | Catálogo canónico y certificaciones locales con procedencia, configuración y motor exactos. |
 | Fuentes públicas | `external_catalog_sources`, `external_catalog_sync_state`, `external_game_records`, `external_game_links` | Caché, cadencia, ficha normalizada y vínculo local. |
+| Evolución de runtimes | `runtime_technologies`, `runtime_candidates` | Baselines, versiones observadas y candidatos aislados con gates de promoción. |
+| Rendimiento | `optimization_assessments` | Métricas separadas de la certificación funcional. |
+| Requisitos y reparación | `game_runtime_requirements`, `repair_receipts` | Requisitos declarativos y recibos de recetas permitidas; nunca comandos aprendidos. |
 | Migraciones | `schema_migrations` + `PRAGMA user_version` | Evolución atómica y auditable. |
 
 Dos triggers de inserción/actualización protegen tanto ejecuciones como observaciones: SQLite
@@ -52,6 +55,16 @@ el fingerprint completo de configuración y el fingerprint normalizado del motor
 último veredicto perfecto, esa certificación pasa a inactiva; no se borra y continúa disponible en
 la exportación histórica. Los blindados embebidos conservan su expediente canónico y se enlazan
 automáticamente a evidencia local cuando existe.
+
+La persistencia manual se prueba de extremo a extremo: alta desde una ejecución real, cierre de
+SQLite, reapertura, recuperación de la misma procedencia/configuración/motor y presencia en la
+exportación JSON. La interfaz enumera los blindados activos para que la persistencia no dependa de
+inferirla desde una fila de juego instalada.
+
+Una certificación funcional y una optimización son afirmaciones distintas. El blindado fija una
+ruta reproducible; las versiones más recientes se registran como candidatos aislados y no pueden
+promocionarse sin rollback, matriz completa y rendimiento medido. El contrato detallado está en
+[`runtime-evolution.md`](runtime-evolution.md).
 
 ## Identidad normalizada de motor
 
@@ -113,15 +126,27 @@ API de backup de SQLite una copia íntegra en `Compatibility/Backups/`, se valid
 El empaquetador realiza además un snapshot independiente antes de instalar una versión nueva. La
 migración v5 reconstruye las identidades de motor para todas las ejecuciones y observaciones
 existentes. La v6 enlaza los blindados con su procedencia exacta y recupera como certificaciones
-locales solo los veredictos perfectos históricos asociados a un lanzamiento real. La validación
-final exige que ninguna evidencia quede
-sin motor asociado y que ningún blindado local activo apunte a un veredicto incompleto u obsoleto.
+locales solo los veredictos perfectos históricos asociados a un lanzamiento real. La v7 añade el
+inventario tecnológico, candidatos aislados, métricas, requisitos declarativos y
+recibos de reparación. La v8 exige además una comparación equivalente contra el baseline: misma
+resolución y preset, ninguna regresión en métricas comunes y una mejora efectiva como mínimo.
+Sus triggers impiden declarar una opción óptima sin métricas o promover un candidato sin
+aislamiento, huellas, rollback, matriz y mejora comparada. La validación final exige que ninguna
+evidencia quede sin motor asociado y que ningún blindado local activo apunte a un veredicto
+incompleto u obsoleto.
+La v9 cierra dos vías de falsa optimización: todas las métricas disponibles deben tener la misma
+cobertura en baseline y candidato, y los valores deben ser finitos, positivos y acotados. Además,
+la resolución y el preset dejan de ser opcionales para `bestKnown`, y la política Swift rechaza
+fuentes cuyo host no coincida con el sitio oficial registrado para la tecnología.
 
 Comprobaciones:
 
 ```bash
 Regression.app/Contents/SharedSupport/bin/regressionctl database
 Regression.app/Contents/SharedSupport/bin/regressionctl engines
+Regression.app/Contents/SharedSupport/bin/regressionctl technologies
+Regression.app/Contents/SharedSupport/bin/regressionctl candidates
+Regression.app/Contents/SharedSupport/bin/regressionctl optimization
 Regression.app/Contents/SharedSupport/bin/regressionctl catalog
 Regression.app/Contents/SharedSupport/bin/regressionctl comparisons
 Regression.app/Contents/SharedSupport/bin/regressionctl export /tmp/regression.json
@@ -146,6 +171,9 @@ canónica. Este override existe para diagnóstico y CI, no para dividir el histo
 - Migración desde un esquema legado con backup privado.
 - Rechazo de perfectos incompletos en Swift y SQLite.
 - Alta y desactivación reversible de un blindado local ligado a evidencia/configuración/motor.
+- Persistencia del blindado manual tras reapertura y presencia con procedencia exacta en JSON.
+- Rechazo Swift/SQLite de promociones sin aislamiento, rollback, matriz y medición.
+- Rechazo de una opción `bestKnown` sin ninguna métrica de rendimiento.
 - Reconciliación de observaciones interrumpidas como `unknown`, nunca como éxito o fallo inferido.
 - Normalización de dos configuraciones gráficas de juego bajo un mismo motor.
 - Caché y cadencia persistente.

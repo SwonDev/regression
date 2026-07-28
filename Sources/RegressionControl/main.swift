@@ -220,6 +220,73 @@ enum RegressionControl {
                 )
             }
 
+        case "technologies":
+            try await repository.prepare()
+            for technology in try await repository.runtimeTechnologies() {
+                print(
+                    technology.id,
+                    technology.displayName,
+                    "estable=\(technology.stableVersion ?? "sin baseline")",
+                    "observada=\(technology.latestKnownVersion ?? "sin revisar")",
+                    "política=\(technology.updatePolicy.rawValue)",
+                    technology.officialURL.absoluteString
+                )
+            }
+
+        case "candidates":
+            try await repository.prepare()
+            for candidate in try await repository.runtimeCandidates() {
+                print(
+                    candidate.id.uuidString,
+                    candidate.technologyID,
+                    "app=\(candidate.appID ?? "global")",
+                    "versión=\(candidate.targetVersion)",
+                    "estado=\(candidate.state.rawValue)",
+                    "aislado=\(candidate.isIsolated)"
+                )
+            }
+
+        case "optimization":
+            try await repository.prepare()
+            for assessment in try await repository.optimizationAssessments() {
+                let averageFPS = assessment.averageFPS.map { String($0) } ?? "n/a"
+                let onePercentLow = assessment.onePercentLowFPS.map { String($0) } ?? "n/a"
+                let frameTimeP95 = assessment.frameTimeP95Milliseconds.map { String($0) } ?? "n/a"
+                print(
+                    assessment.appID,
+                    assessment.backend.displayName,
+                    assessment.state.rawValue,
+                    "fps=\(averageFPS)",
+                    "1%=\(onePercentLow)",
+                    "p95=\(frameTimeP95)",
+                    "motor=\(assessment.engineFingerprint)"
+                )
+            }
+
+        case "requirements":
+            try await repository.prepare()
+            for requirement in try await repository.runtimeRequirements() {
+                print(
+                    requirement.appID,
+                    requirement.kind.rawValue,
+                    requirement.identifier,
+                    requirement.versionConstraint ?? "sin restricción",
+                    requirement.source.rawValue
+                )
+            }
+
+        case "repair-receipts":
+            try await repository.prepare()
+            for receipt in try await repository.repairReceipts() {
+                print(
+                    receipt.appID,
+                    receipt.backend.displayName,
+                    "receta=\(receipt.recipeID)@\(receipt.recipeVersion)",
+                    "resultado=\(receipt.result.rawValue)",
+                    "rollback=\(receipt.rollbackReference)"
+                )
+            }
+
         case "database":
             try await repository.prepare()
             let health = try await repository.databaseHealth()
@@ -233,6 +300,11 @@ enum RegressionControl {
             print("Certificaciones activas:", health.certificationCount)
             print("Fichas públicas:", health.externalRecordCount)
             print("Motores normalizados:", health.engineSnapshotCount)
+            print("Tecnologías inventariadas:", health.runtimeTechnologyCount)
+            print("Candidatos aislados:", health.runtimeCandidateCount)
+            print("Mediciones de rendimiento:", health.optimizationAssessmentCount)
+            print("Requisitos declarativos:", health.runtimeRequirementCount)
+            print("Recibos de reparación:", health.repairReceiptCount)
             if let backup = await repository.lastMigrationBackup() {
                 print("Backup de migración:", PrivacySanitizer.normalizedPath(backup.path))
             }
@@ -432,7 +504,7 @@ enum RegressionControl {
             print("Exportación guardada en", PrivacySanitizer.normalizedPath(path))
 
         default:
-            print("Uso: regressionctl [status | share-library --shutdown [--restart] | launch APP_ID [--backend crossOver|regression] | switch crossOver|regression | runs | profiles | engines | certifications | database | catalog | catalog-sync APP_ID [--force] | comparisons | verify RUN_ID perfect|playable|failed [--note TEXTO] | observe APP_ID perfect|playable|failed --backend MOTOR --name NOMBRE [--note TEXTO] | observations | export RUTA]")
+            print("Uso: regressionctl [status | share-library --shutdown [--restart] | launch APP_ID [--backend crossOver|regression] | switch crossOver|regression | runs | profiles | engines | certifications | technologies | candidates | optimization | requirements | repair-receipts | database | catalog | catalog-sync APP_ID [--force] | comparisons | verify RUN_ID perfect|playable|failed [--note TEXTO] | observe APP_ID perfect|playable|failed --backend MOTOR --name NOMBRE [--note TEXTO] | observations | export RUTA]")
             exit(64)
         }
     }

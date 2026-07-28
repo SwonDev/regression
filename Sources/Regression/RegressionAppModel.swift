@@ -57,6 +57,8 @@ final class RegressionAppModel {
     var profiles: [CompatibilityProfile] = []
     var engineProfiles: [EngineProfile] = []
     var certifications: [VerifiedGameCertification] = VerifiedGameCatalog.all
+    var runtimeTechnologies: [RuntimeTechnology] = RuntimeTechnologyCatalog.all
+    var activeRuntimeCandidateCount = 0
     var externalCatalogEntries: [String: ExternalCompatibilityEntry] = [:]
     var compatibilityComparisons: [CompatibilityComparison] = []
     var databaseHealth: CompatibilityDatabaseHealth?
@@ -532,9 +534,13 @@ final class RegressionAppModel {
     func verifyRun(_ run: RunSummary, verdict: VerificationVerdict) async {
         var notes = ""
         if verdict == .perfect {
+            guard run.processID != nil, run.result != .preparing else {
+                statusDetail = "Esta ejecución no llegó a iniciarse y no puede crear un blindado."
+                return
+            }
             let alert = NSAlert()
             alert.messageText = "¿Confirmar que \(run.gameName) funciona perfectamente?"
-            alert.informativeText = "Guarda esta certificación solo después de comprobar visualmente el render, la precisión de entrada, las opciones gráficas y el gameplay con \(run.backend.displayName)."
+            alert.informativeText = "Esto crea un blindado persistente para esta ejecución exacta de \(run.backend.displayName). Confirma solo después de comprobar visualmente render, precisión de entrada, opciones gráficas y gameplay. El blindado garantiza funcionamiento reproducible, no que sea todavía la opción de mayor rendimiento."
             alert.alertStyle = .informational
             alert.addButton(withTitle: "Guardar como perfecto")
             alert.addButton(withTitle: "Cancelar")
@@ -590,7 +596,9 @@ final class RegressionAppModel {
         do {
             try await repository.verifyRun(verification)
             await refreshStoredData(includeHealth: true)
-            statusDetail = "La verificación de \(run.gameName) quedó guardada localmente."
+            statusDetail = verdict == .perfect
+                ? "\(run.gameName) quedó blindado de forma persistente con \(run.backend.displayName)."
+                : "La verificación de \(run.gameName) quedó guardada localmente."
         } catch {
             present(error)
         }
@@ -835,6 +843,10 @@ final class RegressionAppModel {
             let refreshedProfiles = try await repository.compatibilityProfiles()
             let refreshedEngines = try await repository.engineProfiles()
             let refreshedCertifications = try await repository.certifications()
+            let refreshedTechnologies = try await repository.runtimeTechnologies()
+            let refreshedActiveCandidateCount = try await repository.runtimeCandidateCount(
+                activeOnly: true
+            )
             let refreshedExternalEntries = try await repository.externalEntries(
                 sourceID: CodeWeaversCompatibilityProvider.codeWeaversSource.id
             )
@@ -844,6 +856,8 @@ final class RegressionAppModel {
             profiles = refreshedProfiles
             engineProfiles = refreshedEngines
             certifications = refreshedCertifications
+            runtimeTechnologies = refreshedTechnologies
+            activeRuntimeCandidateCount = refreshedActiveCandidateCount
             profilesByAppID = Dictionary(grouping: refreshedProfiles, by: \.appID)
             certificationsByAppID = Dictionary(grouping: refreshedCertifications, by: \.appID)
             externalCatalogEntries = Dictionary(

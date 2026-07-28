@@ -81,7 +81,10 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
    (iconos Steam fantasma en la barra de menús), diálogo modal de Steam Cloud bloqueando el
    IPC (los juegos mueren al instante sin log: desactivar cloud del appid en
    `localconfig.vdf`), juego que necesita Steam activo por DRM.
-10. **Tras `make install` o tocar el bundle: `codesign --force --deep --sign - Regression.app`**.
+10. **Tras `make install` o tocar el bundle: `Scripts/sign_regression.sh Regression.app`**.
+    La firma Apple Development estable conserva el `designated requirement` y, con él, las
+    decisiones de privacidad entre builds. No volver a firma ad hoc salvo fallback explícito en
+    una máquina sin certificado: obliga a macOS a tratar cada compilación como una app distinta.
 11. **PE sin strip** (el strip rompe unwind SEH y la firma de módulos builtin).
 12. **No cambiar el modelo de IA ni el stack decidido** sin permiso explícito del usuario.
 13. Responde siempre en **español**, con tildes. Código y comentarios del repo en el idioma del
@@ -107,6 +110,17 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
     catálogo, serializar reconciliación/cierre SQLite y responder entonces a AppKit. Esperar el
     `.value` de una tarea URLSession cancelada dejó una instancia `LSUIElement` imposible de
     relanzar; el cierre limpio instalado debe probarse después de tocar este flujo.
+18. **Perfecto funcional no significa rendimiento óptimo.** Un blindado conserva su ejecución,
+    configuración y motor exactos aunque exista una versión más nueva. Las alternativas modernas
+    entran como candidatos por juego: fuente y huella verificadas, aislamiento, rollback, matriz
+    funcional completa y métricas comparables. Nunca promover por número de versión ni ejecutar
+    comandos almacenados/aprendidos desde SQLite. Las futuras reparaciones solo pueden usar
+    recetas compiladas, permitidas y versionadas.
+19. **El popover no usa layouts perezosos anidados.** Las listas actuales son pequeñas y deben
+    usar pilas deterministas dentro del único `ScrollView`. `LazyVStack` + `DisclosureGroup`
+    provocó un ciclo de AttributeGraph, cursor multicolor y 99,7 % de CPU. Tras tocar la UI,
+    desplegar/plegar Aprendizaje repetidamente, confirmar que accesibilidad responde y medir que
+    Regression vuelve a reposo antes de empaquetar.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 
@@ -189,7 +203,10 @@ pruebas; sustituir un PIN global requiere validar toda la matriz correspondiente
 - La **app canónica vive en el proyecto** (`Regression.app/`) porque el `--prefix` del wine va
   horneado a esa ruta absoluta. `/Applications/Regression.app` es un **symlink** a ella.
 - **No copies la app a otro sitio ni la muevas** sin recompilar wine con el nuevo `--prefix`.
-- Tras cualquier `make install` o cambio en el bundle: `codesign --force --deep --sign - Regression.app`.
+- Tras cualquier `make install` o cambio en el bundle:
+  `Scripts/sign_regression.sh Regression.app`. El script selecciona una identidad de desarrollo
+  válida sin guardar su nombre en el repo, aplica las capacidades públicas requeridas por el host
+  de juegos y verifica que el requisito designado no dependa del hash del build.
 - Tras recompilar/instalar: relanzar y validar la tienda con captura (regla 2).
 
 ### 6. Definición de "hecho"
@@ -205,7 +222,7 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   como backend predeterminado, motor propio seleccionable, conmutación con cierre limpio y una
   sola biblioteca física de juegos. El lanzador propio original está intacto en
   `Regression.app/Contents/MacOS/regression-engine`.
-- **Aprendizaje local**: SQLite v6 normalizada en
+- **Aprendizaje local**: SQLite v9 normalizada en
   `~/Library/Application Support/Regression/Compatibility/compatibility.sqlite`; registra
   sistema, comandos saneados, componentes, backend gráfico, configuración de juego y deltas.
   La identidad de motor excluye `gameconfig.*`, de modo que una resolución distinta no crea un
@@ -217,6 +234,13 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   perfecto o con incidencias. Nada se aplica automáticamente al motor propio. Base, exportaciones,
   recibos y logs son privados del usuario (`0700`/`0600`); se retienen como máximo 20 logs del
   lanzador.
+- **Evolución tecnológica**: el inventario local registra baseline, última versión oficial
+  revisada, licencia/distribución y política de Wine, GPTK/D3DMetal, DXMT, DXVK, MoltenVK,
+  vkd3d, Rosetta y CrossOver. Las tablas de candidatos, métricas, requisitos y recibos no aplican
+  cambios. Un trigger bloquea promociones sin perfil por juego, fuente/huella, aislamiento,
+  rollback, matriz y comparación equivalente contra el baseline con mejora medible. Apple limita
+  Rosetta general después de macOS 27, por
+  lo que arm64/WoW64 es una línea prioritaria paralela, nunca una sustitución a ciegas.
 - **Referencia pública**: CodeWeavers Compatibility Database se consulta opcionalmente con sesión
   efímera, coincidencia exacta, caché, ETag y cadencia persistente. Solo se almacenan metadatos
   públicos normalizados y su comparación nunca modifica el veredicto local.

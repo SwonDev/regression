@@ -7,8 +7,8 @@ MACOS_DIR="$APP/Contents/MacOS"
 PLIST="$APP/Contents/Info.plist"
 RESOURCES_DIR="$APP/Contents/Resources"
 STATE_ICON_DIR="$ROOT/assets/menubar/states"
-VERSION="1.4.0"
-BUILD_NUMBER="16"
+VERSION="1.5.0"
+BUILD_NUMBER="21"
 BACKUP_ROOT="$ROOT/backups/native-packaging"
 COMPATIBILITY_ROOT="$HOME/Library/Application Support/Regression/Compatibility"
 COMPATIBILITY_DB="$COMPATIBILITY_ROOT/compatibility.sqlite"
@@ -202,10 +202,30 @@ set_plist_value CFBundleVersion string "$BUILD_NUMBER"
 set_plist_value LSMinimumSystemVersion string 14.0
 set_plist_value LSUIElement bool true
 set_plist_value NSHighResolutionCapable bool true
+set_plist_value NSAppleEventsUsageDescription string "Regression usa automatización únicamente para iniciar, mostrar y cerrar Steam o CrossOver cuando tú lo solicitas."
+set_plist_value NSMicrophoneUsageDescription string "Regression permite que los juegos de Windows usen el micrófono cuando activas funciones de voz o chat."
+set_plist_value NSCameraUsageDescription string "Regression permite que los juegos de Windows usen la cámara cuando activas una función que la necesita."
+set_plist_value NSDesktopFolderUsageDescription string "Regression permite que los juegos accedan al Escritorio para abrir o guardar archivos que tú elijas."
+set_plist_value NSDocumentsFolderUsageDescription string "Regression permite que los juegos accedan a Documentos para partidas guardadas, mods y archivos que tú elijas."
+set_plist_value NSDownloadsFolderUsageDescription string "Regression permite que los juegos accedan a Descargas para instaladores, mods y archivos que tú elijas."
 mv "$TEMP_PLIST" "$PLIST"
 
-codesign --force --deep --sign - "$APP"
-codesign --verify --deep --strict "$APP"
+for key in \
+    NSAppleEventsUsageDescription \
+    NSMicrophoneUsageDescription \
+    NSCameraUsageDescription \
+    NSDesktopFolderUsageDescription \
+    NSDocumentsFolderUsageDescription \
+    NSDownloadsFolderUsageDescription
+do
+    value="$(plutil -extract "$key" raw "$PLIST")"
+    [[ -n "$value" ]] || {
+        echo "ERROR: falta la explicación de privacidad $key" >&2
+        exit 1
+    }
+done
+
+"$ROOT/Scripts/sign_regression.sh" "$APP"
 verify_protected_state
 
 find "$ROLLBACK_DIR" -depth -delete

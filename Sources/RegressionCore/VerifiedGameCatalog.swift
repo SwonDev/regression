@@ -5,7 +5,8 @@ public enum CertificationOrigin: String, Codable, Sendable {
     case localVerification
 }
 
-public struct VerifiedGameCertification: Codable, Equatable, Sendable {
+public struct VerifiedGameCertification: Codable, Equatable, Identifiable, Sendable {
+    public var id: String { "\(appID)-\(backend.rawValue)" }
     public let appID: String
     public let gameName: String
     public let backend: BackendKind

@@ -17,6 +17,51 @@ final class RegressionCoreTests: XCTestCase {
         XCTAssertNil(VerifiedGameCatalog.certification(for: "999999999"))
     }
 
+    func testNewerGlobalRuntimeNeverBecomesEligibleByVersionAlone() {
+        let candidate = RuntimeCandidate(
+            technologyID: "dxvk",
+            appID: nil,
+            targetVersion: "3.0.2",
+            scope: .globalResearch,
+            objective: "Actualizar todo el stack",
+            state: .validated,
+            sourceURL: URL(string: "https://github.com/doitsujin/dxvk/releases/tag/v3.0.2")!,
+            sourceFingerprint: "sha256:test-source",
+            sourceVerified: true,
+            isIsolated: true,
+            rollbackReference: "backups/global",
+            baselineEngineFingerprint: "baseline",
+            candidateEngineFingerprint: "candidate",
+            validationMatrixPassed: true
+        )
+        let assessment = OptimizationAssessment(
+            appID: "219990",
+            backend: .regression,
+            engineFingerprint: "candidate",
+            candidateID: candidate.id,
+            state: .bestKnown,
+            averageFPS: 120
+        )
+
+        let decision = RuntimeSelectionPolicy.promotionDecision(
+            for: candidate,
+            assessments: [assessment],
+            technology: RuntimeTechnologyCatalog.all.first { $0.id == candidate.technologyID }
+        )
+        XCTAssertFalse(decision.isEligible)
+        XCTAssertTrue(decision.blockers.contains { $0.contains("juego concreto") })
+
+        let unknownTechnologyDecision = RuntimeSelectionPolicy.promotionDecision(
+            for: candidate,
+            assessments: [assessment],
+            technology: nil
+        )
+        XCTAssertFalse(unknownTechnologyDecision.isEligible)
+        XCTAssertTrue(
+            unknownTechnologyDecision.blockers.contains { $0.contains("catálogo confiable") }
+        )
+    }
+
     func testLiveDiscoveryWhenRequested() async throws {
         guard ProcessInfo.processInfo.environment["REGRESSION_LIVE_DISCOVERY"] == "1" else {
             throw XCTSkip("Diagnóstico local desactivado")

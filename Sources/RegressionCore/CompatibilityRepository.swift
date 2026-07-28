@@ -20,14 +20,14 @@ private struct CertificationEvidenceRecord {
 }
 
 public actor CompatibilityRepository {
-    public static let currentSchemaVersion = 6
+    public static let currentSchemaVersion = 9
 
     private let databaseURL: URL
     private var database: OpaquePointer?
     private var migrationBackupURL: URL?
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
-    private let dateFormatter: ISO8601DateFormatter
+    let dateFormatter: ISO8601DateFormatter
 
     public init(databaseURL: URL) {
         self.databaseURL = databaseURL
@@ -84,6 +84,7 @@ public actor CompatibilityRepository {
             }
             try migrateSchema(from: startingVersion)
             try synchronizeEmbeddedCertifications()
+            try synchronizeRuntimeTechnologyCatalog()
             try validateDatabase()
             try secureDatabaseFiles()
         } catch {
@@ -428,7 +429,7 @@ public actor CompatibilityRepository {
         try ensurePrepared()
         let sql = """
             SELECT r.id, r.app_id, g.name, r.backend, r.started_at, r.ended_at,
-                   r.result, r.exit_code, r.launch_ms, r.configuration_fingerprint,
+                   r.result, r.exit_code, r.process_id, r.launch_ms, r.configuration_fingerprint,
                    v.verdict, v.rendering, v.input_precision, v.graphics_settings,
                    v.gameplay, v.source, v.notes, v.verified_at
             FROM runs r
@@ -453,9 +454,10 @@ public actor CompatibilityRepository {
                 endedAt: endedText.flatMap(dateFormatter.date(from:)),
                 result: result,
                 exitCode: Self.optionalInt32(statement, 7),
-                launchDurationMilliseconds: Self.optionalInt(statement, 8),
-                configurationFingerprint: Self.text(statement, 9),
-                verification: verification(statement, startingAt: 10, runID: id)
+                processID: Self.optionalInt32(statement, 8),
+                launchDurationMilliseconds: Self.optionalInt(statement, 9),
+                configurationFingerprint: Self.text(statement, 10),
+                verification: verification(statement, startingAt: 11, runID: id)
             )
         }
     }
@@ -1043,7 +1045,12 @@ public actor CompatibilityRepository {
                 "SELECT COUNT(*) FROM verified_game_certifications WHERE is_active=1;"
             ),
             externalRecordCount: try scalarInt("SELECT COUNT(*) FROM external_game_records;"),
-            engineSnapshotCount: try scalarInt("SELECT COUNT(*) FROM engine_snapshots;")
+            engineSnapshotCount: try scalarInt("SELECT COUNT(*) FROM engine_snapshots;"),
+            runtimeTechnologyCount: try scalarInt("SELECT COUNT(*) FROM runtime_technologies;"),
+            runtimeCandidateCount: try scalarInt("SELECT COUNT(*) FROM runtime_candidates;"),
+            optimizationAssessmentCount: try scalarInt("SELECT COUNT(*) FROM optimization_assessments;"),
+            runtimeRequirementCount: try scalarInt("SELECT COUNT(*) FROM game_runtime_requirements;"),
+            repairReceiptCount: try scalarInt("SELECT COUNT(*) FROM repair_receipts;")
         )
     }
 
@@ -1058,6 +1065,11 @@ public actor CompatibilityRepository {
             certifications: try certifications(activeOnly: false),
             externalCatalog: try externalEntries(),
             comparisons: try compatibilityComparisons(),
+            runtimeTechnologies: try runtimeTechnologies(),
+            runtimeCandidates: try runtimeCandidates(),
+            optimizationAssessments: try optimizationAssessments(),
+            runtimeRequirements: try runtimeRequirements(),
+            repairReceipts: try repairReceipts(),
             databaseHealth: try databaseHealth()
         )
         let exportEncoder = JSONEncoder()
@@ -1139,6 +1151,22 @@ public actor CompatibilityRepository {
                 try executeScript(Self.certificationProvenanceIndexes)
                 try recordMigration(version: 6, name: "procedencia exacta de blindados")
                 try execute("PRAGMA user_version=6;")
+            }
+            if startingVersion < 7 {
+                try executeScript(RuntimeEvolutionSchema.sql)
+                try recordMigration(version: 7, name: "evolución segura de runtimes y rendimiento")
+                try execute("PRAGMA user_version=7;")
+            }
+            if startingVersion < 8 {
+                try executeScript(RuntimeEvolutionSchema.promotionGuardsSQL)
+                try recordMigration(version: 8, name: "comparación obligatoria de rendimiento")
+                try execute("PRAGMA user_version=8;")
+            }
+            if startingVersion < 9 {
+                try executeScript(RuntimeEvolutionSchema.metricIntegritySQL)
+                try executeScript(RuntimeEvolutionSchema.promotionGuardsSQL)
+                try recordMigration(version: 9, name: "integridad y cobertura de métricas")
+                try execute("PRAGMA user_version=9;")
             }
         }
     }
@@ -1663,6 +1691,7 @@ public actor CompatibilityRepository {
                 "Hay evidencias sin una identidad de motor normalizada"
             )
         }
+        try validateRuntimeEvolutionData()
     }
 
     private func schemaVersion() throws -> Int {
@@ -1720,7 +1749,7 @@ public actor CompatibilityRepository {
         return destinationURL
     }
 
-    private func scalarInt(_ sql: String, bindings: [Any] = []) throws -> Int {
+    func scalarInt(_ sql: String, bindings: [Any] = []) throws -> Int {
         let values: [Int] = try query(sql, bindings: bindings) { statement in
             Int(sqlite3_column_int64(statement, 0))
         }
@@ -1748,11 +1777,11 @@ public actor CompatibilityRepository {
         )
     }
 
-    private func ensurePrepared() throws {
+    func ensurePrepared() throws {
         if database == nil { try prepare() }
     }
 
-    private func transaction(_ body: () throws -> Void) throws {
+    func transaction(_ body: () throws -> Void) throws {
         try execute("BEGIN IMMEDIATE;")
         do {
             try body()
@@ -1763,7 +1792,7 @@ public actor CompatibilityRepository {
         }
     }
 
-    private func execute(_ sql: String, bindings: [Any] = []) throws {
+    func execute(_ sql: String, bindings: [Any] = []) throws {
         guard let database else { throw RegressionCoreError.database("Base no inicializada") }
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
@@ -1779,7 +1808,7 @@ public actor CompatibilityRepository {
         }
     }
 
-    private func executeScript(_ sql: String) throws {
+    func executeScript(_ sql: String) throws {
         guard let database else { throw RegressionCoreError.database("Base no inicializada") }
         var errorMessage: UnsafeMutablePointer<CChar>?
         let result = sqlite3_exec(database, sql, nil, nil, &errorMessage)
@@ -1790,7 +1819,7 @@ public actor CompatibilityRepository {
         }
     }
 
-    private func query<T>(
+    func query<T>(
         _ sql: String,
         bindings: [Any] = [],
         transform: (OpaquePointer) throws -> T?
@@ -1875,17 +1904,17 @@ public actor CompatibilityRepository {
         return .database(message)
     }
 
-    private static func text(_ statement: OpaquePointer, _ column: Int32) -> String {
+    static func text(_ statement: OpaquePointer, _ column: Int32) -> String {
         guard let value = sqlite3_column_text(statement, column) else { return "" }
         return String(cString: value)
     }
 
-    private static func optionalText(_ statement: OpaquePointer, _ column: Int32) -> String? {
+    static func optionalText(_ statement: OpaquePointer, _ column: Int32) -> String? {
         guard sqlite3_column_type(statement, column) != SQLITE_NULL else { return nil }
         return text(statement, column)
     }
 
-    private static func optionalInt(_ statement: OpaquePointer, _ column: Int32) -> Int? {
+    static func optionalInt(_ statement: OpaquePointer, _ column: Int32) -> Int? {
         guard sqlite3_column_type(statement, column) != SQLITE_NULL else { return nil }
         return Int(sqlite3_column_int64(statement, column))
     }
@@ -1895,7 +1924,7 @@ public actor CompatibilityRepository {
         return sqlite3_column_int(statement, column)
     }
 
-    private static func optionalDouble(_ statement: OpaquePointer, _ column: Int32) -> Double? {
+    static func optionalDouble(_ statement: OpaquePointer, _ column: Int32) -> Double? {
         guard sqlite3_column_type(statement, column) != SQLITE_NULL else { return nil }
         return sqlite3_column_double(statement, column)
     }
@@ -2209,5 +2238,10 @@ public struct CompatibilityExport: Codable, Sendable {
     public let certifications: [VerifiedGameCertification]
     public let externalCatalog: [ExternalCompatibilityEntry]
     public let comparisons: [CompatibilityComparison]
+    public let runtimeTechnologies: [RuntimeTechnology]
+    public let runtimeCandidates: [RuntimeCandidate]
+    public let optimizationAssessments: [OptimizationAssessment]
+    public let runtimeRequirements: [GameRuntimeRequirement]
+    public let repairReceipts: [RepairReceipt]
     public let databaseHealth: CompatibilityDatabaseHealth
 }

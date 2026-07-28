@@ -435,6 +435,7 @@ public struct RunSummary: Codable, Equatable, Identifiable, Sendable {
     public let endedAt: Date?
     public let result: RunResult
     public let exitCode: Int32?
+    public let processID: Int32?
     public let launchDurationMilliseconds: Int?
     public let configurationFingerprint: String
     public let verification: RunVerification?
@@ -448,6 +449,7 @@ public struct RunSummary: Codable, Equatable, Identifiable, Sendable {
         endedAt: Date?,
         result: RunResult,
         exitCode: Int32?,
+        processID: Int32? = nil,
         launchDurationMilliseconds: Int?,
         configurationFingerprint: String,
         verification: RunVerification? = nil
@@ -460,6 +462,7 @@ public struct RunSummary: Codable, Equatable, Identifiable, Sendable {
         self.endedAt = endedAt
         self.result = result
         self.exitCode = exitCode
+        self.processID = processID
         self.launchDurationMilliseconds = launchDurationMilliseconds
         self.configurationFingerprint = configurationFingerprint
         self.verification = verification
@@ -545,6 +548,11 @@ public struct CompatibilityDatabaseHealth: Codable, Equatable, Sendable {
     public let certificationCount: Int
     public let externalRecordCount: Int
     public let engineSnapshotCount: Int
+    public let runtimeTechnologyCount: Int
+    public let runtimeCandidateCount: Int
+    public let optimizationAssessmentCount: Int
+    public let runtimeRequirementCount: Int
+    public let repairReceiptCount: Int
 
     public var isHealthy: Bool {
         integrity == "ok" && foreignKeyViolations == 0

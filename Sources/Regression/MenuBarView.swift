@@ -11,7 +11,7 @@ struct MenuBarView: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 14) {
                 header
                 statusCard
                 primaryActions
@@ -210,7 +210,7 @@ struct MenuBarView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.top, 10)
                     } else {
-                        LazyVStack(spacing: 0) {
+                        VStack(spacing: 0) {
                             ForEach(model.games) { game in
                                 gameRow(game)
                                 if game.id != model.games.last?.id { Divider() }
@@ -301,6 +301,27 @@ struct MenuBarView: View {
                     Divider()
 
                     HStack(spacing: 8) {
+                        Label("Blindados activos", systemImage: "checkmark.shield.fill")
+                            .font(.callout.weight(.medium))
+                            .foregroundStyle(.green)
+                        Spacer()
+                        Text(model.certifications.count, format: .number)
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Text("Los blindados manuales conservan el motor y la configuración exactos que el usuario confirmó. Persisten tras reiniciar y también se incluyen en la exportación.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    ForEach(model.certifications) { certification in
+                        certificationRow(certification)
+                    }
+
+                    Divider()
+
+                    HStack(spacing: 8) {
                         Label("Referencia pública", systemImage: "globe.europe.africa")
                             .font(.callout.weight(.medium))
                         Spacer()
@@ -332,6 +353,48 @@ struct MenuBarView: View {
                             .disabled(!model.publicCatalogEnabled || model.publicCatalogOperation.isSyncing)
                         Button("Abrir CodeWeavers") { model.openPublicCatalog() }
                     }
+
+                    Divider()
+
+                    HStack(spacing: 8) {
+                        Label("Evolución tecnológica", systemImage: "gauge.with.dots.needle.67percent")
+                            .font(.callout.weight(.medium))
+                        Spacer()
+                        Text("\(researchTechnologies.count) tecnologías · \(model.activeRuntimeCandidateCount) experimentos")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Text("Un juego perfecto conserva su baseline. Las versiones nuevas se miden en perfiles aislados y solo pueden promocionarse con rollback, matriz completa y mejora demostrada.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    ForEach(researchTechnologies.prefix(5)) { technology in
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text(technology.displayName)
+                                .font(.caption)
+                                .lineLimit(1)
+                            Spacer()
+                            Text("\(technology.stableVersion ?? "sin baseline") → \(technology.latestKnownVersion ?? "por revisar")")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+
+                    Label(
+                        "Rosetta seguirá siendo válida hasta macOS 27; la ruta nativa sin Rosetta ya figura como prioridad de I+D.",
+                        systemImage: "apple.intelligence"
+                    )
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                    Text("Regression observa y recomienda: todavía no descarga, repara ni cambia motores automáticamente.")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
 
                     if let health = model.databaseHealth {
                         Divider()
@@ -386,6 +449,7 @@ struct MenuBarView: View {
                         Button("Confirmar funcionamiento perfecto") {
                             Task { await model.verifyRun(run, verdict: .perfect) }
                         }
+                        .disabled(run.processID == nil || run.result == .preparing)
                         Button("Funciona con incidencias…") {
                             Task { await model.verifyRun(run, verdict: .playableWithIssues) }
                         }
@@ -440,6 +504,29 @@ struct MenuBarView: View {
         }
     }
 
+    private func certificationRow(_ certification: VerifiedGameCertification) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "checkmark.seal.fill")
+                .foregroundStyle(.green)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(certification.gameName)
+                    .font(.callout)
+                    .lineLimit(1)
+                Text("\(certification.backend.displayName) · \(certificationSourceText(certification))")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                if let fingerprint = certification.engineFingerprint {
+                    Text("Motor \(fingerprint.prefix(10))…")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            Spacer(minLength: 4)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
     private var footer: some View {
         HStack {
             Text(versionText)
@@ -488,6 +575,20 @@ struct MenuBarView: View {
         model.games.filter {
             model.learnedSummary(for: $0)?.hasPrefix("Verificado perfecto") == true
         }.count
+    }
+
+    private var researchTechnologies: [RuntimeTechnology] {
+        model.runtimeTechnologies.filter(\.hasResearchCandidate)
+    }
+
+    private func certificationSourceText(_ certification: VerifiedGameCertification) -> String {
+        switch certification.origin {
+        case .localVerification: "verificación manual persistente"
+        case .embeddedCatalog:
+            certification.sourceRunID != nil || certification.sourceObservationID != nil
+                ? "catálogo protegido · evidencia local"
+                : "catálogo protegido"
+        }
     }
 
     private var libraryIsReady: Bool {

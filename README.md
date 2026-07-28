@@ -40,7 +40,7 @@ y por qué no se redistribuyen. Licencia: LGPL-2.1+ (`LICENSE`).
 5. La carpeta `steamapps` del motor propio enlaza a la biblioteca canónica de CrossOver. Los
    juegos se instalan una sola vez; credenciales, registro y datos externos a `steamapps` siguen
    separados de forma segura.
-6. SQLite v6 guarda ejecuciones, configuraciones, huellas de DLL/runtime, variables permitidas,
+6. SQLite v9 guarda ejecuciones, configuraciones, huellas de DLL/runtime, variables permitidas,
    resolución/configuración gráfica detectable, deltas y verificaciones. Además normaliza la
    identidad de cada motor para comparar resultados del mismo Wine/DXMT/DXVK/D3DMetal sin
    confundirlos con opciones propias del juego. Los perfiles se pueden consultar y exportar como
@@ -51,13 +51,22 @@ y por qué no se redistribuyen. Licencia: LGPL-2.1+ (`LICENSE`).
    entonces `Verificado perfecto: Regression` en verde; los intentos fallidos se conservan para
    investigación, pero no degradan el mejor perfil ya confirmado. La app exige una segunda
    confirmación explícita antes de guardar un veredicto perfecto para evitar certificaciones
-   accidentales.
+   accidentales. El blindado manual persiste tras reiniciar, conserva la ejecución, configuración
+   y motor exactos, y se incluye en la exportación histórica.
 8. La referencia pública opcional de CodeWeavers se consulta en segundo plano, con caché y
    cadencia persistente, y se mantiene separada de los veredictos locales: nunca certifica ni
    reconfigura Regression.
 9. La base, sus exportaciones, los recibos y los logs técnicos se guardan con permisos exclusivos
    del usuario (`0700` para directorios y `0600` para archivos). El lanzador conserva como máximo
    20 logs propios y no registra credenciales ni argumentos no permitidos.
+10. El inventario tecnológico distingue el baseline funcional de los candidatos de rendimiento.
+    Una versión nueva de Wine, GPTK/D3DMetal, DXMT, DXVK, MoltenVK o vkd3d nunca sustituye un PIN
+    por sí sola: primero debe aislarse por juego, disponer de rollback, superar la matriz completa
+    y demostrar su mejora. La app todavía observa y recomienda; no aplica cambios automáticamente.
+11. El popover usa una jerarquía de layout determinista dentro de un único `ScrollView`. Las
+    listas son deliberadamente no perezosas: con este volumen son más baratas y evitan ciclos de
+    geometría de SwiftUI al desplegar Aprendizaje. La prueba de empaquetado incluye estrés de los
+    grupos, accesibilidad, CPU en reposo y cierre/reapertura.
 
 Rutas principales:
 
@@ -74,10 +83,23 @@ Regression.app/Contents/SharedSupport/bin/regressionctl status
 Regression.app/Contents/SharedSupport/bin/regressionctl runs
 Regression.app/Contents/SharedSupport/bin/regressionctl profiles
 Regression.app/Contents/SharedSupport/bin/regressionctl engines
+Regression.app/Contents/SharedSupport/bin/regressionctl certifications
+Regression.app/Contents/SharedSupport/bin/regressionctl technologies
+Regression.app/Contents/SharedSupport/bin/regressionctl candidates
+Regression.app/Contents/SharedSupport/bin/regressionctl optimization
+Regression.app/Contents/SharedSupport/bin/regressionctl requirements
+Regression.app/Contents/SharedSupport/bin/regressionctl repair-receipts
 Regression.app/Contents/SharedSupport/bin/regressionctl catalog
 Regression.app/Contents/SharedSupport/bin/regressionctl comparisons
 Regression.app/Contents/SharedSupport/bin/regressionctl observations
 Regression.app/Contents/SharedSupport/bin/regressionctl export /tmp/regression-compatibilidad.json
+```
+
+Prueba de estabilidad del popover instalado (requiere que Regression esté abierta y permiso de
+Accesibilidad para la terminal que la ejecuta; no toca Steam ni juegos):
+
+```bash
+tools/diagnostics/stress-native-popover.sh
 ```
 
 Controles de calidad de la capa nativa (no lanzan juegos):
@@ -97,6 +119,15 @@ anterior. La auditoría de arquitectura, privacidad, accesibilidad y errores est
 [`docs/native-app-audit.md`](docs/native-app-audit.md). El contrato completo del esquema,
 certificaciones, motores y referencia pública vive en
 [`docs/compatibility-platform.md`](docs/compatibility-platform.md).
+La política de versiones modernas, rendimiento, autorreparación futura y transición fuera de
+Rosetta vive en [`docs/runtime-evolution.md`](docs/runtime-evolution.md).
+
+El empaquetado usa `Scripts/sign_regression.sh`: selecciona una identidad Apple Development local
+sin guardar datos del certificado en el repositorio, firma con runtime endurecido y capacidades
+públicas equivalentes al host de CrossOver, y comprueba que el requisito designado sea estable
+entre builds. Si no existe certificado, el fallback ad hoc se anuncia explícitamente porque
+macOS puede volver a solicitar permisos tras cada compilación. Las descripciones de micrófono,
+cámara y carpetas protegidas solo provocan solicitudes cuando un juego usa realmente el recurso.
 
 Cerrar una validación perfecta desde terminal —la app ofrece la misma acción en “Ejecuciones
 recientes”—:
@@ -122,7 +153,8 @@ backend y nota de evidencia. Nunca se infiere “perfecto” de un cierre normal
   opciones gráficas confirmados sin parpadeo; **Romestead** (Unity) in-game.
 - **D3D9**: DXVK 1.10.3.
 - **Packaging**: app autocontenida (~1,8 GB, PE sin strip — el strip rompía el unwind SEH),
-  firmada adhoc, icono propio. `regression-last-good-20260726.tar.gz` conserva la base general
+  firmada con identidad de desarrollo estable, runtime endurecido e icono propio.
+  `regression-last-good-20260726.tar.gz` conserva la base general
   restaurable y `grimdawn-d3dmetal-perfect-20260727-1802/` el perfil posterior verificado.
 
 ### Las dos claves de la paridad (aprendidas a las malas)
@@ -254,6 +286,7 @@ bash build/create-steam-bottle.sh    # prefijo + receta crosstie + corefonts
 # 6) App
 make -C build/wine64 install DESTDIR=stage + strip (ver sección 7) → montar SharedSupport
 bash build/install-game-profiles.sh    # fija Grim Dawn a D3DMetal, verifica hashes y firma
+Scripts/sign_regression.sh Regression.app  # refirma sin perder la identidad de permisos
 ```
 
 Gotchas de build (todos resueltos, no redescubrir):
@@ -303,6 +336,10 @@ Gotchas de build (todos resueltos, no redescubrir):
     dependencias abiertas. CrossOver es siempre la referencia de comportamiento. El candidato
     solo pasa a perfil verificado tras probar render, clicks, cambios gráficos persistentes y
     gameplay; no puede alterar perfiles blindados ni depender de CrossOver en runtime.
+    “Funciona perfecto” y “mejor opción conocida” son estados diferentes: el segundo exige además
+    mediciones comparables. Ningún dato aprendido puede transformarse en un comando arbitrario;
+    una futura reparación automática solo podrá invocar recetas compiladas, versionadas y con
+    rollback.
 12. **Grim Dawn = perfil D3DMetal completo, nunca mezcla gráfica.** `grim dawn.exe` antepone
     exclusivamente `lib/profiles/grim-dawn` (enlace interno a `lib/apple_gptk/wine`), declara
     `CX_ACTIVE_GRAPHICS_BACKEND=d3dmetal` dentro de ese proceso y fuerza a builtin
@@ -313,7 +350,10 @@ Gotchas de build (todos resueltos, no redescubrir):
 
 ## 7. Decisiones clave (por qué está así)
 
-- **Todo x86_64 bajo Rosetta** (no wow64 arm64): paridad exacta con el producto CX y menos riesgo.
+- **Baseline actual x86_64 bajo Rosetta** (no wow64 arm64): paridad exacta con el producto CX y
+  menos riesgo para los perfiles ya validados. No es el destino único: Apple limita Rosetta de
+  propósito general después de macOS 27 y la ruta arm64/WoW64 se desarrollará en paralelo, sin
+  sustituir el baseline hasta igualar matriz y rendimiento.
 - **DXMT upstream + parche cross-process propio** en vez de su fork (privado, no publicable).
 - **winemac parcheado** (consumer IOSurface) — es el ÚNICO parche al árbol de wine.
 - **D3DMetal = binarios de Apple del GPTK instalado** (licencia evaluación, uso local).
@@ -402,6 +442,11 @@ pasar con otro juego: mismo arreglo.
 4. Mantener el diagnóstico de MoltenVK/D3D12 como investigación del motor propio, sin invalidar el
    funcionamiento ya confirmado de FFT por otra ruta.
 5. **Wine Mono 10.4.1** para juegos .NET cuando un título real lo requiera.
+6. Construir y medir un runtime arm64/WoW64 aislado antes de macOS 28; conservar Rosetta como
+   baseline mientras sea la ruta verificada y como fallback heredado cuando el sistema lo permita.
+7. Convertir requisitos aprendidos en recomendaciones tipadas y, después, en recetas permitidas
+   con checksum, licencia, backup y rollback. La ejecución automática sigue desactivada hasta que
+   cada gate tenga pruebas y UX de consentimiento.
 
 ---
 

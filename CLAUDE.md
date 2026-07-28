@@ -15,7 +15,7 @@
 
 **Funciona (verificado con capturas):**
 - Integración oficial con la botella Steam de CrossOver, conmutación segura de backend, app
-  `LSUIElement` sin Dock, biblioteca compartida y base SQLite v6 de aprendizaje exportable. La
+  `LSUIElement` sin Dock, biblioteca compartida y base SQLite v9 de aprendizaje exportable. La
   base normaliza motores por Wine/componentes/registro, separa opciones del juego, vincula cada
   blindado con su evidencia/configuración/motor exactos y compara de
   forma no vinculante con metadatos públicos de CodeWeavers. Los
@@ -25,7 +25,8 @@
   parche propio de presentación cross-process IOSurface en DXMT + consumer en winemac.drv).
 - Palworld completo (personaje + mundo + HUD), Moonlighter 2 (Unity IL2CPP), Grim Dawn,
   Romestead. D3D9 vía DXVK 1.10.3.
-- App autocontenida y firmada (adhoc), instalada en `/Applications/Regression.app`
+- App autocontenida y firmada con identidad de desarrollo estable, instalada en
+  `/Applications/Regression.app`
   (symlink a la del proyecto — el `--prefix` del wine va horneado a la ruta del proyecto;
   NO mover la app sin recompilar wine).
 - Repo privado en GitHub: `SwonDev/regression` (docs + scripts + parches propios; sin
@@ -98,7 +99,8 @@
    (iconos Steam fantasma en la barra de menús de macOS), diálogo modal de Steam Cloud
    bloqueando el IPC (los juegos mueren al instante sin log → desactivar cloud del appid
    en `userdata/<id>/config/localconfig.vdf`), juego que necesita Steam activo por DRM.
-11. **Tras `make install` o tocar el bundle: `codesign --force --deep --sign - Regression.app`**.
+11. **Tras `make install` o tocar el bundle: `Scripts/sign_regression.sh Regression.app`**. La
+    firma estable conserva los permisos; la firma ad hoc es solo un fallback explícito.
 12. **PE sin strip** (el strip rompe unwind SEH y la firma de módulos builtin).
 13. **No cambiar el modelo de IA ni el stack decidido** sin permiso explícito del usuario.
 14. Responde siempre en **español**, con tildes. Código y comentarios del repo en el idioma
@@ -110,6 +112,9 @@
 16. **La terminación nativa no espera indefinidamente a la red.** Cancelar las tareas, serializar
     reconciliación y cierre SQLite, y responder entonces a AppKit. Validar el cierre instalado
     después de tocar este flujo.
+17. **No anidar layouts perezosos en el popover.** Las filas actuales usan `VStack` dentro del
+    único `ScrollView`; `LazyVStack` con grupos desplegables produjo un ciclo de AttributeGraph.
+    Tras cambios de UI, estresar Aprendizaje y comprobar respuesta, cierre y CPU en reposo.
 
 ---
 
@@ -142,7 +147,7 @@ bash build/build-wine.sh    # wine CX 26.3.0 + parche winemac → instala en Reg
 bash build/install-game-profiles.sh  # verifica/fija Grim Dawn y firma el bundle
 bash build/verify-protected-state.sh --include-bottle  # comprueba todos los PIN sin lanzar juegos
 # DXMT: meson compile -C build/toolchain/dxmt72  (fuente: build/toolchain/dxmt-src, v0.72 + parches)
-codesign --force --deep --sign - Regression.app   # SIEMPRE tras instalar
+Scripts/sign_regression.sh Regression.app  # SIEMPRE tras instalar
 open -a Regression            # validación visual obligatoria
 ```
 

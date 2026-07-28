@@ -107,6 +107,12 @@ Un candidato verificado se integra con este orden de preferencia:
 No se acepta como perfil individual una mutación global de `system32`, `WINEDLLPATH`, registro o
 RetinaMode. Si el cambio debe ser global, se aplica la matriz completa de `AGENTS.md`.
 
+“Funciona perfecto” y “mejor opción conocida” son afirmaciones independientes. Una versión más
+reciente de Wine, GPTK/D3DMetal, DXMT, DXVK, MoltenVK o vkd3d solo puede promocionarse si el
+candidato es por juego, tiene fuente/huella verificadas, está aislado, dispone de rollback,
+supera toda la matriz y aporta una medición comparable. El contrato técnico está en
+[`runtime-evolution.md`](runtime-evolution.md).
+
 ## Fase 6: evidencia y aprendizaje
 
 Cada perfil perfecto debe conservar:
@@ -124,9 +130,9 @@ Cada perfil perfecto debe conservar:
 - registro `perfect` en la base de compatibilidad y captura de la fila verde
   `Verificado perfecto: Regression` después de refrescar la app.
 
-La base SQLite de Regression registra ejecuciones y comparaciones, pero no debe aplicar por sí sola
-un perfil al motor propio. La promoción sigue siendo una decisión de ingeniería respaldada por
-evidencia visual.
+La base SQLite de Regression registra ejecuciones, comparaciones y métricas, pero no debe aplicar
+por sí sola un perfil al motor propio. La promoción sigue siendo una decisión de ingeniería
+respaldada por evidencia visual, rendimiento y rollback.
 
 ## Criterio de cierre
 

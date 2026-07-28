@@ -49,6 +49,5 @@ else
     ln -s "$GRIM_TARGET" "$GRIM_PROFILE"
 fi
 
-codesign --force --deep --sign - "$APP"
-codesign --verify --deep --strict "$APP"
+"$ROOT/Scripts/sign_regression.sh" "$APP"
 echo "Perfil Grim Dawn instalado, verificado y bundle firmado."

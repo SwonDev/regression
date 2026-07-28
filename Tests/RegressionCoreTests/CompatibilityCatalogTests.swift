@@ -61,6 +61,8 @@ final class CompatibilityCatalogTests: XCTestCase {
         XCTAssertTrue(health.isHealthy)
         XCTAssertEqual(health.certificationCount, VerifiedGameCatalog.all.count + 1)
         XCTAssertEqual(health.engineSnapshotCount, 1)
+        XCTAssertEqual(health.runtimeTechnologyCount, RuntimeTechnologyCatalog.all.count)
+        XCTAssertEqual(health.runtimeCandidateCount, 0)
         let migratedRuns = try await migrated.runDetails()
         XCTAssertEqual(migratedRuns.first?.verification?.gameplay, .passed)
 
@@ -124,6 +126,315 @@ final class CompatibilityCatalogTests: XCTestCase {
         XCTAssertFalse(inactive.isActive)
         XCTAssertNil(inactive.sourceRunID)
         XCTAssertNil(inactive.engineFingerprint)
+        try await repository.close()
+    }
+
+    func testManualPerfectCertificationSurvivesRestartAndJSONExport() async throws {
+        let directory = temporaryDirectory("manual-certification-restart")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("compatibility.sqlite")
+        let context = makeContext(appID: "92", name: "Persistent Perfect Game")
+
+        let firstRepository = CompatibilityRepository(databaseURL: databaseURL)
+        try await firstRepository.prepare()
+        try await firstRepository.beginRun(context)
+        try await firstRepository.markLaunched(
+            id: context.id,
+            processID: 920,
+            executable: "C:\\Games\\persistent.exe",
+            launchMilliseconds: 140
+        )
+        try await firstRepository.verifyRun(RunVerification(
+            runID: context.id,
+            verdict: .perfect,
+            rendering: .passed,
+            inputPrecision: .passed,
+            graphicsSettings: .passed,
+            gameplay: .passed,
+            source: .user,
+            notes: "Confirmación manual completa"
+        ))
+        try await firstRepository.close()
+
+        let reopenedRepository = CompatibilityRepository(databaseURL: databaseURL)
+        try await reopenedRepository.prepare()
+        let reopenedCertifications = try await reopenedRepository.certifications()
+        let certification = try XCTUnwrap(
+            reopenedCertifications.first { $0.appID == context.appID }
+        )
+        XCTAssertEqual(certification.origin, .localVerification)
+        XCTAssertEqual(certification.sourceRunID, context.id)
+        XCTAssertEqual(certification.configurationFingerprint, context.configurationFingerprint)
+        XCTAssertNotNil(certification.engineFingerprint)
+        XCTAssertTrue(certification.isActive)
+
+        let exportURL = directory.appendingPathComponent("compatibility-export.json")
+        try await reopenedRepository.exportJSON(to: exportURL)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let payload = try decoder.decode(
+            CompatibilityExport.self,
+            from: Data(contentsOf: exportURL)
+        )
+        let exportedCertification = try XCTUnwrap(
+            payload.certifications.first { $0.appID == context.appID && $0.isActive }
+        )
+        XCTAssertEqual(exportedCertification.sourceRunID, context.id)
+        XCTAssertEqual(exportedCertification.engineFingerprint, certification.engineFingerprint)
+        XCTAssertEqual(payload.databaseHealth.schemaVersion, CompatibilityRepository.currentSchemaVersion)
+        try await reopenedRepository.close()
+    }
+
+    func testRuntimeCandidateNeedsIsolationRollbackMatrixAndMeasuredImprovement() async throws {
+        let directory = temporaryDirectory("runtime-candidate-gates")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("compatibility.sqlite")
+        let repository = CompatibilityRepository(databaseURL: databaseURL)
+        try await repository.prepare()
+        let context = makeContext(appID: "93", name: "Optimization Game")
+        try await repository.beginRun(context)
+
+        let candidateID = UUID()
+        let unsafeCandidate = RuntimeCandidate(
+            id: candidateID,
+            technologyID: "dxmt",
+            appID: context.appID,
+            targetVersion: "0.80",
+            scope: .perGame,
+            objective: "Mejorar el frame pacing",
+            state: .validated,
+            sourceURL: URL(string: "https://github.com/3Shain/dxmt/releases/tag/v0.80")!
+        )
+        try await repository.registerRuntimeCandidate(unsafeCandidate)
+        let activeCandidatesBeforePromotion = try await repository.runtimeCandidateCount(
+            activeOnly: true
+        )
+        XCTAssertEqual(activeCandidatesBeforePromotion, 1)
+        let unsafeDecision = RuntimeSelectionPolicy.promotionDecision(
+            for: unsafeCandidate,
+            assessments: [],
+            technology: RuntimeTechnologyCatalog.all.first {
+                $0.id == unsafeCandidate.technologyID
+            }
+        )
+        XCTAssertFalse(unsafeDecision.isEligible)
+        XCTAssertGreaterThanOrEqual(unsafeDecision.blockers.count, 5)
+
+        XCTAssertThrowsError(try mutateSQLite(databaseURL) { database in
+            try executeSQLite(
+                database,
+                "UPDATE runtime_candidates SET state='promoted' WHERE id='\(candidateID.uuidString)';"
+            )
+        })
+
+        let protectedCandidate = RuntimeCandidate(
+            id: candidateID,
+            technologyID: "dxmt",
+            appID: context.appID,
+            targetVersion: "0.80",
+            scope: .perGame,
+            objective: "Mejorar el frame pacing",
+            state: .validated,
+            sourceURL: URL(string: "https://github.com/3Shain/dxmt/releases/tag/v0.80")!,
+            sourceFingerprint: "sha256:test-source",
+            sourceVerified: true,
+            isIsolated: true,
+            rollbackReference: "backups/runtime-candidate-93",
+            baselineEngineFingerprint: "engine-baseline",
+            candidateEngineFingerprint: "engine-candidate",
+            validationMatrixPassed: true
+        )
+        try await repository.registerRuntimeCandidate(protectedCandidate)
+        try await repository.recordOptimizationAssessment(OptimizationAssessment(
+            appID: context.appID,
+            backend: .regression,
+            engineFingerprint: "engine-baseline",
+            state: .baselineMeasured,
+            resolution: "3024x1964",
+            qualityPreset: "alto",
+            averageFPS: 55,
+            onePercentLowFPS: 48,
+            frameTimeP95Milliseconds: 20
+        ))
+        try await repository.recordOptimizationAssessment(OptimizationAssessment(
+            appID: context.appID,
+            backend: .regression,
+            engineFingerprint: "engine-candidate",
+            candidateID: candidateID,
+            state: .bestKnown,
+            resolution: "3024x1964",
+            qualityPreset: "alto",
+            averageFPS: 54,
+            onePercentLowFPS: 47,
+            frameTimeP95Milliseconds: 21
+        ))
+        do {
+            try await repository.promoteRuntimeCandidate(id: candidateID)
+            XCTFail("Un candidato medido pero peor que el baseline no debe promocionarse")
+        } catch let error as RegressionCoreError {
+            guard case .invalidEvidence = error else {
+                return XCTFail("Error inesperado: \(error)")
+            }
+        }
+        try await repository.recordOptimizationAssessment(OptimizationAssessment(
+            appID: context.appID,
+            backend: .regression,
+            engineFingerprint: "engine-candidate",
+            candidateID: candidateID,
+            state: .bestKnown,
+            resolution: "3024x1964",
+            qualityPreset: "alto",
+            averageFPS: 60,
+            onePercentLowFPS: 52,
+            frameTimeP95Milliseconds: 18
+        ))
+        try await repository.promoteRuntimeCandidate(id: candidateID)
+        let promotedCandidate = try await repository.runtimeCandidates()
+            .first { $0.id == candidateID }
+        XCTAssertEqual(
+            promotedCandidate?.state,
+            .promoted
+        )
+        let activeCandidatesAfterPromotion = try await repository.runtimeCandidateCount(
+            activeOnly: true
+        )
+        XCTAssertEqual(activeCandidatesAfterPromotion, 0)
+        try await repository.close()
+    }
+
+    func testRuntimePromotionRejectsUntrustedSourcesAndIncompleteMetricCoverage() {
+        let candidateID = UUID()
+        let candidate = RuntimeCandidate(
+            id: candidateID,
+            technologyID: "dxmt",
+            appID: "95",
+            targetVersion: "0.80",
+            scope: .perGame,
+            objective: "Comparar un runtime aislado",
+            state: .validated,
+            sourceURL: URL(string: "https://github.com/3Shain/dxmt/releases/tag/v0.80")!,
+            sourceFingerprint: "sha256:test-source",
+            sourceVerified: true,
+            isIsolated: true,
+            rollbackReference: "backups/runtime-candidate-95",
+            baselineEngineFingerprint: "engine-baseline",
+            candidateEngineFingerprint: "engine-candidate",
+            validationMatrixPassed: true
+        )
+        let assessments = [
+            OptimizationAssessment(
+                appID: "95",
+                backend: .regression,
+                engineFingerprint: "engine-baseline",
+                state: .baselineMeasured,
+                resolution: "1920x1080",
+                qualityPreset: "alto",
+                averageFPS: 60,
+                onePercentLowFPS: 50
+            ),
+            OptimizationAssessment(
+                appID: "95",
+                backend: .regression,
+                engineFingerprint: "engine-candidate",
+                candidateID: candidateID,
+                state: .bestKnown,
+                resolution: "1920x1080",
+                qualityPreset: "alto",
+                averageFPS: 70
+            )
+        ]
+        let technology = RuntimeTechnologyCatalog.all.first { $0.id == "dxmt" }
+        let incompleteDecision = RuntimeSelectionPolicy.promotionDecision(
+            for: candidate,
+            assessments: assessments,
+            technology: technology
+        )
+        XCTAssertFalse(incompleteDecision.isEligible)
+        XCTAssertTrue(incompleteDecision.blockers.contains { $0.contains("comparación equivalente") })
+
+        let untrustedCandidate = RuntimeCandidate(
+            id: candidateID,
+            technologyID: "dxmt",
+            appID: "95",
+            targetVersion: "0.80",
+            scope: .perGame,
+            objective: "Fuente no oficial",
+            state: .validated,
+            sourceURL: URL(string: "https://example.invalid/dxmt-v0.80.zip")!,
+            sourceFingerprint: "sha256:test-source",
+            sourceVerified: true,
+            isIsolated: true,
+            rollbackReference: "backups/runtime-candidate-95",
+            baselineEngineFingerprint: "engine-baseline",
+            candidateEngineFingerprint: "engine-candidate",
+            validationMatrixPassed: true
+        )
+        let untrustedDecision = RuntimeSelectionPolicy.promotionDecision(
+            for: untrustedCandidate,
+            assessments: assessments,
+            technology: technology
+        )
+        XCTAssertFalse(untrustedDecision.isEligible)
+        XCTAssertTrue(untrustedDecision.blockers.contains { $0.contains("sitio oficial") })
+    }
+
+    func testBestKnownOptimizationCannotBeStoredWithoutAMetric() async throws {
+        let directory = temporaryDirectory("optimization-requires-metric")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repository = CompatibilityRepository(
+            databaseURL: directory.appendingPathComponent("compatibility.sqlite")
+        )
+        try await repository.prepare()
+        let context = makeContext(appID: "94", name: "Unmeasured Game")
+        try await repository.beginRun(context)
+
+        do {
+            try await repository.recordOptimizationAssessment(OptimizationAssessment(
+                appID: context.appID,
+                backend: .regression,
+                engineFingerprint: "engine-unmeasured",
+                state: .bestKnown
+            ))
+            XCTFail("Una opción óptima sin métricas no debe persistir")
+        } catch let error as RegressionCoreError {
+            guard case .invalidEvidence = error else {
+                return XCTFail("Error inesperado: \(error)")
+            }
+        }
+        let storedAssessments = try await repository.optimizationAssessments()
+        XCTAssertTrue(storedAssessments.isEmpty)
+
+        do {
+            try await repository.recordOptimizationAssessment(OptimizationAssessment(
+                appID: context.appID,
+                backend: .regression,
+                engineFingerprint: "engine-invalid",
+                state: .candidateMeasured,
+                averageFPS: -.infinity
+            ))
+            XCTFail("Una métrica no finita no debe persistir")
+        } catch let error as RegressionCoreError {
+            guard case .invalidEvidence = error else {
+                return XCTFail("Error inesperado: \(error)")
+            }
+        }
+
+        XCTAssertThrowsError(try mutateSQLite(
+            directory.appendingPathComponent("compatibility.sqlite")
+        ) { database in
+            try executeSQLite(
+                database,
+                """
+                INSERT INTO optimization_assessments(
+                    id, app_id, backend, engine_fingerprint, state,
+                    average_fps, notes, measured_at
+                ) VALUES(
+                    '\(UUID().uuidString)', '94', 'regression', 'engine-direct',
+                    'bestKnown', 60, '', '2026-07-28T00:00:00.000Z'
+                );
+                """
+            )
+        })
         try await repository.close()
     }
 
