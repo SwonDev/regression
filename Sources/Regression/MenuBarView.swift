@@ -467,14 +467,20 @@ struct MenuBarView: View {
 
                     if let health = model.databaseHealth {
                         Divider()
-                        Label {
-                            Text(
-                                health.isHealthy
-                                    ? "Base íntegra · esquema v\(health.schemaVersion)"
-                                    : "La base local necesita revisión"
-                            )
-                        } icon: {
-                            Image(systemName: health.isHealthy ? "checkmark.shield" : "exclamationmark.triangle")
+                        HStack(spacing: 6) {
+                            Label {
+                                Text(
+                                    health.isHealthy
+                                        ? "Base íntegra · esquema v\(health.schemaVersion)"
+                                        : "La base local necesita revisión"
+                                )
+                            } icon: {
+                                Image(systemName: health.isHealthy ? "checkmark.shield" : "exclamationmark.triangle")
+                            }
+                            Spacer()
+                            Text("\(health.preflightReportCount) diagnósticos")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.tertiary)
                         }
                         .font(.caption)
                         .foregroundStyle(health.isHealthy ? Color.secondary : Color.red)
@@ -541,6 +547,58 @@ struct MenuBarView: View {
         RegressionCard {
             DisclosureGroup(isExpanded: $maintenanceIsExpanded) {
                 VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 8) {
+                        Label("Preparación para pruebas", systemImage: readinessSymbol)
+                            .font(.callout.weight(.medium))
+                            .foregroundStyle(readinessColor)
+                        Spacer()
+                        if model.readinessIsRefreshing {
+                            ProgressView()
+                                .controlSize(.small)
+                                .accessibilityLabel("Comprobando el entorno")
+                        }
+                    }
+
+                    if let readiness = model.testReadiness {
+                        Text(readinessSummary(readiness))
+                            .font(.caption)
+                            .foregroundStyle(readinessColor)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        let issues = readiness.checks.filter { $0.status != .ready }
+                        if !issues.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                ForEach(issues) { check in
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(check.title)
+                                            .font(.caption.weight(.medium))
+                                        Text(check.detail)
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                        if let action = check.recoveryAction {
+                                            Text(action)
+                                                .font(.caption2)
+                                                .foregroundStyle(.tertiary)
+                                                .fixedSize(horizontal: false, vertical: true)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        Text("Todavía no se ha comprobado el entorno de pruebas.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Button("Comprobar entorno") {
+                        Task { await model.refreshTestReadiness() }
+                    }
+                    .disabled(model.readinessIsRefreshing || model.operation.isBusy)
+
+                    Divider()
+
                     Toggle("Abrir Steam al iniciar Regression", isOn: Binding(
                         get: { model.autoLaunchEnabled },
                         set: { model.toggleAutoLaunch($0) }
@@ -605,6 +663,35 @@ struct MenuBarView: View {
             Button("Salir de Regression") { NSApplication.shared.terminate(nil) }
                 .buttonStyle(.borderless)
                 .keyboardShortcut("q")
+        }
+    }
+
+    private var readinessSymbol: String {
+        switch model.testReadiness?.status {
+        case .ready: "checkmark.shield.fill"
+        case .warning: "exclamationmark.triangle.fill"
+        case .blocked: "xmark.shield.fill"
+        case nil: "shield.lefthalf.filled"
+        }
+    }
+
+    private var readinessColor: Color {
+        switch model.testReadiness?.status {
+        case .ready: .green
+        case .warning: .orange
+        case .blocked: .red
+        case nil: .secondary
+        }
+    }
+
+    private func readinessSummary(_ report: GameTestPreflightReport) -> String {
+        switch report.status {
+        case .ready:
+            "Entorno limpio para probar con \(report.backend.displayName)."
+        case .warning:
+            "Puede probarse con \(report.warningCount) aviso(s) que quedarán registrados."
+        case .blocked:
+            "Hay \(report.blockerCount) condición(es) que podrían producir un falso fallo."
         }
     }
 

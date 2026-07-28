@@ -42,12 +42,22 @@ reproducir → capturar baseline → formular hipótesis ordenadas
            → volver a la causa mientras el criterio de cierre no esté completo
 ```
 
-Antes del primer cambio se abre un expediente local con `regressionctl research-open`. El
-expediente guarda el síntoma reproducible y el comportamiento observado en CrossOver. Cada causa
-posible se registra como hipótesis falsable, con una predicción que indique qué observación la
-apoyará y qué observación la descartará. “Probar otra DLL” no es una hipótesis; “la pareja
-`d3d11/dxgi` no pertenece al mismo backend y por eso el módulo efectivo difiere de CrossOver” sí
-lo es.
+Antes del primer baseline se ejecuta el preflight del juego y backend exactos, sin lanzar nada:
+
+```bash
+Regression.app/Contents/SharedSupport/bin/regressionctl preflight APP_ID --backend regression
+```
+
+Un resultado `blocked` detiene la prueba: primero se corrige el entorno y se repite la
+comprobación. Un resultado `warning` permite continuar, pero queda asociado automáticamente a la
+ejecución para que no se confunda con una diferencia del motor. El preflight solo observa: no
+termina procesos, no elimina marcadores ni modifica una botella.
+
+Después se abre un expediente local con `regressionctl research-open`. El expediente guarda el
+síntoma reproducible y el comportamiento observado en CrossOver. Cada causa posible se registra
+como hipótesis falsable, con una predicción que indique qué observación la apoyará y qué
+observación la descartará. “Probar otra DLL” no es una hipótesis; “la pareja `d3d11/dxgi` no
+pertenece al mismo backend y por eso el módulo efectivo difiere de CrossOver” sí lo es.
 
 Las hipótesis se ordenan por:
 
@@ -64,8 +74,8 @@ El número exacto depende del fallo, pero debe declararse antes de ver el result
 
 ## Expediente persistente y estados
 
-El esquema local v10 separa los candidatos tecnológicos de los experimentos que realmente se han
-ejecutado:
+El esquema local v11 separa los candidatos tecnológicos de los experimentos que realmente se han
+ejecutado y conserva el estado previo de cada prueba:
 
 - `compatibility_research_cases`: problema, expectativa CrossOver, estado y conclusión;
 - `research_hypotheses`: causas ordenadas, predicción, apoyo o falsación;
@@ -74,6 +84,7 @@ ejecutado:
 - `research_gate_results`: resultado de cada puerta funcional;
 - `research_artifacts`: referencias privadas y huellas de capturas, inventarios, builds, tests,
   firma y rollback.
+- `run_preflight_reports`: diagnóstico saneado, fingerprint SHA-256 y vínculo con el run exacto.
 
 Los estados de un expediente son `open`, `investigating`, `validationPending`, `verified` y
 `pausedExternalDependency`. No existen “abandonado” ni “cerrado sin resolver”. Un experimento

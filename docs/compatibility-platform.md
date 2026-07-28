@@ -1,6 +1,6 @@
 # Plataforma local de compatibilidad y aprendizaje
 
-Fecha de contrato: 28 de julio de 2026. Esquema SQLite actual: **v10**.
+Fecha de contrato: 28 de julio de 2026. Esquema SQLite actual: **v11**.
 
 Esta capa conserva evidencia reproducible de cada ejecución y permite comparar Regression con
 fuentes públicas. No altera el motor, la botella ni la configuración de un juego. La aplicación
@@ -40,6 +40,7 @@ integridad en cada apertura.
 | Rendimiento | `optimization_assessments` | Métricas separadas de la certificación funcional. |
 | Requisitos y reparación | `game_runtime_requirements`, `repair_receipts` | Requisitos declarativos y recibos de recetas permitidas; nunca comandos aprendidos. |
 | Expedientes de I+D | `compatibility_research_cases`, `research_hypotheses`, `research_experiments`, `research_gate_results`, `research_artifacts` | Hipótesis falsables, pruebas de una variable, puertas funcionales y referencias privadas con huella. |
+| Preparación de pruebas | `run_preflight_reports` | Diagnóstico saneado y firmado lógicamente del entorno exacto anterior a cada lanzamiento. |
 | Migraciones | `schema_migrations` + `PRAGMA user_version` | Evolución atómica y auditable. |
 
 Dos triggers de inserción/actualización protegen tanto ejecuciones como observaciones: SQLite
@@ -69,10 +70,18 @@ promocionarse sin rollback, matriz completa y rendimiento medido. El contrato de
 
 Un candidato tampoco equivale a un experimento: el primero describe una tecnología posible; el
 segundo demuestra qué hipótesis se probó, qué única dimensión cambió y qué run exacto produjo el
-resultado. El esquema v10 impide cerrar un expediente sin las ocho puertas funcionales, ocho
+resultado. El esquema actual impide cerrar un expediente sin las ocho puertas funcionales, ocho
 artefactos con huella, identidades distintas de baseline/candidato y una certificación perfecta
 activa del mismo run de Regression. Los expedientes fallidos se conservan y una corrección del
 veredicto reabre automáticamente el que se había cerrado.
+
+Antes de cada lanzamiento, el protocolo v1 de preparación comprueba de forma no destructiva la
+base, el backend, la instalación del juego, el aislamiento de Steam y Wine, servicios huérfanos,
+marcadores de presentación, almacenamiento, telemetría y biblioteca compartida. Un bloqueo
+inequívoco impide crear una prueba contaminada; un aviso se permite y se conserva. Cada informe
+se vincula por App ID y backend al `run` exacto, se codifica como JSON canónico, se acompaña de
+SHA-256 y se revalida al leer y exportar. Un preflight verde no certifica render, entrada,
+opciones ni gameplay.
 
 ## Identidad normalizada de motor
 
@@ -150,6 +159,10 @@ La v10 añade expedientes de I+D, hipótesis falsables, experimentos de una sola
 puertas y artefactos con huella. Sus triggers impiden cerrar un caso sin aislamiento, rollback,
 evidencia completa y el blindado perfecto del run exacto de Regression; una corrección posterior
 del veredicto reabre el expediente.
+La v11 añade `run_preflight_reports` y exige que la preparación persistida coincida con el App ID
+y backend de la ejecución. Conserva únicamente resultados saneados —sin PID, comandos crudos,
+rutas personales ni datos de cuenta— y verifica contadores, versión de protocolo y huella al
+reabrir. La migración no crea diagnósticos retroactivos ni altera ejecuciones históricas.
 
 Comprobaciones:
 
@@ -161,6 +174,8 @@ Regression.app/Contents/SharedSupport/bin/regressionctl candidates
 Regression.app/Contents/SharedSupport/bin/regressionctl optimization
 Regression.app/Contents/SharedSupport/bin/regressionctl research
 Regression.app/Contents/SharedSupport/bin/regressionctl research-protocol
+Regression.app/Contents/SharedSupport/bin/regressionctl preflight
+Regression.app/Contents/SharedSupport/bin/regressionctl preflight 219990 --backend regression
 Regression.app/Contents/SharedSupport/bin/regressionctl catalog
 Regression.app/Contents/SharedSupport/bin/regressionctl comparisons
 Regression.app/Contents/SharedSupport/bin/regressionctl export /tmp/regression.json
@@ -194,3 +209,5 @@ canónica. Este override existe para diagnóstico y CI, no para dividir el histo
 - Parser JSON-LD macOS/Linux y filtrado de enlaces.
 - Rechazo de una URL canónica que imita el dominio oficial.
 - Confirmación de que una valoración pública 5/5 deja el estado local como no verificado.
+- Rechazo de informes de preparación vinculados a otro juego o backend.
+- Verificación SHA-256 y exportación del diagnóstico previo sin convertirlo en certificación.

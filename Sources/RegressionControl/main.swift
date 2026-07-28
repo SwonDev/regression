@@ -121,7 +121,7 @@ enum RegressionControl {
                   let appID = SteamAppID.normalized(rawAppID) else {
                 throw RegressionCoreError.launchFailed("Falta un Steam App ID válido")
             }
-            let running = await coordinator.runningState()
+            var running = await coordinator.runningState()
             let requestedBackend: BackendKind?
             if let index = arguments.firstIndex(of: "--backend"), arguments.indices.contains(index + 1) {
                 requestedBackend = BackendKind(rawValue: arguments[index + 1])
@@ -133,11 +133,24 @@ enum RegressionControl {
             }
             let backend = requestedBackend ?? running.activeBackend ?? .crossOver
             if let active = running.activeBackend, active != backend {
-                _ = try await coordinator.switchBackend(
-                    from: active,
-                    to: backend,
+                try await coordinator.requestShutdown(
+                    backend: active,
                     installations: installations
                 )
+                running = await coordinator.runningState()
+            }
+            let report = try await preflightReport(
+                backend: backend,
+                appID: appID,
+                installations: installations,
+                runningState: running,
+                repository: repository,
+                runner: runner,
+                supportURL: support
+            )
+            printPreflight(report)
+            guard report.status != .blocked else {
+                throw RegressionCoreError.testEnvironmentBlocked(report.blockingSummary)
             }
             _ = try await coordinator.launchSteam(
                 backend: backend,
@@ -145,6 +158,46 @@ enum RegressionControl {
                 appID: appID
             )
             print("Solicitud enviada para App ID", appID, "con", backend.displayName)
+
+        case "preflight":
+            let rawAppID = arguments.dropFirst().first.flatMap { value in
+                value.hasPrefix("--") ? nil : value
+            }
+            let appID: String?
+            if let rawAppID {
+                guard let normalized = SteamAppID.normalized(rawAppID) else {
+                    throw RegressionCoreError.launchFailed("El Steam App ID no es válido")
+                }
+                appID = normalized
+            } else {
+                appID = nil
+            }
+            let running = await coordinator.runningState()
+            let backendName = option("--backend", in: arguments)
+            let backend: BackendKind
+            if let backendName {
+                guard let parsed = BackendKind(rawValue: backendName) else {
+                    throw RegressionCoreError.launchFailed(
+                        "Usa --backend crossOver o --backend regression"
+                    )
+                }
+                backend = parsed
+            } else {
+                backend = running.activeBackend ?? .crossOver
+            }
+            let report = try await preflightReport(
+                backend: backend,
+                appID: appID,
+                installations: installations,
+                runningState: running,
+                repository: repository,
+                runner: runner,
+                supportURL: support
+            )
+            printPreflight(report)
+            if report.status == .blocked {
+                throw RegressionCoreError.testEnvironmentBlocked(report.blockingSummary)
+            }
 
         case "switch":
             guard let name = arguments.dropFirst().first,
@@ -514,6 +567,7 @@ enum RegressionControl {
             print("Experimentos de I+D:", health.researchExperimentCount)
             print("Puertas de validación:", health.researchGateCount)
             print("Evidencias de I+D:", health.researchArtifactCount)
+            print("Diagnósticos previos:", health.preflightReportCount)
             if let backup = await repository.lastMigrationBackup() {
                 print("Backup de migración:", PrivacySanitizer.normalizedPath(backup.path))
             }
@@ -691,8 +745,88 @@ enum RegressionControl {
             print("Exportación guardada en", PrivacySanitizer.normalizedPath(path))
 
         default:
-            print("Uso: regressionctl [status | share-library --shutdown [--restart] | launch APP_ID [--backend crossOver|regression] | switch crossOver|regression | runs | profiles | engines | certifications | technologies | candidates | optimization | requirements | repair-receipts | research | research-protocol | research-open | research-hypothesis | research-stage | research-attach-run | research-gate | research-artifact | research-finish | research-complete | database | catalog | catalog-sync APP_ID [--force] | comparisons | verify RUN_ID perfect|playable|failed [--note TEXTO] | observe APP_ID perfect|playable|failed --backend MOTOR --name NOMBRE [--note TEXTO] | observations | export RUTA]")
+            print("Uso: regressionctl [status | preflight [APP_ID] [--backend crossOver|regression] | share-library --shutdown [--restart] | launch APP_ID [--backend crossOver|regression] | switch crossOver|regression | runs | profiles | engines | certifications | technologies | candidates | optimization | requirements | repair-receipts | research | research-protocol | research-open | research-hypothesis | research-stage | research-attach-run | research-gate | research-artifact | research-finish | research-complete | database | catalog | catalog-sync APP_ID [--force] | comparisons | verify RUN_ID perfect|playable|failed [--note TEXTO] | observe APP_ID perfect|playable|failed --backend MOTOR --name NOMBRE [--note TEXTO] | observations | export RUTA]")
             exit(64)
+        }
+    }
+
+    private static func preflightReport(
+        backend: BackendKind,
+        appID: String?,
+        installations: InstallationSnapshot,
+        runningState: RunningBackendState,
+        repository: CompatibilityRepository,
+        runner: any ProcessRunning,
+        supportURL: URL
+    ) async throws -> GameTestPreflightReport {
+        let steamRootURL: URL
+        switch backend {
+        case .crossOver:
+            guard let crossOver = installations.crossOver else {
+                throw RegressionCoreError.crossOverNotInstalled
+            }
+            steamRootURL = crossOver.steamRootURL
+        case .regression:
+            steamRootURL = installations.regression.steamRootURL
+        }
+
+        let installedGames = SteamManifestParser.games(in: steamRootURL, backend: backend)
+        let game: SteamGame?
+        if let appID {
+            game = installedGames.first(where: { $0.appID == appID }) ?? SteamGame(
+                appID: appID,
+                name: SteamGameName.placeholder(for: appID),
+                installDirectory: "juego-no-detectado-\(appID)",
+                manifestURL: steamRootURL.appendingPathComponent(
+                    "steamapps/appmanifest_\(appID).acf"
+                ),
+                sourceBackend: backend
+            )
+        } else {
+            game = nil
+        }
+
+        let sharedAssessment: SharedLibraryAssessment?
+        if let crossOver = installations.crossOver {
+            sharedAssessment = await SharedSteamLibraryManager(
+                backupRootURL: supportURL.appendingPathComponent(
+                    "Backups/SharedLibrary",
+                    isDirectory: true
+                )
+            ).assess(
+                regression: installations.regression,
+                crossOver: crossOver
+            )
+        } else {
+            sharedAssessment = nil
+        }
+
+        try await repository.prepare()
+        let health = try await repository.databaseHealth()
+        return await GameTestPreflight(
+            runner: runner,
+            applicationSupportURL: supportURL
+        ).evaluate(
+            backend: backend,
+            installations: installations,
+            runningState: runningState,
+            databaseHealth: health,
+            sharedLibraryAssessment: sharedAssessment,
+            game: game
+        )
+    }
+
+    private static func printPreflight(_ report: GameTestPreflightReport) {
+        print("Preparación:", report.status.displayName)
+        print("Backend:", report.backend.displayName)
+        if let appID = report.appID, let gameName = report.gameName {
+            print("Juego:", gameName, "(App ID \(appID))")
+        }
+        for check in report.checks {
+            print("[\(check.status.rawValue)]", check.title + ":", check.detail)
+            if let recovery = check.recoveryAction, check.status != .ready {
+                print("  Acción:", recovery)
+            }
         }
     }
 

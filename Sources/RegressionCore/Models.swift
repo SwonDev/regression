@@ -640,6 +640,7 @@ public struct CompatibilityDatabaseHealth: Codable, Equatable, Sendable {
     public let researchExperimentCount: Int
     public let researchGateCount: Int
     public let researchArtifactCount: Int
+    public let preflightReportCount: Int
 
     public var isHealthy: Bool {
         integrity == "ok" && foreignKeyViolations == 0
@@ -668,6 +669,7 @@ public enum RegressionCoreError: LocalizedError, Sendable {
     case launchFailed(String)
     case shutdownTimedOut(BackendKind)
     case unsafeLibraryState(String)
+    case testEnvironmentBlocked(String)
     case invalidEvidence(String)
     case externalCatalog(String)
     case database(String)
@@ -694,6 +696,8 @@ public enum RegressionCoreError: LocalizedError, Sendable {
             "\(backend.displayName) no cerró Steam a tiempo. Ciérralo manualmente y vuelve a intentarlo."
         case let .unsafeLibraryState(detail):
             "No se puede unificar la biblioteca de forma segura: \(detail)"
+        case let .testEnvironmentBlocked(detail):
+            "La prueba se ha detenido para no generar un falso diagnóstico: \(detail)"
         case let .invalidEvidence(detail):
             "La verificación no es válida: \(detail)"
         case let .externalCatalog(detail):

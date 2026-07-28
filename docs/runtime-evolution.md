@@ -50,7 +50,7 @@ Fuentes oficiales del snapshot:
 Las versiones se actualizan únicamente después de contrastar la fuente oficial y registrar la
 fecha. “Hay una versión nueva” significa **candidato de investigación**, no “actualizar estable”.
 
-## Esquema v10
+## Esquema v11
 
 La base local conserva las cinco áreas de evolución tecnológica de v9:
 
@@ -72,6 +72,11 @@ El esquema v10 añade el expediente de investigación que faltaba entre “candi
 | `research_experiments` | Una dimensión cambiada, aislamiento, rollback y run exacto. |
 | `research_gate_results` | Render, entrada, opciones, gameplay, independencia, matriz y rollback. |
 | `research_artifacts` | Referencias privadas y huellas de la evidencia reproducible. |
+
+El esquema v11 añade `run_preflight_reports`: conserva el diagnóstico no destructivo del entorno
+anterior a cada lanzamiento, vinculado al App ID, backend y run exactos. Este informe permite
+separar una prueba contaminada de un fallo del candidato, pero nunca sustituye la matriz funcional
+ni convierte un entorno limpio en compatibilidad.
 
 Triggers de SQLite y la política Swift bloquean una promoción salvo que sea por juego, tenga
 fuente y huella verificadas, esté aislada, disponga de rollback, identifique baseline/candidato,

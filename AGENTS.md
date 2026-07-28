@@ -127,6 +127,12 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
     intentos: solo con las puertas/evidencias de `docs/compatibility-research.md` y un run perfecto
     exacto de Regression, o se pausa por una dependencia externa concreta y reanudable. Los
     resultados negativos se conservan y nunca se convierten en recetas ejecutables.
+21. **Toda prueba de juego empieza con el preflight canónico.** La app y `regressionctl launch`
+    deben comprobar el App ID y backend exactos antes de enviar `-applaunch`. Un bloqueo detiene
+    la prueba; un aviso se conserva con el run. El preflight solo observa: jamás termina procesos,
+    borra marcadores, modifica botellas ni certifica compatibilidad. Su informe v1 debe persistir
+    vinculado a la ejecución exacta y conservarse en la exportación; ver
+    `docs/game-test-readiness.md`.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 
@@ -136,9 +142,12 @@ varias cosas a la vez o de tocar el estado bueno para "probar"**. Sigue este pro
 
 ### 1. Antes de cambiar nada
 
-1. **Reproduce el problema** y escribe en qué consiste exactamente (juego, momento, síntoma,
+1. **Ejecuta el preflight sin lanzar** (`regressionctl preflight APP_ID --backend <backend>`).
+   Si bloquea, corrige primero esa causa ambiental y repite; si avisa, conserva el contexto.
+2. **Reproduce el problema** y escribe en qué consiste exactamente (juego, momento, síntoma,
    captura). Si no puedes reproducirlo, no estás arreglando nada: estás adivinando.
-2. **Descarta causas ambientales primero** (son la mitad de los "bugs" históricos):
+3. **Descarta causas ambientales primero** (son la mitad de los "bugs" históricos). El preflight
+   automatiza la detección, pero la intervención sigue siendo explícita y revisada:
    - ¿Hay wineservers de OTROS builds corriendo? (`ps aux | grep wineserver`) → mátalos. Un
      wineserver de otro build causa muertes silenciosas que parecen bugs del motor.
    - ¿Hay `services.exe` huérfanos (PPID 1, sin wineserver)? Son restos de sesiones wine
@@ -148,9 +157,9 @@ varias cosas a la vez o de tocar el estado bueno para "probar"**. Sigue este pro
      si lanzas wine a mano, límpialos tú).
    - ¿El juego necesita Steam activo (DRM)? Los juegos Unity/IL2CPP mueren al iniciar si Steam
      no está corriendo — no es un bug del motor.
-3. **Haz backup** de lo que vas a tocar (botella → copia o tar en `backups/`; dlls → cópialas
+4. **Haz backup** de lo que vas a tocar (botella → copia o tar en `backups/`; dlls → cópialas
    con sufijo `.bak` junto al original). Sin backup no se toca nada.
-4. **Consulta la tabla de PINs** (abajo). Si tu arreglo implica tocar un PIN, necesitas validar
+5. **Consulta la tabla de PINs** (abajo). Si tu arreglo implica tocar un PIN, necesitas validar
    la matriz COMPLETA después, no solo tu juego.
 
 ### 2. Cómo se cambia algo
@@ -228,7 +237,7 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   como backend predeterminado, motor propio seleccionable, conmutación con cierre limpio y una
   sola biblioteca física de juegos. El lanzador propio original está intacto en
   `Regression.app/Contents/MacOS/regression-engine`.
-- **Aprendizaje local**: SQLite v10 normalizada en
+- **Aprendizaje local**: SQLite v11 normalizada en
   `~/Library/Application Support/Regression/Compatibility/compatibility.sqlite`; registra
   sistema, comandos saneados, componentes, backend gráfico, configuración de juego y deltas.
   La identidad de motor excluye `gameconfig.*`, de modo que una resolución distinta no crea un
@@ -241,6 +250,8 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   recibos y logs son privados del usuario (`0700`/`0600`); se retienen como máximo 20 logs del
   lanzador. Los expedientes de I+D separan casos, hipótesis, experimentos de una variable,
   puertas y artefactos con huella; un trigger impide cerrar sin el run perfecto exacto.
+  Cada lanzamiento pasa además por un preflight no destructivo; los avisos y bloqueos se
+  fingerprintan y se enlazan al run exacto sin convertir el entorno limpio en compatibilidad.
 - **Evolución tecnológica**: el inventario local registra baseline, última versión oficial
   revisada, licencia/distribución y política de Wine, GPTK/D3DMetal, DXMT, DXVK, MoltenVK,
   vkd3d, Rosetta y CrossOver. Las tablas de candidatos, métricas, requisitos y recibos no aplican

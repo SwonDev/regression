@@ -7,8 +7,8 @@ MACOS_DIR="$APP/Contents/MacOS"
 PLIST="$APP/Contents/Info.plist"
 RESOURCES_DIR="$APP/Contents/Resources"
 STATE_ICON_DIR="$ROOT/assets/menubar/states"
-VERSION="1.5.2"
-BUILD_NUMBER="23"
+VERSION="1.6.0"
+BUILD_NUMBER="25"
 BACKUP_ROOT="$ROOT/backups/native-packaging"
 COMPATIBILITY_ROOT="$HOME/Library/Application Support/Regression/Compatibility"
 COMPATIBILITY_DB="$COMPATIBILITY_ROOT/compatibility.sqlite"
@@ -233,8 +233,17 @@ do
     }
 done
 
+# El bundle se actualiza de forma incremental y su mtime raíz puede quedar antiguo aunque
+# Info.plist cambie. Renovarlo evita que Launch Services/Spotlight sigan mostrando una versión
+# anterior; el mtime del directorio no forma parte del sello de código.
+touch "$APP"
 "$ROOT/Scripts/sign_regression.sh" "$APP"
 verify_protected_state
+
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+if [[ -x "$LSREGISTER" ]]; then
+    "$LSREGISTER" -f "$APP"
+fi
 
 find "$ROLLBACK_DIR" -depth -delete
 ROLLBACK_DIR=""

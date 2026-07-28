@@ -39,8 +39,9 @@ y por qué no se redistribuyen. Licencia: LGPL-2.1+ (`LICENSE`).
    wineserver residual ni por una ruta que `ps` puede ocultar.
 5. La carpeta `steamapps` del motor propio enlaza a la biblioteca canónica de CrossOver. Los
    juegos se instalan una sola vez; credenciales, registro y datos externos a `steamapps` siguen
-   separados de forma segura.
-6. SQLite v10 guarda ejecuciones, configuraciones, huellas de DLL/runtime, variables permitidas,
+   separados de forma segura. El escáner resuelve ese enlace antes de leer los manifests para que
+   ambos backends enumeren exactamente los mismos títulos.
+6. SQLite v11 guarda ejecuciones, configuraciones, huellas de DLL/runtime, variables permitidas,
    resolución/configuración gráfica detectable, deltas y verificaciones. Además normaliza la
    identidad de cada motor para comparar resultados del mismo Wine/DXMT/DXVK/D3DMetal sin
    confundirlos con opciones propias del juego. Los perfiles se pueden consultar y exportar como
@@ -76,9 +77,14 @@ y por qué no se redistribuyen. Licencia: LGPL-2.1+ (`LICENSE`).
     placeholder temprano de telemetría. `Steam App <ID>` solo se usa mientras el título es
     realmente desconocido y nunca puede degradar el nombre histórico; cada escaneo reconcilia
     automáticamente las filas antiguas.
-14. El esquema v10 distingue candidatos tecnológicos de experimentos reales. Todo I+D puede
+14. El esquema v11 distingue candidatos tecnológicos de experimentos reales. Todo I+D puede
     persistir síntoma, referencia CrossOver, hipótesis, prueba de una variable, run exacto,
     matriz, evidencias y rollback; SQLite impide cerrar el expediente si falta una puerta.
+15. Antes de lanzar un juego, Regression ejecuta un preflight de solo lectura: comprueba base,
+    motor, aislamiento de Steam/Wine, instalación, servicios huérfanos, marcadores DXMT, espacio,
+    logs y biblioteca. Un bloqueo inequívoco detiene la solicitud; los avisos se conservan. Cada
+    ejecución iniciada enlaza una instantánea saneada y verificada por SHA-256, sin PID, rutas
+    personales ni comandos completos.
 
 Rutas principales:
 
@@ -92,6 +98,8 @@ Consulta local (sin modificar perfiles automáticamente):
 
 ```bash
 Regression.app/Contents/SharedSupport/bin/regressionctl status
+Regression.app/Contents/SharedSupport/bin/regressionctl preflight
+Regression.app/Contents/SharedSupport/bin/regressionctl preflight 219990 --backend regression
 Regression.app/Contents/SharedSupport/bin/regressionctl runs
 Regression.app/Contents/SharedSupport/bin/regressionctl profiles
 Regression.app/Contents/SharedSupport/bin/regressionctl engines
@@ -135,6 +143,8 @@ certificaciones, motores y referencia pública vive en
 [`docs/compatibility-platform.md`](docs/compatibility-platform.md).
 La política de versiones modernas, rendimiento, autorreparación futura y transición fuera de
 Rosetta vive en [`docs/runtime-evolution.md`](docs/runtime-evolution.md).
+La preparación automática y sus límites están especificados en
+[`docs/game-test-readiness.md`](docs/game-test-readiness.md).
 
 El empaquetado usa `Scripts/sign_regression.sh`: selecciona una identidad Apple Development local
 sin guardar datos del certificado en el repositorio, firma con runtime endurecido y capacidades

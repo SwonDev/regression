@@ -37,6 +37,16 @@ final class SharedSteamLibraryTests: XCTestCase {
     func testConfigureCreatesRecoverableSharedLibraryAndPrivateReceipt() async throws {
         let fixture = try SharedLibraryFixture()
         defer { fixture.remove() }
+        let manifest = fixture.crossOver.steamRootURL
+            .appendingPathComponent("steamapps/appmanifest_42.acf")
+        try Data(#"""
+        "AppState"
+        {
+            "appid" "42"
+            "name" "Juego compartido"
+            "installdir" "Shared Game"
+        }
+        """#.utf8).write(to: manifest)
         let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
 
         let link = try await manager.configure(
@@ -50,6 +60,13 @@ final class SharedSteamLibraryTests: XCTestCase {
         )
         XCTAssertEqual(link, fixture.regressionSteamApps)
         XCTAssertEqual(assessment.status, .ready)
+        XCTAssertEqual(
+            SteamManifestParser.games(
+                in: fixture.regression.steamRootURL,
+                backend: .regression
+            ).map(\.appID),
+            ["42"]
+        )
 
         let receipt = fixture.backupRoot.appendingPathComponent("shared-library-receipt.json")
         let mode = try XCTUnwrap(

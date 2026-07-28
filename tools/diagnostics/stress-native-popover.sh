@@ -73,7 +73,19 @@ tell application "System Events"
             delay 0.25
         end repeat
 
-        set scrollArea to scroll area 1 of group 1 of pop over 1 of statusItem
+        -- El popover puede cerrarse al cambiar el foco entre procesos de Accesibilidad.
+        -- Reabrirlo y volver a resolver sus referencias evita conservar objetos AX caducados.
+        set scrollArea to missing value
+        repeat 3 times
+            try
+                set scrollArea to scroll area 1 of group 1 of pop over 1 of statusItem
+                exit repeat
+            on error
+                click statusItem
+                delay 0.5
+            end try
+        end repeat
+        if scrollArea is missing value then error "El panel desapareció durante el estrés."
         set descendants to entire contents of scrollArea
         set triangleIndex to 0
         repeat with elementRef in descendants
@@ -123,7 +135,17 @@ element_count="$(osascript <<'APPLESCRIPT'
 tell application "System Events"
     tell process "Regression"
         set statusItem to menu bar item 1 of menu bar 2
-        set scrollArea to scroll area 1 of group 1 of pop over 1 of statusItem
+        set scrollArea to missing value
+        repeat 3 times
+            try
+                set scrollArea to scroll area 1 of group 1 of pop over 1 of statusItem
+                exit repeat
+            on error
+                click statusItem
+                delay 0.5
+            end try
+        end repeat
+        if scrollArea is missing value then error "No se pudo reabrir el panel para inspeccionarlo."
         set descendants to entire contents of scrollArea
         set elementCount to count of descendants
 

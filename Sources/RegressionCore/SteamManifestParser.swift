@@ -31,7 +31,12 @@ public enum SteamManifestParser {
     }
 
     public static func games(in steamRootURL: URL, backend: BackendKind) -> [SteamGame] {
-        let steamAppsURL = steamRootURL.appendingPathComponent("steamapps", isDirectory: true)
+        // `steamapps` puede ser el enlace compartido y canónico hacia la botella CrossOver.
+        // Foundation no siempre enumera una URL que todavía representa el enlace como directorio;
+        // resolverla aquí conserva una única biblioteca física sin producir un catálogo vacío.
+        let steamAppsURL = steamRootURL
+            .appendingPathComponent("steamapps", isDirectory: true)
+            .resolvingSymlinksInPath()
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: steamAppsURL,
             includingPropertiesForKeys: nil,

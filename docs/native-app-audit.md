@@ -16,7 +16,7 @@ El trabajo se limitó a la capa nativa y a su base de evidencia. El backend Cros
 usando únicamente su CLI oficial; el motor propio no incorporó ni enlazó binarios propietarios.
 La referencia pública de CodeWeavers se trata como contexto, nunca como certificación local.
 
-## Plataforma de aprendizaje v10
+## Plataforma de aprendizaje v11
 
 - El contrato perfecto exige `render`, `input`, `options` y `gameplay` en `passed`, tanto en Swift
   como mediante triggers SQLite. Un código de salida 0 no certifica nada.
@@ -40,16 +40,25 @@ La referencia pública de CodeWeavers se trata como contexto, nunca como certifi
   ordenadas, experimentos de una sola dimensión, aislamiento, rollback, la ejecución exacta de
   Regression, ocho puertas funcionales y ocho artefactos obligatorios con SHA-256. Ni Swift ni
   SQLite permiten verificar un expediente sin un blindado perfecto y activo del mismo `run`.
+- La migración v11 añade un preflight no destructivo anterior a cada lanzamiento. Sus diez
+  comprobaciones detectan base dañada, backend incorrecto, instalación incoherente, procesos Wine
+  ajenos, servicios huérfanos, marcadores DXMT, falta de espacio, telemetría y divergencia de la
+  biblioteca. Un informe persistido debe estar completo, coincidir con el App ID/backend del run
+  y superar su SHA-256 al reabrir; un entorno verde nunca certifica el juego.
 - Un expediente nunca se abandona por número de intentos: queda verificado o pausado por una
   dependencia externa concreta y reanudable. Corregir después el veredicto perfecto reabre el
   caso sin borrar su historial.
 - Los nombres públicos descubiertos en los `appmanifest` prevalecen sobre el marcador provisional
   `Steam App <ID>`. El arranque reconcilia el catálogo antes de leer el historial y repara
   ejecuciones antiguas sin recrearlas ni perder sus incidencias.
-- La base viva está en v10 con `quick_check=ok`, 0 referencias huérfanas, 6 juegos, 25 ejecuciones,
+- El lector de manifests resuelve el symlink canónico de `steamapps` antes de enumerarlo. Así el
+  motor Regression ve la misma biblioteca física que CrossOver sin duplicarla y sin que
+  Foundation confunda el enlace con un archivo ordinario.
+- La base viva está en v11 con `quick_check=ok`, 0 referencias huérfanas, 10 juegos, 25 ejecuciones,
   7 verificaciones, 2 observaciones, 3 certificaciones activas, 9 motores normalizados y
-  9 tecnologías inventariadas. Aún no hay candidatos, reparaciones, optimizaciones ni expedientes
-  de I+D creados: el protocolo está disponible, pero no inventa experimentos retroactivos.
+  9 tecnologías inventariadas. Aún no hay candidatos, reparaciones, optimizaciones, expedientes
+  de I+D ni diagnósticos previos históricos: v11 no inventa datos retroactivos; el primer informe
+  se creará al iniciar la próxima prueba real desde Regression.
 
 El contrato completo, el esquema y las reglas de extensión están en
 [`docs/compatibility-platform.md`](compatibility-platform.md).
@@ -132,6 +141,9 @@ El contrato completo, el esquema y las reglas de extensión están en
   “Evolución tecnológica” comunica cuántas tecnologías y candidatos existen y deja claro que la
   app todavía observa y recomienda: no descarga, repara ni sustituye motores automáticamente.
   “I+D verificable” cuenta por separado los casos y pruebas reales sometidos al expediente v10.
+- “Mantenimiento” muestra la preparación global con semántica verde/ámbar/roja, los avisos y su
+  acción concreta, y permite repetir la comprobación. El estado general es informativo; al pulsar
+  Jugar se calcula de nuevo para el App ID exacto y se persiste justo antes de `-applaunch`.
 - La app sigue siendo `LSUIElement`: no ocupa el Dock y CrossOver solo aparece cuando una acción de
   configuración, reparación, actualización o licencia lo exige.
 
@@ -159,7 +171,25 @@ copia APFS temporal para poder restaurar el bundle completo ante cualquier fallo
 en profundidad, verifica las capacidades y rechaza una identidad efímera cuando existe un
 certificado de desarrollo válido.
 
-Build canónico instalado: **Regression 1.5.2 (23)**.
+Build canónico instalado: **Regression 1.6.0 (25)**.
+
+- Backup nativo previo:
+  `backups/native-packaging/regression-native-before-1.6.0-25-20260728-193946.tar.gz`,
+  SHA-256 `142b2fffde3c984ca412beb32b5ba6892d176edb20e1900b61157723427f8369`.
+- Backup de aprendizaje v11 inmediatamente anterior al build final, con `quick_check=ok`:
+  `~/Library/Application Support/Regression/Compatibility/Backups/compatibility-before-1.6.0-25-20260728-193946-97244.sqlite`,
+  SHA-256 `0af8c7e612f78ca4d3749d2d6d9855ec7f950928065dca8948ea7eb451bc95ca`.
+- Backup transaccional exacto anterior a la migración v10→v11:
+  `~/Library/Application Support/Regression/Compatibility/Backups/compatibility-pre-v10-to-v11-2026-07-28T18-26-19Z-6AF6D8AC.sqlite`,
+  SHA-256 `1d5d65e0433f1880b44a39eb4fab79e102dee3d0251e8720423994f959fdd90d`.
+- Mantenimiento instalado con preparación verde, base v11 y nombres reales conservados:
+  `backups/native-audit-20260728/preflight-v11-maintenance-1.6.0-25.png`, SHA-256
+  `208d30b226d91aab95e1a8fb984ca3a320e0da4d1e3d2f0bceb57f51753aacaa`.
+- Tienda/biblioteca de Steam renderizada mediante el motor propio, sin lanzar juegos:
+  `backups/native-audit-20260728/steam-render-1.6.0-25.png`, SHA-256
+  `12c099d4692d832432cdc1628f665e9828d3f51bb563c3010167182165312c44`.
+
+Evidencia del build 1.5.2, conservada como historial:
 
 - Backup nativo previo:
   `backups/native-packaging/regression-native-before-1.5.2-23-20260728-163709.tar.gz`,
@@ -203,9 +233,9 @@ ausencia de secretos y ausencia de envío propio a servidores.
 ## Gates ejecutados
 
 - Swift 6.3.3 / Xcode 26.6 (17F113).
-- `swift test`: 70 casos, 69 ejecutados, 1 diagnóstico local optativo omitido, 0 fallos.
-- `swift test --sanitize=thread`: 70 casos, 0 carreras detectadas y 0 fallos.
-- Cobertura LLVM agregada: 88,82 % de líneas, 85,44 % de funciones y 78,98 % de regiones.
+- `swift test`: 75 casos, 74 ejecutados, 1 diagnóstico local optativo omitido, 0 fallos.
+- `swift test --sanitize=thread`: 75 casos, 0 carreras detectadas y 0 fallos.
+- Cobertura LLVM agregada: 87,66 % de líneas, 85,98 % de funciones y 78,64 % de regiones.
 - `swift build -Xswiftc -warnings-as-errors`: correcto.
 - `swift build -c release`: correcto.
 - `bash -n Scripts/*.sh build/*.sh`: correcto.
@@ -213,19 +243,24 @@ ausencia de secretos y ausencia de envío propio a servidores.
 - `git diff --check`: correcto.
 - `codesign --verify --deep --strict Regression.app`: correcto.
 - Estado protegido de app y botella: correcto antes y después del empaquetado.
-- Rutas heredadas v6/v7→v8, v8→v9 y v9→v10 ensayadas sobre copias, además de la migración
+- Rutas heredadas v6/v7→v8, v8→v9, v9→v10 y v10→v11 ensayadas sobre copias, además de la migración
   integral cubierta por tests: integridad, referencias, ejecuciones y certificaciones
-  conservadas. La base viva quedó en v10 y su backup anterior coincide byte a byte con el creado
+  conservadas. La base viva quedó en v11 y su backup anterior coincide byte a byte con el creado
   por la migración.
 - Consulta pública real: ficha de Cube World enlazada; fuente externa separada del veredicto local.
-- Inspección visual instalada: popover correcto, motor propio activo, esquema v10, bloque de I+D
+- Inspección visual instalada: popover correcto, motor propio activo, esquema v11, bloque de I+D
   verificable y nombres `DragonSword : Awakening` y `Dragon's Dogma 2` visibles en el historial.
-  La tienda de Steam renderizó a 3024×1740. No se lanzó ningún juego.
+  Mantenimiento mostró el preflight verde del backend Regression. La tienda de Steam renderizó a
+  3024×1740. No se lanzó ningún juego.
+- `regressionctl preflight 219990 --backend regression` validó las diez dimensiones de Grim Dawn
+  contra la instalación compartida real; solo comprobó el entorno y no envió `-applaunch`.
 - Estrés instalado del área Aprendizaje: doce transiciones, árbol de accesibilidad operativo,
-  86 elementos accesibles con Juegos temporalmente colapsado y restaurado al final, y CPU de la
+  87 elementos accesibles con Juegos temporalmente colapsado y restaurado al final, y CPU de la
   app en reposo (0,4 % en la comprobación posterior). El gate localiza la sección aunque
   una biblioteca grande deje controles fuera del viewport. `tools/diagnostics/stress-native-popover.sh`
-  conserva esta prueba; el cursor multicolor y el 99,7 % sostenido dejaron de reproducirse.
+  conserva esta prueba y vuelve a resolver referencias AX si macOS cierra el popover al cambiar
+  el foco. Dos pasadas consecutivas del build 25 terminaron correctamente; el cursor multicolor y
+  el 99,7 % sostenido dejaron de reproducirse.
 - Cierre de la primera tanda mediante `Steam -shutdown` y terminación limpia de Regression, sin
   procesos Wine huérfanos; relanzamiento final correcto para validar el nuevo detector. Una prueba
   posterior reprodujo y corrigió la espera ilimitada del catálogo: la instancia final respondió a

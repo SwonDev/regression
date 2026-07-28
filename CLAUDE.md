@@ -15,10 +15,10 @@
 
 **Funciona (verificado con capturas):**
 - Integración oficial con la botella Steam de CrossOver, conmutación segura de backend, app
-  `LSUIElement` sin Dock, biblioteca compartida y base SQLite v9 de aprendizaje exportable. La
+  `LSUIElement` sin Dock, biblioteca compartida y base SQLite v11 de aprendizaje exportable. La
   base normaliza motores por Wine/componentes/registro, separa opciones del juego, vincula cada
-  blindado con su evidencia/configuración/motor exactos y compara de
-  forma no vinculante con metadatos públicos de CodeWeavers. Los
+  blindado con su evidencia/configuración/motor exactos, conserva el preflight de cada prueba y
+  compara de forma no vinculante con metadatos públicos de CodeWeavers. Los
   datos técnicos locales usan permisos `0700`/`0600` y los logs del lanzador tienen retención
   acotada.
 - Steam completo: tienda, login, biblioteca, navegación, clicks precisos (CEF/Chromium vía
@@ -115,6 +115,9 @@
 17. **No anidar layouts perezosos en el popover.** Las filas actuales usan `VStack` dentro del
     único `ScrollView`; `LazyVStack` con grupos desplegables produjo un ciclo de AttributeGraph.
     Tras cambios de UI, estresar Aprendizaje y comprobar respuesta, cierre y CPU en reposo.
+18. **Toda prueba de juego empieza con el preflight canónico.** Un bloqueo detiene el lanzamiento;
+    un aviso se conserva con el run. El diagnóstico solo observa: no termina procesos, elimina
+    archivos, modifica botellas ni concede por sí mismo una certificación.
 
 ---
 

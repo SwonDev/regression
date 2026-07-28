@@ -276,7 +276,7 @@ final class CompatibilityResearchTests: XCTestCase {
         let migrated = CompatibilityRepository(databaseURL: databaseURL)
         try await migrated.prepare()
         let health = try await migrated.databaseHealth()
-        XCTAssertEqual(health.schemaVersion, 10)
+        XCTAssertEqual(health.schemaVersion, CompatibilityRepository.currentSchemaVersion)
         XCTAssertEqual(health.runCount, 1)
         XCTAssertEqual(health.researchCaseCount, 0)
         XCTAssertTrue(health.isHealthy)

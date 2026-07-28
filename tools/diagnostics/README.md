@@ -1,7 +1,9 @@
-# Utilidades de diagnóstico
+# Diagnósticos de Regression
 
-Estas herramientas Win64 son auxiliares de prueba. No forman parte del runtime ni se
-distribuyen dentro de `Regression.app`.
+Estas utilidades aportan instrumentación reproducible sin modificar por sí solas el runtime, la
+botella ni los juegos. Los helpers Win64 no se distribuyen dentro de `Regression.app`.
+
+## Helpers Win64
 
 ```bash
 x86_64-w64-mingw32-gcc -Wall -Wextra -Werror -municode \
@@ -17,10 +19,17 @@ x86_64-w64-mingw32-gcc -Wall -Wextra -Werror -municode \
 Ejecútalas con el Wine de `Regression.app`, la misma botella que se esté diagnosticando y
 sin wineservers de otros builds. No uses `set-display-mode.exe` mientras un juego tenga la
 pantalla capturada; primero cierra el juego limpiamente.
-# Diagnósticos de Regression
 
-Estas utilidades son instrumentación reproducible del motor. No forman parte del runtime
-distribuido ni modifican la botella por sí solas.
+## Diagnóstico nativo de macOS
+
+- `list-windows.swift [filtro] [--all]` enumera CGWindowID, capa y dimensiones para capturas
+  reproducibles con `screencapture -l`.
+- `stress-native-popover.sh` abre el panel instalado, despliega y pliega Aprendizaje doce veces,
+  comprueba el árbol de accesibilidad y exige que Regression vuelva a reposo. Si macOS cierra el
+  popover al cambiar el foco, el gate vuelve a resolver sus objetos AX en lugar de reutilizar una
+  referencia caducada. No toca Steam, la botella ni los juegos.
+
+El estrés necesita que la terminal tenga permiso de Accesibilidad y que Regression esté abierta.
 
 ## Métricas de ventanas Windows
 

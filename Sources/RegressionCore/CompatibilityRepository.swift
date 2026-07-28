@@ -20,7 +20,7 @@ private struct CertificationEvidenceRecord {
 }
 
 public actor CompatibilityRepository {
-    public static let currentSchemaVersion = 10
+    public static let currentSchemaVersion = 11
 
     private let databaseURL: URL
     private var database: OpaquePointer?
@@ -1062,7 +1062,8 @@ public actor CompatibilityRepository {
             researchHypothesisCount: try scalarInt("SELECT COUNT(*) FROM research_hypotheses;"),
             researchExperimentCount: try scalarInt("SELECT COUNT(*) FROM research_experiments;"),
             researchGateCount: try scalarInt("SELECT COUNT(*) FROM research_gate_results;"),
-            researchArtifactCount: try scalarInt("SELECT COUNT(*) FROM research_artifacts;")
+            researchArtifactCount: try scalarInt("SELECT COUNT(*) FROM research_artifacts;"),
+            preflightReportCount: try scalarInt("SELECT COUNT(*) FROM run_preflight_reports;")
         )
     }
 
@@ -1087,6 +1088,7 @@ public actor CompatibilityRepository {
             researchExperiments: try researchExperiments(),
             researchGates: try researchGates(),
             researchArtifacts: try researchArtifacts(),
+            preflightSnapshots: try preflightSnapshots(),
             databaseHealth: try databaseHealth()
         )
         let exportEncoder = JSONEncoder()
@@ -1189,6 +1191,14 @@ public actor CompatibilityRepository {
                 try executeScript(ResearchSchema.sql)
                 try recordMigration(version: 10, name: "expedientes reproducibles de I+D")
                 try execute("PRAGMA user_version=10;")
+            }
+            if startingVersion < 11 {
+                try executeScript(Self.preflightSchema)
+                try recordMigration(
+                    version: 11,
+                    name: "preparación reproducible y diagnóstico previo"
+                )
+                try execute("PRAGMA user_version=11;")
             }
         }
     }
@@ -1732,6 +1742,7 @@ public actor CompatibilityRepository {
         }
         try validateRuntimeEvolutionData()
         try validateResearchData()
+        try validatePreflightData()
     }
 
     private func schemaVersion() throws -> Int {
@@ -2238,6 +2249,29 @@ public actor CompatibilityRepository {
             ON observation_engine_snapshots(engine_fingerprint);
         """
 
+    private static let preflightSchema = """
+        CREATE TABLE IF NOT EXISTS run_preflight_reports(
+            run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+            protocol_version INTEGER NOT NULL CHECK(protocol_version >= 1),
+            status TEXT NOT NULL CHECK(status IN ('ready','warning','blocked')),
+            blocker_count INTEGER NOT NULL CHECK(blocker_count >= 0),
+            warning_count INTEGER NOT NULL CHECK(warning_count >= 0),
+            report_json TEXT NOT NULL CHECK(json_valid(report_json)),
+            report_fingerprint TEXT NOT NULL CHECK(
+                length(report_fingerprint)=64
+                AND report_fingerprint NOT GLOB '*[^0-9a-f]*'
+            ),
+            created_at TEXT NOT NULL,
+            CHECK(
+                (status='ready' AND blocker_count=0 AND warning_count=0)
+                OR (status='warning' AND blocker_count=0 AND warning_count>0)
+                OR (status='blocked' AND blocker_count>0)
+            )
+        );
+        CREATE INDEX IF NOT EXISTS run_preflight_reports_status_idx
+            ON run_preflight_reports(status, created_at DESC);
+        """
+
     private static let certificationProvenanceIndexes = """
         CREATE INDEX IF NOT EXISTS verified_certifications_origin_idx
             ON verified_game_certifications(origin, is_active, verified_at DESC);
@@ -2288,5 +2322,6 @@ public struct CompatibilityExport: Codable, Sendable {
     public let researchExperiments: [ResearchExperiment]
     public let researchGates: [ResearchGateResult]
     public let researchArtifacts: [ResearchArtifact]
+    public let preflightSnapshots: [RunPreflightSnapshot]
     public let databaseHealth: CompatibilityDatabaseHealth
 }

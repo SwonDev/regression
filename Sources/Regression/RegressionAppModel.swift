@@ -67,6 +67,8 @@ final class RegressionAppModel {
     var publicCatalogOperation: PublicCatalogOperation = .idle
     var publicCatalogEnabled: Bool
     var sharedLibraryAssessment: SharedLibraryAssessment?
+    var testReadiness: GameTestPreflightReport?
+    var readinessIsRefreshing = false
     var updateStatus: CrossOverUpdateStatus?
     var failure: UserFacingFailure?
     var statusDetail = "Buscando CrossOver y las botellas de Steam…"
@@ -79,6 +81,7 @@ final class RegressionAppModel {
     @ObservationIgnored private let coordinator: BackendCoordinator
     @ObservationIgnored private let repository: CompatibilityRepository
     @ObservationIgnored private let telemetry: TelemetryCoordinator
+    @ObservationIgnored private let preflight: GameTestPreflight
     @ObservationIgnored private let externalCatalog: ExternalCatalogSynchronizer
     @ObservationIgnored private let sharedLibrary: SharedSteamLibraryManager
     @ObservationIgnored private let libraryScanner = SteamLibraryScanner()
@@ -136,6 +139,10 @@ final class RegressionAppModel {
         telemetry = TelemetryCoordinator(
             repository: repository,
             monitor: SteamLogMonitor()
+        )
+        preflight = GameTestPreflight(
+            runner: processRunner,
+            applicationSupportURL: applicationSupport
         )
         externalCatalog = ExternalCatalogSynchronizer(repository: repository)
         sharedLibrary = SharedSteamLibraryManager(
@@ -260,6 +267,7 @@ final class RegressionAppModel {
         await refreshRuntimeState()
         logger.info("Estado de procesos: CrossOver=\(self.runningState.crossOverIsRunning), Regression=\(self.runningState.regressionIsRunning)")
         await refreshStoredData(includeHealth: true)
+        await refreshTestReadiness()
         schedulePublicCatalogSync()
 
         // La red nunca debe retrasar la función principal de la aplicación.
@@ -313,11 +321,27 @@ final class RegressionAppModel {
         await refreshDiscovery()
         await refreshRuntimeState()
         await refreshStoredData(includeHealth: true)
+        await refreshTestReadiness()
         await refreshUpdateStatus()
         schedulePublicCatalogSync()
         if failure == nil {
             operation = runningState.activeBackend.map(AppOperation.running) ?? .ready
             statusDetail = "Estado actualizado."
+        }
+    }
+
+    func refreshTestReadiness() async {
+        guard installations != nil, !readinessIsRefreshing else { return }
+        readinessIsRefreshing = true
+        defer { readinessIsRefreshing = false }
+        do {
+            testReadiness = try await collectTestReadiness(for: nil)
+        } catch {
+            logger.error(
+                "No se pudo comprobar la preparación: \(error.localizedDescription, privacy: .public)"
+            )
+            testReadiness = nil
+            statusDetail = "No se pudo completar la comprobación previa: \(error.localizedDescription)"
         }
     }
 
@@ -395,6 +419,7 @@ final class RegressionAppModel {
             UserDefaults.standard.set(backend.rawValue, forKey: "selectedBackend")
             try await confirmSteamLaunch(launch)
             await refreshGames()
+            await refreshTestReadiness()
         } catch {
             selectedBackend = previous
             presentLaunchError(error)
@@ -438,6 +463,18 @@ final class RegressionAppModel {
             configuration.merge(
                 configurationOverrides(installations: installations, backend: selectedBackend)
             ) { _, override in override }
+
+            // Se ejecuta después de recopilar la configuración para que el diagnóstico refleje
+            // el instante más cercano posible a la solicitud real de Steam.
+            statusDetail = "Comprobando que el entorno de la prueba sea reproducible…"
+            let preflightReport = try await collectTestReadiness(for: game)
+            testReadiness = preflightReport
+            guard preflightReport.status != .blocked else {
+                throw RegressionCoreError.testEnvironmentBlocked(
+                    preflightReport.blockingSummary
+                )
+            }
+
             let context = RunContext(
                 appID: game.appID,
                 gameName: game.name,
@@ -452,13 +489,16 @@ final class RegressionAppModel {
             )
             try await telemetry.registerLaunchIntent(context: context, bottleURL: metadata.bottleURL)
             registeredContext = context
+            try await repository.recordPreflight(preflightReport, forRunID: context.id)
             _ = try await coordinator.launchSteam(
                 backend: selectedBackend,
                 installations: installations,
                 appID: game.appID
             )
             operation = .running(selectedBackend)
-            statusDetail = "Solicitud enviada a Steam. Regression observará el resultado localmente."
+            statusDetail = preflightReport.warningCount == 0
+                ? "Solicitud enviada a Steam. Regression observará el resultado localmente."
+                : "Solicitud enviada con \(preflightReport.warningCount) aviso(s) documentados en el diagnóstico previo."
         } catch {
             if let registeredContext {
                 do {
@@ -970,6 +1010,24 @@ final class RegressionAppModel {
             return
         }
         updateStatus = await updateChecker.check(crossOver)
+    }
+
+    private func collectTestReadiness(
+        for game: SteamGame?
+    ) async throws -> GameTestPreflightReport {
+        guard let installations else {
+            throw RegressionCoreError.launchFailed("Las instalaciones aún no se han detectado")
+        }
+        let health = try await repository.databaseHealth()
+        databaseHealth = health
+        return await preflight.evaluate(
+            backend: selectedBackend,
+            installations: installations,
+            runningState: runningState,
+            databaseHealth: health,
+            sharedLibraryAssessment: sharedLibraryAssessment,
+            game: game
+        )
     }
 
     private func backendMetadata(
