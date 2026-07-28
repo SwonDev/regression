@@ -3,11 +3,17 @@ import RegressionCore
 import SwiftUI
 
 struct MenuBarView: View {
+    private static let gamePageSize = 24
+    private static let certificationPageSize = 8
+
     @Bindable var model: RegressionAppModel
 
     @State private var gamesAreExpanded = true
     @State private var learningIsExpanded = false
     @State private var maintenanceIsExpanded = false
+    @State private var gameSearchText = ""
+    @State private var visibleGameCount = Self.gamePageSize
+    @State private var visibleCertificationCount = Self.certificationPageSize
 
     var body: some View {
         ScrollView {
@@ -210,13 +216,46 @@ struct MenuBarView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.top, 10)
                     } else {
-                        VStack(spacing: 0) {
-                            ForEach(model.games) { game in
-                                gameRow(game)
-                                if game.id != model.games.last?.id { Divider() }
+                        VStack(alignment: .leading, spacing: 8) {
+                            TextField("Buscar por nombre o App ID", text: $gameSearchText)
+                                .textFieldStyle(.roundedBorder)
+                                .accessibilityLabel("Buscar juegos instalados")
+                                .accessibilityHint("Filtra por nombre o Steam App ID")
+                                .onChange(of: gameSearchText) { _, _ in
+                                    visibleGameCount = Self.gamePageSize
+                                }
+
+                            let filtered = filteredGames
+                            if filtered.isEmpty {
+                                Label(
+                                    "No hay juegos que coincidan con la búsqueda.",
+                                    systemImage: "magnifyingglass"
+                                )
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .padding(.vertical, 6)
+                            } else {
+                                let visible = Array(filtered.prefix(visibleGameCount))
+                                let remaining = max(0, filtered.count - visible.count)
+                                VStack(spacing: 0) {
+                                    ForEach(visible) { game in
+                                        gameRow(game)
+                                        if game.id != visible.last?.id { Divider() }
+                                    }
+                                }
+
+                                if remaining > 0 {
+                                    Button("Mostrar \(min(Self.gamePageSize, remaining)) más") {
+                                        visibleGameCount += Self.gamePageSize
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .center)
+                                    .accessibilityHint(
+                                        "Amplía la lista sin cargar toda la biblioteca a la vez"
+                                    )
+                                }
                             }
                         }
-                        .padding(.top, 4)
+                        .padding(.top, 8)
                     }
                 }
             } label: {
@@ -315,8 +354,22 @@ struct MenuBarView: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    ForEach(model.certifications) { certification in
+                    let certifications = visibleCertifications
+                    let remainingCertifications = max(
+                        0,
+                        sortedCertifications.count - certifications.count
+                    )
+                    ForEach(certifications) { certification in
                         certificationRow(certification)
+                    }
+
+                    if remainingCertifications > 0 {
+                        Button(
+                            "Mostrar \(min(Self.certificationPageSize, remainingCertifications)) blindados más"
+                        ) {
+                            visibleCertificationCount += Self.certificationPageSize
+                        }
+                        .font(.caption)
                     }
 
                     Divider()
@@ -579,6 +632,25 @@ struct MenuBarView: View {
 
     private var researchTechnologies: [RuntimeTechnology] {
         model.runtimeTechnologies.filter(\.hasResearchCandidate)
+    }
+
+    private var filteredGames: [SteamGame] {
+        let query = gameSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return model.games }
+        return model.games.filter {
+            $0.name.localizedCaseInsensitiveContains(query) || $0.appID.contains(query)
+        }
+    }
+
+    private var sortedCertifications: [VerifiedGameCertification] {
+        model.certifications.sorted {
+            if $0.verifiedAt != $1.verifiedAt { return $0.verifiedAt > $1.verifiedAt }
+            return $0.gameName.localizedCaseInsensitiveCompare($1.gameName) == .orderedAscending
+        }
+    }
+
+    private var visibleCertifications: [VerifiedGameCertification] {
+        Array(sortedCertifications.prefix(visibleCertificationCount))
     }
 
     private func certificationSourceText(_ certification: VerifiedGameCertification) -> String {

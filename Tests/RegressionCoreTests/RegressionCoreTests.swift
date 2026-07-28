@@ -100,6 +100,50 @@ final class RegressionCoreTests: XCTestCase {
         XCTAssertEqual(game.installedBytes, 220_000_000)
     }
 
+    func testSteamManifestRejectsInvalidAppIDAndNegativeSize() throws {
+        let invalid = #"""
+        "AppState"
+        {
+            "appid" "٢١٩٩٩٠"
+            "name" "Juego no válido"
+            "installdir" "Invalid"
+        }
+        """#
+        XCTAssertNil(SteamManifestParser.parse(
+            contents: invalid,
+            manifestURL: URL(fileURLWithPath: "/tmp/appmanifest_invalid.acf"),
+            backend: .regression
+        ))
+
+        let negativeSize = #"""
+        "AppState"
+        {
+            "appid" "42"
+            "name" "Juego válido"
+            "installdir" "Valid"
+            "SizeOnDisk" "-1"
+        }
+        """#
+        let game = try XCTUnwrap(SteamManifestParser.parse(
+            contents: negativeSize,
+            manifestURL: URL(fileURLWithPath: "/tmp/appmanifest_42.acf"),
+            backend: .regression
+        ))
+        XCTAssertNil(game.installedBytes)
+    }
+
+    func testManualVerificationEvidenceUsesOneCanonicalMapping() {
+        XCTAssertTrue(VerificationEvidence.manualDefault(for: .perfect).isComplete)
+        XCTAssertEqual(
+            VerificationEvidence.manualDefault(for: .failed).rendering,
+            .failed
+        )
+        XCTAssertEqual(
+            VerificationEvidence.manualDefault(for: .playableWithIssues).inputPrecision,
+            .notTested
+        )
+    }
+
     func testSteamGameProcessLogParsing() throws {
         let line = #"[2026-07-27 08:13:10] AppID 1128000 adding PID 2196 as a tracked process ""C:\Program Files (x86)\Steam\steamapps\common\Cube World\cubeworld.exe"""#
         guard case let .started(_, appID, pid, executable) = SteamGameProcessLogParser.parse(line: line) else {

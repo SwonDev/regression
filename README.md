@@ -64,9 +64,14 @@ y por qué no se redistribuyen. Licencia: LGPL-2.1+ (`LICENSE`).
     por sí sola: primero debe aislarse por juego, disponer de rollback, superar la matriz completa
     y demostrar su mejora. La app todavía observa y recomienda; no aplica cambios automáticamente.
 11. El popover usa una jerarquía de layout determinista dentro de un único `ScrollView`. Las
-    listas son deliberadamente no perezosas: con este volumen son más baratas y evitan ciclos de
-    geometría de SwiftUI al desplegar Aprendizaje. La prueba de empaquetado incluye estrés de los
+    listas no anidan contenedores perezosos —evitan así los ciclos de geometría ya reproducidos—,
+    pero tampoco materializan una biblioteca completa: los juegos son buscables y se revelan en
+    lotes de 24; los blindados, en lotes de 8. La prueba de empaquetado incluye estrés de los
     grupos, accesibilidad, CPU en reposo y cierre/reapertura.
+12. La E/S costosa de la app nativa se aísla del actor principal: detección, manifests, hashes de
+    componentes/configuración y lectura acotada de logs se ejecutan en actores dedicados. Los
+    Steam App ID se validan una sola vez como enteros ASCII de 32 bits y los nombres procedentes
+    de manifests no pueden escapar de sus raíces ni mediante `..` ni mediante enlaces simbólicos.
 
 Rutas principales:
 

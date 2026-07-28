@@ -79,6 +79,9 @@ final class RegressionAppModel {
     @ObservationIgnored private let telemetry: TelemetryCoordinator
     @ObservationIgnored private let externalCatalog: ExternalCatalogSynchronizer
     @ObservationIgnored private let sharedLibrary: SharedSteamLibraryManager
+    @ObservationIgnored private let libraryScanner = SteamLibraryScanner()
+    @ObservationIgnored private let configurationCollector = ConfigurationSnapshotCollector()
+    @ObservationIgnored private let processLogReader = ProcessLogReader()
     @ObservationIgnored private let updateChecker = CrossOverUpdateChecker()
     @ObservationIgnored private let logger = Logger(
         subsystem: "local.regression.launcher",
@@ -297,7 +300,7 @@ final class RegressionAppModel {
             appURL = nil
         }
         installations = await discovery.discover(regressionApplicationURL: appURL)
-        refreshGames()
+        await refreshGames()
         await refreshSharedLibraryAssessment()
     }
 
@@ -389,7 +392,7 @@ final class RegressionAppModel {
             selectedBackend = backend
             UserDefaults.standard.set(backend.rawValue, forKey: "selectedBackend")
             try await confirmSteamLaunch(launch)
-            refreshGames()
+            await refreshGames()
         } catch {
             selectedBackend = previous
             presentLaunchError(error)
@@ -421,7 +424,7 @@ final class RegressionAppModel {
                 backend: selectedBackend,
                 appID: game.appID
             )
-            var configuration = ConfigurationCollector.snapshot(
+            var configuration = await configurationCollector.snapshot(
                 bottleURL: metadata.bottleURL,
                 backend: selectedBackend,
                 providerVersion: metadata.providerVersion,
@@ -501,7 +504,7 @@ final class RegressionAppModel {
                 runningState: runningState
             )
             await refreshSharedLibraryAssessment()
-            refreshGames()
+            await refreshGames()
             statusDetail = "Ambos motores usan ahora una única carpeta de juegos."
             if let previouslyActive {
                 let launch = try await coordinator.launchSteam(
@@ -561,37 +564,18 @@ final class RegressionAppModel {
             notes = field.stringValue
         }
 
-        let verification: RunVerification
-        switch verdict {
-        case .perfect:
-            verification = RunVerification(
-                runID: run.id,
-                verdict: verdict,
-                rendering: .passed,
-                inputPrecision: .passed,
-                graphicsSettings: .passed,
-                gameplay: .passed,
-                source: .user,
-                notes: "Verificación manual completa"
-            )
-        case .playableWithIssues:
-            verification = RunVerification(
-                runID: run.id,
-                verdict: verdict,
-                source: .user,
-                notes: notes
-            )
-        case .failed:
-            verification = RunVerification(
-                runID: run.id,
-                verdict: verdict,
-                rendering: .failed,
-                source: .user,
-                notes: notes
-            )
-        case .invalidated:
-            return
-        }
+        guard verdict != .invalidated else { return }
+        let evidence = VerificationEvidence.manualDefault(for: verdict)
+        let verification = RunVerification(
+            runID: run.id,
+            verdict: verdict,
+            rendering: evidence.rendering,
+            inputPrecision: evidence.inputPrecision,
+            graphicsSettings: evidence.graphicsSettings,
+            gameplay: evidence.gameplay,
+            source: .user,
+            notes: verdict == .perfect ? "Verificación manual completa" : notes
+        )
 
         do {
             try await repository.verifyRun(verification)
@@ -725,8 +709,7 @@ final class RegressionAppModel {
             }
             if runningState.hasConflict { throw RegressionCoreError.backendConflict }
         }
-        let log = (try? String(contentsOf: launch.logURL, encoding: .utf8)) ?? ""
-        let excerpt = PrivacySanitizer.redactedLogExcerpt(log)
+        let excerpt = await processLogReader.redactedExcerpt(at: launch.logURL)
         throw RegressionCoreError.launchFailed(excerpt.isEmpty ? "Steam no apareció tras 30 segundos" : excerpt)
     }
 
@@ -740,7 +723,7 @@ final class RegressionAppModel {
         }
         if periodicRefreshCount.isMultiple(of: 30) {
             let previousAppIDs = Set(games.map(\.appID))
-            refreshGames()
+            await refreshGames()
             if Set(games.map(\.appID)) != previousAppIDs {
                 schedulePublicCatalogSync()
             }
@@ -763,20 +746,32 @@ final class RegressionAppModel {
         }
     }
 
-    private func refreshGames() {
-        guard let installations else {
+    private func refreshGames() async {
+        guard let snapshot = installations else {
             crossOverGames = []
             regressionGames = []
             games = []
             return
         }
-        crossOverGames = installations.crossOver.map {
-            SteamManifestParser.games(in: $0.steamRootURL, backend: .crossOver)
-        } ?? []
-        regressionGames = SteamManifestParser.games(
-            in: installations.regression.steamRootURL,
+        let discoveredAt = snapshot.discoveredAt
+        let refreshedCrossOverGames: [SteamGame]
+        if let crossOver = snapshot.crossOver {
+            refreshedCrossOverGames = await libraryScanner.games(
+                in: crossOver.steamRootURL,
+                backend: .crossOver
+            )
+        } else {
+            refreshedCrossOverGames = []
+        }
+        let refreshedRegressionGames = await libraryScanner.games(
+            in: snapshot.regression.steamRootURL,
             backend: .regression
         )
+
+        // Una detección más reciente tiene prioridad sobre esta lectura de disco ya iniciada.
+        guard installations?.discoveredAt == discoveredAt else { return }
+        crossOverGames = refreshedCrossOverGames
+        regressionGames = refreshedRegressionGames
         var byID: [String: SteamGame] = [:]
         for game in crossOverGames {
             byID[game.appID] = game

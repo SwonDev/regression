@@ -385,26 +385,14 @@ enum RegressionControl {
             } else {
                 note = "Verificación visual local"
             }
-            let dimensions: (
-                VerificationDimension,
-                VerificationDimension,
-                VerificationDimension,
-                VerificationDimension
-            )
-            switch verdict {
-            case .perfect: dimensions = (.passed, .passed, .passed, .passed)
-            case .playableWithIssues:
-                dimensions = (.notTested, .notTested, .notTested, .notTested)
-            case .failed: dimensions = (.failed, .notTested, .notTested, .notTested)
-            case .invalidated: dimensions = (.notTested, .notTested, .notTested, .notTested)
-            }
+            let evidence = VerificationEvidence.manualDefault(for: verdict)
             try await repository.verifyRun(RunVerification(
                 runID: runID,
                 verdict: verdict,
-                rendering: dimensions.0,
-                inputPrecision: dimensions.1,
-                graphicsSettings: dimensions.2,
-                gameplay: dimensions.3,
+                rendering: evidence.rendering,
+                inputPrecision: evidence.inputPrecision,
+                graphicsSettings: evidence.graphicsSettings,
+                gameplay: evidence.gameplay,
                 source: .visualInspection,
                 notes: note
             ))
@@ -452,29 +440,17 @@ enum RegressionControl {
             if backend == .crossOver, let graphics = installations.crossOver?.defaultGraphicsBackend {
                 configuration["graphics.crossover.default_probe"] = graphics
             }
-            let dimensions: (
-                VerificationDimension,
-                VerificationDimension,
-                VerificationDimension,
-                VerificationDimension
-            )
-            switch verdict {
-            case .perfect: dimensions = (.passed, .passed, .passed, .passed)
-            case .playableWithIssues:
-                dimensions = (.notTested, .notTested, .notTested, .notTested)
-            case .failed: dimensions = (.failed, .notTested, .notTested, .notTested)
-            case .invalidated: dimensions = (.notTested, .notTested, .notTested, .notTested)
-            }
+            let evidence = VerificationEvidence.manualDefault(for: verdict)
             try await repository.recordObservation(CompatibilityObservation(
                 appID: appID,
                 gameName: gameName,
                 backend: backend,
                 providerVersion: providerVersion,
                 verdict: verdict,
-                rendering: dimensions.0,
-                inputPrecision: dimensions.1,
-                graphicsSettings: dimensions.2,
-                gameplay: dimensions.3,
+                rendering: evidence.rendering,
+                inputPrecision: evidence.inputPrecision,
+                graphicsSettings: evidence.graphicsSettings,
+                gameplay: evidence.gameplay,
                 configurationFingerprint: ConfigurationCollector.fingerprint(configuration),
                 configuration: configuration,
                 source: .imported,

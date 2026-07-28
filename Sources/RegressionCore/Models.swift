@@ -17,8 +17,13 @@ public enum BackendKind: String, Codable, CaseIterable, Identifiable, Sendable {
 public enum SteamAppID {
     public static func normalized(_ value: String) -> String? {
         let candidate = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !candidate.isEmpty, candidate.allSatisfy(\.isNumber) else { return nil }
-        return candidate
+        guard !candidate.isEmpty,
+              candidate.utf8.allSatisfy({ (0x30...0x39).contains($0) }),
+              let appID = UInt32(candidate),
+              appID > 0 else {
+            return nil
+        }
+        return String(appID)
     }
 }
 
@@ -273,6 +278,58 @@ public enum VerificationDimension: String, Codable, Sendable {
     case notTested
 }
 
+public struct VerificationEvidence: Codable, Equatable, Sendable {
+    public let rendering: VerificationDimension
+    public let inputPrecision: VerificationDimension
+    public let graphicsSettings: VerificationDimension
+    public let gameplay: VerificationDimension
+
+    public init(
+        rendering: VerificationDimension,
+        inputPrecision: VerificationDimension,
+        graphicsSettings: VerificationDimension,
+        gameplay: VerificationDimension
+    ) {
+        self.rendering = rendering
+        self.inputPrecision = inputPrecision
+        self.graphicsSettings = graphicsSettings
+        self.gameplay = gameplay
+    }
+
+    public static func manualDefault(for verdict: VerificationVerdict) -> Self {
+        switch verdict {
+        case .perfect:
+            Self(
+                rendering: .passed,
+                inputPrecision: .passed,
+                graphicsSettings: .passed,
+                gameplay: .passed
+            )
+        case .playableWithIssues, .invalidated:
+            Self(
+                rendering: .notTested,
+                inputPrecision: .notTested,
+                graphicsSettings: .notTested,
+                gameplay: .notTested
+            )
+        case .failed:
+            Self(
+                rendering: .failed,
+                inputPrecision: .notTested,
+                graphicsSettings: .notTested,
+                gameplay: .notTested
+            )
+        }
+    }
+
+    public var isComplete: Bool {
+        rendering == .passed
+            && inputPrecision == .passed
+            && graphicsSettings == .passed
+            && gameplay == .passed
+    }
+}
+
 public enum VerificationSource: String, Codable, Sendable {
     case user
     case visualInspection
@@ -313,11 +370,15 @@ public struct RunVerification: Codable, Equatable, Sendable {
     }
 
     public var hasCompletePerfectEvidence: Bool {
-        verdict != .perfect || (
-            rendering == .passed
-                && inputPrecision == .passed
-                && graphicsSettings == .passed
-                && gameplay == .passed
+        verdict != .perfect || evidence.isComplete
+    }
+
+    public var evidence: VerificationEvidence {
+        VerificationEvidence(
+            rendering: rendering,
+            inputPrecision: inputPrecision,
+            graphicsSettings: graphicsSettings,
+            gameplay: gameplay
         )
     }
 }
@@ -374,11 +435,15 @@ public struct CompatibilityObservation: Codable, Equatable, Identifiable, Sendab
     }
 
     public var hasCompletePerfectEvidence: Bool {
-        verdict != .perfect || (
-            rendering == .passed
-                && inputPrecision == .passed
-                && graphicsSettings == .passed
-                && gameplay == .passed
+        verdict != .perfect || evidence.isComplete
+    }
+
+    public var evidence: VerificationEvidence {
+        VerificationEvidence(
+            rendering: rendering,
+            inputPrecision: inputPrecision,
+            graphicsSettings: graphicsSettings,
+            gameplay: gameplay
         )
     }
 }

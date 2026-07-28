@@ -97,7 +97,7 @@ Se usa exclusivamente la tipografía del sistema. Los títulos emplean `headline
 
 ## Layout
 
-El panel tiene un ancho ideal de 380 puntos y una altura flexible con desplazamiento cuando la lista de juegos lo requiera. Aplica una cuadrícula de 4 puntos, márgenes exteriores de 16 puntos y separación de 12 a 16 puntos entre secciones.
+El panel tiene un ancho ideal de 380 puntos y una altura flexible con desplazamiento cuando la lista de juegos lo requiera. Aplica una cuadrícula de 4 puntos, márgenes exteriores de 16 puntos y separación de 12 a 16 puntos entre secciones. Las colecciones potencialmente grandes se buscan y revelan en lotes incrementales; el popover nunca materializa miles de filas a la vez.
 
 Orden de contenido:
 
@@ -123,8 +123,8 @@ Los controles conservan su forma nativa. Los contenedores auxiliares usan radios
 - **Estado:** el icono cambia sin animación al cambiar el estado operativo. El panel mantiene además resumen legible, insignia semántica y detalle técnico; la imagen nunca es el único canal de información.
 - **Acción principal:** un botón prominente cuyo texto cambia entre “Abrir Steam”, “Mostrar Steam” y “Reintentar”.
 - **Selector de motor:** selector nativo que explica que cambiar de motor cerrará primero el Steam activo.
-- **Juegos:** filas compactas con nombre, App ID y botón de reproducción; no muestran datos privados de la cuenta. La certificación local verde y la referencia pública azul/gris son líneas independientes y siempre etiquetadas.
-- **Historial:** resumen de ejecuciones, perfiles y motores locales, comparación pública opcional y exportación bajo demanda. La sincronización muestra progreso y conserva el último dato válido si falla la red.
+- **Juegos:** campo nativo de búsqueda por nombre o App ID y filas compactas reveladas en lotes de 24, con nombre, App ID y botón de reproducción; no muestran datos privados de la cuenta. La certificación local verde y la referencia pública azul/gris son líneas independientes y siempre etiquetadas.
+- **Historial:** resumen de ejecuciones, perfiles y motores locales, blindados revelados en lotes de 8, comparación pública opcional y exportación bajo demanda. La sincronización muestra progreso y conserva el último dato válido si falla la red.
 - **Errores:** mensaje comprensible, causa técnica desplegable y una acción concreta como “Abrir CrossOver” o “Usar motor de Regression”.
 
 ## Do's and Don'ts
@@ -138,6 +138,7 @@ Los controles conservan su forma nativa. Los contenedores auxiliares usan radios
 - Usar etiquetas, ayuda contextual y accesibilidad para todos los controles.
 - Conservar el motor propio visible como alternativa, sin activarlo silenciosamente.
 - Explicar qué dato público se consulta y permitir desactivar o actualizar la referencia.
+- Mantener buscables las bibliotecas grandes sin sacrificar la respuesta inmediata del popover.
 
 ### Don't
 

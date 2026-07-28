@@ -38,15 +38,15 @@ public enum BackendCommandFactory {
 }
 
 public actor BackendCoordinator {
-    private let processRunner: ProcessRunner
-    private let processLauncher: ProcessLauncher
-    private let inspector: ProcessInspector
+    private let processRunner: any ProcessRunning
+    private let processLauncher: any ProcessLaunching
+    private let inspector: any ProcessInspecting
     private let logDirectoryURL: URL
 
     public init(
-        processRunner: ProcessRunner,
-        processLauncher: ProcessLauncher,
-        inspector: ProcessInspector,
+        processRunner: any ProcessRunning,
+        processLauncher: any ProcessLaunching,
+        inspector: any ProcessInspecting,
         logDirectoryURL: URL
     ) {
         self.processRunner = processRunner
@@ -113,7 +113,8 @@ public actor BackendCoordinator {
         )
         let result = try await processRunner.run(
             executableURL: command.executableURL,
-            arguments: command.arguments
+            arguments: command.arguments,
+            environment: nil
         )
         if result.exitCode != 0 {
             let detail = PrivacySanitizer.redactedLogExcerpt(

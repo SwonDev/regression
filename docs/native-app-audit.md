@@ -61,8 +61,23 @@ El contrato completo, el esquema y las reglas de extensión están en
 
 ## Robustez, rendimiento y ciclo de vida
 
-- Los manifests instalados se cachean por backend y solo se releen cada 60 segundos. El historial
-  se actualiza cada 30 segundos o inmediatamente tras telemetría nueva, no en cada tick visual.
+- Los manifests instalados se cachean por backend y solo se releen cada 60 segundos. Su lectura se
+  ejecuta en un actor dedicado y una detección antigua no puede sobrescribir otra más reciente. El
+  historial se actualiza cada 30 segundos o inmediatamente tras telemetría nueva, no en cada tick
+  visual.
+- Los hashes de componentes y configuraciones de juego, y la lectura de logs de error, también se
+  ejecutan fuera de `MainActor`. Los logs se leen desde una cola máxima de 64 KiB, se sanean y solo
+  entregan hasta 2.000 caracteres; un log grande ya no puede bloquear el popover.
+- La biblioteca es buscable por título o Steam App ID y se revela en páginas de 24 filas; los
+  blindados, en páginas de 8. Se conserva un único `ScrollView` y no se reintroducen los
+  `LazyVStack` anidados que causaron el bloqueo anterior.
+- El Steam App ID tiene una frontera canónica única: dígitos ASCII, rango `UInt32`, valor distinto
+  de cero y eliminación de ceros iniciales. La recogida de ajustes rechaza traversal, separadores,
+  NUL y enlaces simbólicos que salgan de las raíces del juego o usuario.
+- Coordinador, detección e inspector dependen de protocolos mínimos para comprobar conflictos,
+  cierre oficial, botella dañada y atribución de procesos sin ejecutar Wine en los tests. La
+  consulta de actualización de CrossOver es inyectable, limita el appcast a 1 MiB y nunca afirma
+  que el producto está al día si la respuesta no puede validarse.
 - La consulta de ficha externa usa SQL indexado directo; perfiles, certificaciones y comparaciones
   se agrupan una sola vez por refresco. La comprobación de salud SQLite deja de ejecutarse en el
   bucle corto y pasa a una cadencia de 30 minutos o a petición.
@@ -132,12 +147,24 @@ copia APFS temporal para poder restaurar el bundle completo ante cualquier fallo
 en profundidad, verifica las capacidades y rechaza una identidad efímera cuando existe un
 certificado de desarrollo válido.
 
-Build canónico instalado: **Regression 1.5.0 (21)**.
+Build canónico instalado: **Regression 1.5.1 (22)**.
 
 - Backup nativo previo:
-  `backups/native-packaging/regression-native-before-1.5.0-21-20260728-112147.tar.gz`.
+  `backups/native-packaging/regression-native-before-1.5.1-22-20260728-133034.tar.gz`.
 - Backup de aprendizaje previo:
-  `~/Library/Application Support/Regression/Compatibility/Backups/compatibility-before-1.5.0-21-20260728-112147-90283.sqlite`.
+  `~/Library/Application Support/Regression/Compatibility/Backups/compatibility-before-1.5.1-22-20260728-133034-27897.sqlite`.
+- Popover 1.5.1 instalado, con búsqueda y paginación:
+  `backups/native-audit-20260728/popover-responsive-1.5.1-22.png`, SHA-256
+  `72fd4833720cdb44805b5c3ec6ae0504654732bfcea74f8e6481ad93d53b1800`.
+- Búsqueda real filtrada a Grim Dawn:
+  `backups/native-audit-20260728/popover-search-1.5.1-22.png`, SHA-256
+  `018bba64759bd02f556b63237b97184d648b29784fd351294491c6a8e394aeec`.
+- Tienda de Steam renderizada mediante CrossOver, sin lanzar juegos:
+  `backups/native-audit-20260728/steam-render-1.5.1-22.png`, SHA-256
+  `02b3b04efda706e545ef6184429244d1e85b7304bc224426be2c4f845a27742f`.
+
+Evidencia visual del build precedente, conservada como historial:
+
 - Popover activo instalado:
   `backups/native-audit-20260728/popover-active-1.5.0-21.png`, SHA-256
   `00258f9eae95d58ff14d14015e2e2e2349d2cd3f82f0f48cab4d548e299002fb9`.
@@ -154,7 +181,11 @@ ausencia de secretos y ausencia de envío propio a servidores.
 ## Gates ejecutados
 
 - Swift 6.3.3 / Xcode 26.6 (17F113).
-- `swift test`: 42 casos, 41 ejecutados, 1 diagnóstico local omitido, 0 fallos.
+- `swift test`: 62 casos, 61 ejecutados, 1 diagnóstico local optativo omitido, 0 fallos.
+- `swift test --sanitize=thread`: 62 casos, 0 carreras detectadas y 0 fallos.
+- Cobertura LLVM del núcleo: 83,82 % de regiones y 70,30 % de funciones; los módulos antes casi
+  ciegos quedan cubiertos de forma aislada (actualizaciones 87,18 % de regiones, configuración
+  85,06 %, telemetría 84,24 %, backend 75,94 % y detección 75,59 %).
 - `swift build -Xswiftc -warnings-as-errors`: correcto.
 - `swift build -c release`: correcto.
 - `bash -n Scripts/*.sh build/*.sh`: correcto.
@@ -169,9 +200,10 @@ ausencia de secretos y ausencia de envío propio a servidores.
 - Inspección visual instalada: popover correcto, motor CrossOver activo, biblioteca compartida y
   distintivos verdes de Cube World y Grim Dawn visibles. No se lanzó ningún juego.
 - Estrés instalado del área Aprendizaje: doce transiciones, árbol de accesibilidad operativo,
-  106 elementos accesibles, ocho muestras posteriores entre 0 y 1,4 % de CPU y cierre/reapertura
-  limpios en menos de un segundo. `tools/diagnostics/stress-native-popover.sh` conserva este gate;
-  el cursor multicolor y el 99,7 % sostenido dejaron de reproducirse.
+  83 elementos accesibles con Juegos temporalmente colapsado y restaurado al final, y CPU de la
+  app estabilizada entre 0 y 1,8 % tras la interacción. El gate ahora localiza la sección aunque
+  una biblioteca grande deje controles fuera del viewport. `tools/diagnostics/stress-native-popover.sh`
+  conserva esta prueba; el cursor multicolor y el 99,7 % sostenido dejaron de reproducirse.
 - Cierre de la primera tanda mediante `Steam -shutdown` y terminación limpia de Regression, sin
   procesos Wine huérfanos; relanzamiento final correcto para validar el nuevo detector. Una prueba
   posterior reprodujo y corrigió la espera ilimitada del catálogo: la instancia final respondió a

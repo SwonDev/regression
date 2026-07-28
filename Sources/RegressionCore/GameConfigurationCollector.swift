@@ -22,11 +22,12 @@ public enum GameConfigurationCollector {
         game: SteamGame
     ) -> [String: String] {
         var values: [String: String] = [:]
-        var roots: [URL] = [
-            steamRootURL
-                .appendingPathComponent("steamapps/common", isDirectory: true)
-                .appendingPathComponent(game.installDirectory, isDirectory: true)
-        ]
+        let gameLibraryRoot = steamRootURL
+            .appendingPathComponent("steamapps/common", isDirectory: true)
+        var roots: [URL] = safeChildDirectory(
+            named: game.installDirectory,
+            in: gameLibraryRoot
+        ).map { [$0] } ?? []
 
         let fileManager = FileManager.default
         let userRoot = bottleURL.appendingPathComponent("drive_c/users", isDirectory: true)
@@ -35,14 +36,20 @@ public enum GameConfigurationCollector {
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         )) ?? []
-        for user in userDirectories {
+        for user in userDirectories where isDirectory(user, fileManager: fileManager) {
             for base in [
                 "Documents/My Games", "Documents", "AppData/Local", "AppData/Roaming"
             ] {
                 let directory = user.appendingPathComponent(base, isDirectory: true)
-                roots.append(directory.appendingPathComponent(game.name, isDirectory: true))
-                if game.installDirectory.caseInsensitiveCompare(game.name) != .orderedSame {
-                    roots.append(directory.appendingPathComponent(game.installDirectory, isDirectory: true))
+                if let gameNameRoot = safeChildDirectory(named: game.name, in: directory) {
+                    roots.append(gameNameRoot)
+                }
+                if game.installDirectory.caseInsensitiveCompare(game.name) != .orderedSame,
+                   let installRoot = safeChildDirectory(
+                       named: game.installDirectory,
+                       in: directory
+                   ) {
+                    roots.append(installRoot)
                 }
             }
         }
@@ -53,8 +60,10 @@ public enum GameConfigurationCollector {
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         )) ?? []
-        for user in steamUsers {
-            roots.append(user.appendingPathComponent(game.appID, isDirectory: true))
+        for user in steamUsers where isDirectory(user, fileManager: fileManager) {
+            if let appRoot = safeChildDirectory(named: game.appID, in: user) {
+                roots.append(appRoot)
+            }
         }
 
         var visited = Set<String>()
@@ -84,6 +93,29 @@ public enum GameConfigurationCollector {
             }
         }
         return values
+    }
+
+    private static func safeChildDirectory(named name: String, in parent: URL) -> URL? {
+        let component = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !component.isEmpty,
+              component != ".",
+              component != "..",
+              !component.contains("/"),
+              !component.contains("\\"),
+              !component.unicodeScalars.contains(where: { $0.value == 0 }) else {
+            return nil
+        }
+        let root = parent.standardizedFileURL.resolvingSymlinksInPath()
+        let candidate = root.appendingPathComponent(component, isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        guard candidate.path.hasPrefix(root.path + "/") else { return nil }
+        return candidate
+    }
+
+    private static func isDirectory(_ url: URL, fileManager: FileManager) -> Bool {
+        (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+            && fileManager.fileExists(atPath: url.path)
     }
 
     private static func isCandidate(_ url: URL) -> Bool {

@@ -178,3 +178,25 @@ public enum SystemInformation {
         #endif
     }
 }
+
+/// Ejecuta el inventario de configuración fuera del actor principal. El cálculo incluye hashes
+/// de DLLs y lectura acotada de ajustes, por lo que no debe competir con la interacción del menú.
+public actor ConfigurationSnapshotCollector {
+    public init() {}
+
+    public func snapshot(
+        bottleURL: URL,
+        backend: BackendKind,
+        providerVersion: String,
+        game: SteamGame? = nil,
+        steamRootURL: URL? = nil
+    ) -> [String: String] {
+        ConfigurationCollector.snapshot(
+            bottleURL: bottleURL,
+            backend: backend,
+            providerVersion: providerVersion,
+            game: game,
+            steamRootURL: steamRootURL
+        )
+    }
+}

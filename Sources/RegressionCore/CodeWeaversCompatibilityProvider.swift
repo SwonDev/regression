@@ -61,7 +61,7 @@ public enum CodeWeaversCompatibilityError: LocalizedError, Sendable {
     }
 }
 
-public final class CodeWeaversCompatibilityProvider: ExternalCompatibilityProviding, @unchecked Sendable {
+public final class CodeWeaversCompatibilityProvider: ExternalCompatibilityProviding, Sendable {
     public static let codeWeaversSource = ExternalCatalogSource(
         id: "codeweavers",
         displayName: "CodeWeavers Compatibility Database",
@@ -79,16 +79,19 @@ public final class CodeWeaversCompatibilityProvider: ExternalCompatibilityProvid
     private let session: URLSession
     private let maximumResponseBytes: Int
     private let now: @Sendable () -> Date
+    private let userAgent: String
 
     public init(
         session: URLSession? = nil,
         source: ExternalCatalogSource = CodeWeaversCompatibilityProvider.codeWeaversSource,
         maximumResponseBytes: Int = 3_000_000,
+        userAgent: String? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.source = source
         self.maximumResponseBytes = maximumResponseBytes
         self.now = now
+        self.userAgent = userAgent ?? Self.defaultUserAgent
         if let session {
             self.session = session
         } else {
@@ -117,7 +120,7 @@ public final class CodeWeaversCompatibilityProvider: ExternalCompatibilityProvid
         }
         var request = URLRequest(url: detailURL)
         request.httpMethod = "GET"
-        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         if let entityTag = validators?.entityTag {
             request.setValue(entityTag, forHTTPHeaderField: "If-None-Match")
         }
@@ -155,7 +158,7 @@ public final class CodeWeaversCompatibilityProvider: ExternalCompatibilityProvid
         }
         var request = URLRequest(url: searchURL)
         request.httpMethod = "GET"
-        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         let (data, response) = try await session.data(for: request)
         let http = try validated(response: response, data: data)
         guard http.statusCode == 200 else {
@@ -245,7 +248,14 @@ public final class CodeWeaversCompatibilityProvider: ExternalCompatibilityProvid
         return url.path == "/compatibility" || url.path.hasPrefix("/compatibility/")
     }
 
-    private static let userAgent = "Regression/1.4 (local compatibility reference; macOS)"
+    private static var defaultUserAgent: String {
+        let rawVersion = Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleShortVersionString"
+        ) as? String ?? "development"
+        let safeVersion = rawVersion.filter { $0.isASCII && ($0.isNumber || $0 == ".") }
+        return "Regression/\(safeVersion.isEmpty ? "development" : safeVersion) "
+            + "(local compatibility reference; macOS)"
+    }
 }
 
 enum CodeWeaversPageParser {

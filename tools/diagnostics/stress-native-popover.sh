@@ -16,13 +16,39 @@ osascript <<'APPLESCRIPT'
 tell application "System Events"
     tell process "Regression"
         set statusItem to menu bar item 1 of menu bar 2
-        if (count of pop overs of statusItem) is 0 then
-            click statusItem
-            delay 1
+        set scrollArea to missing value
+        repeat 3 times
+            try
+                set scrollArea to scroll area 1 of group 1 of pop over 1 of statusItem
+                exit repeat
+            on error
+                click statusItem
+                delay 1
+            end try
+        end repeat
+        if scrollArea is missing value then error "No se pudo abrir el panel de Regression."
+
+        -- Con bibliotecas grandes, Accesibilidad expone solo los controles cercanos al viewport.
+        -- Colapsar temporalmente Juegos hace visible Aprendizaje sin depender del número de filas.
+        set value of scroll bar 1 of scrollArea to 0
+        delay 0.25
+        set descendants to entire contents of scrollArea
+        set gamesTriangle to missing value
+        repeat with elementRef in descendants
+            try
+                if role of elementRef is "AXDisclosureTriangle" then
+                    set gamesTriangle to elementRef
+                    exit repeat
+                end if
+            end try
+        end repeat
+        if gamesTriangle is missing value then error "No se encontró el grupo Juegos instalados."
+        if value of gamesTriangle is true then
+            perform action "AXPress" of gamesTriangle
+            delay 0.35
         end if
 
         repeat 12 times
-            set scrollArea to scroll area 1 of group 1 of pop over 1 of statusItem
             set descendants to entire contents of scrollArea
             set triangleIndex to 0
             set learningTriangle to missing value
@@ -99,7 +125,23 @@ tell application "System Events"
         set statusItem to menu bar item 1 of menu bar 2
         set scrollArea to scroll area 1 of group 1 of pop over 1 of statusItem
         set descendants to entire contents of scrollArea
-        return count of descendants
+        set elementCount to count of descendants
+
+        -- Restaura la presentación habitual con Juegos instalados desplegado.
+        set value of scroll bar 1 of scrollArea to 0
+        delay 0.25
+        set descendants to entire contents of scrollArea
+        repeat with elementRef in descendants
+            try
+                if role of elementRef is "AXDisclosureTriangle" then
+                    if value of elementRef is false then
+                        perform action "AXPress" of elementRef
+                    end if
+                    exit repeat
+                end if
+            end try
+        end repeat
+        return elementCount
     end tell
 end tell
 APPLESCRIPT

@@ -12,14 +12,37 @@ public struct ProcessResult: Sendable {
     }
 }
 
-public actor ProcessRunner {
+public protocol ProcessRunning: Sendable {
+    func run(
+        executableURL: URL,
+        arguments: [String],
+        environment: [String: String]?
+    ) async throws -> ProcessResult
+}
+
+public protocol ProcessLaunching: Sendable {
+    func launch(
+        backend: BackendKind,
+        executableURL: URL,
+        arguments: [String],
+        logDirectoryURL: URL
+    ) async throws -> BackendLaunch
+
+    func reapFinishedProcesses() async
+}
+
+public protocol ProcessInspecting: Sendable {
+    func runningBackends() async -> RunningBackendState
+}
+
+public actor ProcessRunner: ProcessRunning {
     public init() {}
 
     public func run(
         executableURL: URL,
         arguments: [String] = [],
         environment: [String: String]? = nil
-    ) throws -> ProcessResult {
+    ) async throws -> ProcessResult {
         let temporaryDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("regression-process-\(UUID().uuidString)", isDirectory: true)
         try PrivateStorage.ensureDirectory(at: temporaryDirectory)
@@ -60,7 +83,7 @@ public actor ProcessRunner {
     }
 }
 
-public actor ProcessLauncher {
+public actor ProcessLauncher: ProcessLaunching {
     private var ownedProcesses: [Int32: Process] = [:]
 
     public init() {}
@@ -70,7 +93,7 @@ public actor ProcessLauncher {
         executableURL: URL,
         arguments: [String],
         logDirectoryURL: URL
-    ) throws -> BackendLaunch {
+    ) async throws -> BackendLaunch {
         try PrivateStorage.ensureDirectory(at: logDirectoryURL)
         try rotateLogs(in: logDirectoryURL, retaining: 20)
 
@@ -106,7 +129,7 @@ public actor ProcessLauncher {
         )
     }
 
-    public func reapFinishedProcesses() {
+    public func reapFinishedProcesses() async {
         ownedProcesses = ownedProcesses.filter { $0.value.isRunning }
     }
 
@@ -134,18 +157,54 @@ public actor ProcessLauncher {
     }
 }
 
-public actor ProcessInspector {
-    private let runner: ProcessRunner
+/// Lee únicamente la cola acotada de un log fuera del actor principal y la sanea antes de
+/// devolverla a la interfaz. Así un lanzamiento verboso no puede bloquear el menú ni filtrar
+/// rutas o credenciales en un mensaje de error.
+public actor ProcessLogReader {
+    public init() {}
+
+    public func redactedExcerpt(
+        at url: URL,
+        maximumReadBytes: Int = 65_536,
+        maximumOutputCharacters: Int = 2_000
+    ) -> String {
+        guard maximumReadBytes > 0,
+              maximumOutputCharacters > 0,
+              let handle = try? FileHandle(forReadingFrom: url) else {
+            return ""
+        }
+        defer { try? handle.close() }
+
+        let size = (try? handle.seekToEnd()) ?? 0
+        if size > UInt64(maximumReadBytes) {
+            try? handle.seek(toOffset: size - UInt64(maximumReadBytes))
+        } else {
+            try? handle.seek(toOffset: 0)
+        }
+        guard let data = try? handle.read(upToCount: maximumReadBytes) else {
+            return ""
+        }
+        let sanitized = PrivacySanitizer.redactedLogExcerpt(
+            String(decoding: data, as: UTF8.self),
+            limit: .max
+        )
+        return String(sanitized.suffix(maximumOutputCharacters))
+    }
+}
+
+public actor ProcessInspector: ProcessInspecting {
+    private let runner: any ProcessRunning
     private var cachedBackendsBySteamPID: [Int32: BackendKind] = [:]
 
-    public init(runner: ProcessRunner) {
+    public init(runner: any ProcessRunning) {
         self.runner = runner
     }
 
     public func runningBackends() async -> RunningBackendState {
         guard let result = try? await runner.run(
             executableURL: URL(fileURLWithPath: "/bin/ps"),
-            arguments: ["-axo", "pid=,command="]
+            arguments: ["-axo", "pid=,command="],
+            environment: nil
         ) else {
             return RunningBackendState()
         }
@@ -181,7 +240,8 @@ public actor ProcessInspector {
 
             guard let openFiles = try? await runner.run(
                 executableURL: URL(fileURLWithPath: "/usr/sbin/lsof"),
-                arguments: ["-n", "-P", "-Fn", "-p", String(pid)]
+                arguments: ["-n", "-P", "-Fn", "-p", String(pid)],
+                environment: nil
             ) else {
                 continue
             }

@@ -7,14 +7,19 @@ public enum SteamManifestParser {
         backend: BackendKind
     ) -> SteamGame? {
         guard
-            let appID = value(for: "appid", in: contents),
+            let rawAppID = value(for: "appid", in: contents),
+            let appID = SteamAppID.normalized(rawAppID),
             let name = value(for: "name", in: contents),
-            let installDirectory = value(for: "installdir", in: contents)
+            let installDirectory = value(for: "installdir", in: contents),
+            !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            !installDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else {
             return nil
         }
 
-        let bytes = value(for: "SizeOnDisk", in: contents).flatMap(Int64.init)
+        let bytes = value(for: "SizeOnDisk", in: contents)
+            .flatMap(Int64.init)
+            .flatMap { $0 >= 0 ? $0 : nil }
         return SteamGame(
             appID: appID,
             name: name,
@@ -64,6 +69,15 @@ public enum SteamManifestParser {
     }
 }
 
+/// Serializa la E/S de manifests fuera del actor principal de la interfaz.
+public actor SteamLibraryScanner {
+    public init() {}
+
+    public func games(in steamRootURL: URL, backend: BackendKind) -> [SteamGame] {
+        SteamManifestParser.games(in: steamRootURL, backend: backend)
+    }
+}
+
 public enum PrivacySanitizer {
     public static func normalizedPath(_ path: String, homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) -> String {
         let home = homeDirectory.standardizedFileURL.path
@@ -78,7 +92,9 @@ public enum PrivacySanitizer {
             let argument = arguments[index]
             if argument == "-applaunch", index + 1 < arguments.count {
                 safe.append(argument)
-                safe.append(arguments[index + 1].filter(\.isNumber))
+                if let appID = SteamAppID.normalized(arguments[index + 1]) {
+                    safe.append(appID)
+                }
                 index += 2
                 continue
             }

@@ -1,12 +1,25 @@
 import Foundation
 
 public actor InstallationDiscovery {
-    private let runner: ProcessRunner
+    private let runner: any ProcessRunning
     private let fileManager: FileManager
+    private let homeDirectoryURL: URL
+    private let applicationRoots: [URL]
 
-    public init(runner: ProcessRunner, fileManager: FileManager = .default) {
+    public init(
+        runner: any ProcessRunning,
+        fileManager: FileManager = .default,
+        homeDirectoryURL: URL? = nil,
+        applicationRoots: [URL]? = nil
+    ) {
         self.runner = runner
         self.fileManager = fileManager
+        let home = homeDirectoryURL ?? fileManager.homeDirectoryForCurrentUser
+        self.homeDirectoryURL = home
+        self.applicationRoots = applicationRoots ?? [
+            URL(fileURLWithPath: "/Applications", isDirectory: true),
+            home.appendingPathComponent("Applications", isDirectory: true),
+        ]
     }
 
     public func discover(regressionApplicationURL: URL? = nil) async -> InstallationSnapshot {
@@ -34,7 +47,7 @@ public actor InstallationDiscovery {
         let applicationURL = applications.first(where: hasRequiredCrossOverTools)
             ?? applications[0]
 
-        let bottleRoot = fileManager.homeDirectoryForCurrentUser
+        let bottleRoot = homeDirectoryURL
             .appendingPathComponent("Library/Application Support/CrossOver/Bottles", isDirectory: true)
         let bottleURLs = (try? fileManager.contentsOfDirectory(
             at: bottleRoot,
@@ -94,7 +107,8 @@ public actor InstallationDiscovery {
 
         let statusResult = try? await runner.run(
             executableURL: bottleCLI,
-            arguments: ["--bottle", bottleURL.lastPathComponent, "--status"]
+            arguments: ["--bottle", bottleURL.lastPathComponent, "--status"],
+            environment: nil
         )
         let statusText = [statusResult?.standardOutput, statusResult?.standardError]
             .compactMap { $0 }
@@ -144,7 +158,7 @@ public actor InstallationDiscovery {
                 .appendingPathComponent("Regression.app", isDirectory: true)
         }
 
-        let bottle = fileManager.homeDirectoryForCurrentUser
+        let bottle = homeDirectoryURL
             .appendingPathComponent("Library/Application Support/Regression/Bottles/Steam", isDirectory: true)
         let steam = bottle.appendingPathComponent("drive_c/Program Files (x86)/Steam/Steam.exe")
         let modernLauncher = resolvedApplicationURL.appendingPathComponent("Contents/MacOS/regression-engine")
@@ -175,13 +189,9 @@ public actor InstallationDiscovery {
     }
 
     private func crossOverApplications() -> [URL] {
-        let roots = [
-            URL(fileURLWithPath: "/Applications", isDirectory: true),
-            fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Applications", isDirectory: true)
-        ]
         var candidates: [URL] = []
 
-        for root in roots {
+        for root in applicationRoots {
             guard let contents = try? fileManager.contentsOfDirectory(
                 at: root,
                 includingPropertiesForKeys: nil,

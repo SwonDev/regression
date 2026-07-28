@@ -40,6 +40,52 @@ final class TelemetryCoordinatorTests: XCTestCase {
         XCTAssertEqual(runs.first(where: { $0.id == first.id })?.result, .failed)
         XCTAssertEqual(runs.first(where: { $0.id == second.id })?.result, .preparing)
     }
+
+    func testPrimaryProcessLifecycleFinishesAsUnverifiedInsteadOfInferringSuccess() async throws {
+        let fixture = try TelemetryFixture()
+        defer { fixture.remove() }
+        let logURL = fixture.root.appendingPathComponent("gameprocess_log.txt")
+        XCTAssertTrue(FileManager.default.createFile(atPath: logURL.path, contents: nil))
+        await fixture.telemetry.beginMonitoring(logURL: logURL)
+
+        let context = fixture.context()
+        try await fixture.telemetry.registerLaunchIntent(
+            context: context,
+            bottleURL: fixture.bottleURL
+        )
+        let log = #"""
+        [2026-07-28 12:00:00] AppID 219990 adding PID 4242 as a tracked process "C:\Games\Grim Dawn\Grim Dawn.exe"
+        [2026-07-28 12:05:00] AppID 219990 no longer tracking PID 4242, exit code 0
+
+        """#
+        let handle = try FileHandle(forWritingTo: logURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(log.utf8))
+        try handle.close()
+
+        let changed = await fixture.telemetry.poll(
+            backend: .regression,
+            logURL: logURL,
+            games: [fixture.game],
+            system: fixture.context().system,
+            steamRootURL: fixture.root.appendingPathComponent("Steam", isDirectory: true),
+            bottleURL: fixture.bottleURL,
+            bottleName: "Steam",
+            providerVersion: "1.5"
+        )
+
+        XCTAssertTrue(changed)
+        let runs = try await fixture.repository.recentRuns()
+        let run = try XCTUnwrap(runs.first)
+        XCTAssertEqual(run.processID, 4242)
+        XCTAssertEqual(run.exitCode, 0)
+        XCTAssertEqual(run.result, .unknown)
+        XCTAssertNil(run.verification)
+        let profiles = try await fixture.repository.compatibilityProfiles()
+        let profile = try XCTUnwrap(profiles.first)
+        XCTAssertEqual(profile.unverifiedRuns, 1)
+        XCTAssertEqual(profile.perfectRuns, 0)
+    }
 }
 
 private final class TelemetryFixture {
@@ -47,6 +93,16 @@ private final class TelemetryFixture {
     let bottleURL: URL
     let repository: CompatibilityRepository
     let telemetry: TelemetryCoordinator
+
+    var game: SteamGame {
+        SteamGame(
+            appID: "219990",
+            name: "Grim Dawn",
+            installDirectory: "Grim Dawn",
+            manifestURL: root.appendingPathComponent("Steam/steamapps/appmanifest_219990.acf"),
+            sourceBackend: .regression
+        )
+    }
 
     init() throws {
         root = FileManager.default.temporaryDirectory

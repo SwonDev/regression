@@ -26,12 +26,35 @@ public struct CrossOverUpdateStatus: Equatable, Sendable {
 }
 
 public actor CrossOverUpdateChecker {
-    public init() {}
+    public typealias Fetch = @Sendable (URLRequest) async throws -> (Data, URLResponse)
+    public typealias PreferenceValue = @Sendable (String) -> Bool?
+
+    private let fetch: Fetch
+    private let preferenceValue: PreferenceValue
+    private let now: @Sendable () -> Date
+    private let maximumResponseBytes: Int
+
+    public init(
+        fetch: @escaping Fetch = { request in
+            try await URLSession.shared.data(for: request)
+        },
+        preferenceValue: @escaping PreferenceValue = { key in
+            UserDefaults(suiteName: "com.codeweavers.CrossOver")?
+                .object(forKey: key) as? Bool
+        },
+        maximumResponseBytes: Int = 1_048_576,
+        now: @escaping @Sendable () -> Date = Date.init
+    ) {
+        self.fetch = fetch
+        self.preferenceValue = preferenceValue
+        self.maximumResponseBytes = maximumResponseBytes
+        self.now = now
+    }
 
     public func check(_ installation: CrossOverInstallation) async -> CrossOverUpdateStatus {
-        let preferences = UserDefaults(suiteName: "com.codeweavers.CrossOver")
-        let automaticChecks = preferences?.object(forKey: "SUEnableAutomaticChecks") as? Bool ?? false
-        let automaticInstall = preferences?.object(forKey: "SUAutomaticallyUpdate") as? Bool ?? false
+        let automaticChecks = preferenceValue("SUEnableAutomaticChecks") ?? false
+        let automaticInstall = preferenceValue("SUAutomaticallyUpdate") ?? false
+        let checkedAt = now()
 
         guard let feedURL = installation.feedURL else {
             return CrossOverUpdateStatus(
@@ -39,7 +62,8 @@ public actor CrossOverUpdateChecker {
                 availableVersion: nil,
                 updateAvailable: false,
                 automaticChecksEnabled: automaticChecks,
-                automaticInstallationEnabled: automaticInstall
+                automaticInstallationEnabled: automaticInstall,
+                checkedAt: checkedAt
             )
         }
 
@@ -47,32 +71,26 @@ public actor CrossOverUpdateChecker {
             var request = URLRequest(url: feedURL)
             request.timeoutInterval = 8
             request.cachePolicy = .reloadRevalidatingCacheData
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await fetch(request)
             guard let httpResponse = response as? HTTPURLResponse,
                   (200..<300).contains(httpResponse.statusCode) else {
                 throw UpdateCheckFailure.invalidResponse
             }
-            let delegate = AppcastVersionParser()
-            let parser = XMLParser(data: data)
-            parser.delegate = delegate
-            guard parser.parse(), parser.parserError == nil else {
-                throw UpdateCheckFailure.invalidAppcast
+            guard data.count <= maximumResponseBytes else {
+                throw UpdateCheckFailure.responseTooLarge
             }
-            guard let latest = delegate.versions.max(by: {
-                $0.compare($1, options: .numeric) == .orderedAscending
-            }) else {
-                throw UpdateCheckFailure.missingVersion
-            }
-            let updateAvailable = installation.version.compare(
+            let latest = try CrossOverAppcast.latestVersion(in: data)
+            let updateAvailable = CrossOverAppcast.isNewer(
                 latest,
-                options: .numeric
-            ) == .orderedAscending
+                than: installation.version
+            )
             return CrossOverUpdateStatus(
                 installedVersion: installation.version,
                 availableVersion: latest,
                 updateAvailable: updateAvailable,
                 automaticChecksEnabled: automaticChecks,
-                automaticInstallationEnabled: automaticInstall
+                automaticInstallationEnabled: automaticInstall,
+                checkedAt: checkedAt
             )
         } catch {
             return CrossOverUpdateStatus(
@@ -80,14 +98,37 @@ public actor CrossOverUpdateChecker {
                 availableVersion: nil,
                 updateAvailable: false,
                 automaticChecksEnabled: automaticChecks,
-                automaticInstallationEnabled: automaticInstall
+                automaticInstallationEnabled: automaticInstall,
+                checkedAt: checkedAt
             )
         }
     }
 }
 
-private enum UpdateCheckFailure: Error {
+enum CrossOverAppcast {
+    static func latestVersion(in data: Data) throws -> String {
+        let delegate = AppcastVersionParser()
+        let parser = XMLParser(data: data)
+        parser.delegate = delegate
+        guard parser.parse(), parser.parserError == nil else {
+            throw UpdateCheckFailure.invalidAppcast
+        }
+        guard let latest = delegate.versions.max(by: {
+            $0.compare($1, options: .numeric) == .orderedAscending
+        }) else {
+            throw UpdateCheckFailure.missingVersion
+        }
+        return latest
+    }
+
+    static func isNewer(_ candidate: String, than installed: String) -> Bool {
+        installed.compare(candidate, options: .numeric) == .orderedAscending
+    }
+}
+
+enum UpdateCheckFailure: Error {
     case invalidResponse
+    case responseTooLarge
     case invalidAppcast
     case missingVersion
 }
