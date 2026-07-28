@@ -95,7 +95,7 @@ public actor TelemetryCoordinator {
                     )
                 let context = pendingRun?.context ?? RunContext(
                     appID: appID,
-                    gameName: gameNames[appID] ?? "Steam App \(appID)",
+                    gameName: gameNames[appID] ?? SteamGameName.placeholder(for: appID),
                     backend: backend,
                     bottleName: bottleName,
                     providerVersion: providerVersion,

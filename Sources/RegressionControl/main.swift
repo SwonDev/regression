@@ -287,6 +287,210 @@ enum RegressionControl {
                 )
             }
 
+        case "research":
+            try await repository.prepare()
+            let cases = try await repository.researchCases()
+            if cases.isEmpty {
+                print("No hay expedientes de I+D abiertos ni históricos.")
+            }
+            for researchCase in cases {
+                let experiments = try await repository.researchExperiments(
+                    caseID: researchCase.id
+                )
+                print(
+                    researchCase.id.uuidString,
+                    researchCase.appID,
+                    researchCase.gameName,
+                    "estado=\(researchCase.state.rawValue)",
+                    "pruebas=\(experiments.count)",
+                    researchCase.symptom
+                )
+            }
+
+        case "research-protocol":
+            print("Protocolo de I+D: revisión", CompatibilityResearchProtocol.revision)
+            print("Puertas obligatorias:")
+            for gate in CompatibilityResearchProtocol.mandatoryGates {
+                print("-", gate.rawValue)
+            }
+            print("Evidencias obligatorias:")
+            for artifact in CompatibilityResearchProtocol.mandatoryArtifacts {
+                print("-", artifact.rawValue)
+            }
+            print(
+                "El cierre exige una ejecución perfecta exacta de Regression, aislamiento, rollback y huellas distintas."
+            )
+
+        case "research-open":
+            guard arguments.count >= 2,
+                  let appID = SteamAppID.normalized(arguments[1]) else {
+                throw RegressionCoreError.launchFailed(
+                    "Usa research-open APP_ID --symptom TEXTO --expected TEXTO [--name NOMBRE]"
+                )
+            }
+            guard let symptom = option("--symptom", in: arguments),
+                  let expected = option("--expected", in: arguments) else {
+                throw RegressionCoreError.launchFailed(
+                    "Faltan --symptom y --expected con criterios concretos"
+                )
+            }
+            let installedGames = (installations.crossOver.map {
+                SteamManifestParser.games(in: $0.steamRootURL, backend: .crossOver)
+            } ?? []) + SteamManifestParser.games(
+                in: installations.regression.steamRootURL,
+                backend: .regression
+            )
+            let name = option("--name", in: arguments)
+                ?? installedGames.first(where: { $0.appID == appID })?.name
+                ?? SteamGameName.placeholder(for: appID)
+            let researchCase = CompatibilityResearchCase(
+                appID: appID,
+                gameName: name,
+                symptom: symptom,
+                expectedBehavior: expected
+            )
+            try await repository.registerResearchCase(researchCase)
+            print("Expediente abierto:", researchCase.id.uuidString, name)
+
+        case "research-hypothesis":
+            guard arguments.count >= 2,
+                  let caseID = UUID(uuidString: arguments[1]),
+                  let rankText = option("--rank", in: arguments),
+                  let rank = Int(rankText),
+                  let statement = option("--statement", in: arguments),
+                  let prediction = option("--prediction", in: arguments) else {
+                throw RegressionCoreError.launchFailed(
+                    "Usa research-hypothesis CASE_ID --rank N --statement TEXTO --prediction TEXTO"
+                )
+            }
+            let hypothesis = ResearchHypothesis(
+                caseID: caseID,
+                rank: rank,
+                statement: statement,
+                prediction: prediction
+            )
+            try await repository.registerResearchHypothesis(hypothesis)
+            print("Hipótesis registrada:", hypothesis.id.uuidString)
+
+        case "research-stage":
+            guard arguments.count >= 2,
+                  let caseID = UUID(uuidString: arguments[1]),
+                  let dimensionName = option("--dimension", in: arguments),
+                  let dimension = ResearchExperimentDimension(rawValue: dimensionName),
+                  let change = option("--change", in: arguments),
+                  let rollback = option("--rollback", in: arguments),
+                  let baseline = option("--baseline", in: arguments) else {
+                throw RegressionCoreError.launchFailed(
+                    "Usa research-stage CASE_ID --dimension DIMENSIÓN --change TEXTO --rollback REFERENCIA --baseline HUELLA [--hypothesis UUID]"
+                )
+            }
+            let hypothesisID: UUID?
+            if let value = option("--hypothesis", in: arguments) {
+                guard let parsed = UUID(uuidString: value) else {
+                    throw RegressionCoreError.launchFailed("--hypothesis no contiene un UUID válido")
+                }
+                hypothesisID = parsed
+            } else {
+                hypothesisID = nil
+            }
+            let experiment = ResearchExperiment(
+                caseID: caseID,
+                hypothesisID: hypothesisID,
+                dimension: dimension,
+                changeSummary: change,
+                state: .ready,
+                isIsolated: true,
+                rollbackReference: rollback,
+                baselineEngineFingerprint: baseline
+            )
+            try await repository.registerResearchExperiment(experiment)
+            try await repository.beginResearch(caseID: caseID)
+            print("Experimento aislado preparado:", experiment.id.uuidString)
+
+        case "research-attach-run":
+            guard arguments.count >= 3,
+                  let experimentID = UUID(uuidString: arguments[1]),
+                  let runID = UUID(uuidString: arguments[2]) else {
+                throw RegressionCoreError.launchFailed(
+                    "Usa research-attach-run EXPERIMENT_ID RUN_ID"
+                )
+            }
+            try await repository.attachResearchRun(experimentID: experimentID, runID: runID)
+            print("Ejecución exacta vinculada al experimento.")
+
+        case "research-gate":
+            guard arguments.count >= 4,
+                  let experimentID = UUID(uuidString: arguments[1]),
+                  let gate = ResearchValidationGate(rawValue: arguments[2]),
+                  let status = ResearchGateStatus(rawValue: arguments[3]) else {
+                throw RegressionCoreError.launchFailed(
+                    "Usa research-gate EXPERIMENT_ID PUERTA pending|passed|failed [--evidence REFERENCIA]"
+                )
+            }
+            try await repository.recordResearchGate(ResearchGateResult(
+                experimentID: experimentID,
+                gate: gate,
+                status: status,
+                evidenceReference: option("--evidence", in: arguments) ?? ""
+            ))
+            print("Puerta registrada:", gate.rawValue, status.rawValue)
+
+        case "research-artifact":
+            guard arguments.count >= 3,
+                  let experimentID = UUID(uuidString: arguments[1]),
+                  let kind = ResearchArtifactKind(rawValue: arguments[2]),
+                  let reference = option("--reference", in: arguments) else {
+                throw RegressionCoreError.launchFailed(
+                    "Usa research-artifact EXPERIMENT_ID TIPO --reference RUTA --fingerprint HUELLA"
+                )
+            }
+            try await repository.recordResearchArtifact(ResearchArtifact(
+                experimentID: experimentID,
+                kind: kind,
+                reference: reference,
+                fingerprint: option("--fingerprint", in: arguments)
+            ))
+            print("Evidencia registrada:", kind.rawValue)
+
+        case "research-finish":
+            guard arguments.count >= 3,
+                  let experimentID = UUID(uuidString: arguments[1]) else {
+                throw RegressionCoreError.launchFailed(
+                    "Usa research-finish EXPERIMENT_ID failed|rolledBack [--note TEXTO]"
+                )
+            }
+            let state: ResearchExperimentState
+            switch arguments[2] {
+            case "failed": state = .failed
+            case "rolledBack": state = .rolledBack
+            default:
+                throw RegressionCoreError.launchFailed(
+                    "El resultado debe ser failed o rolledBack"
+                )
+            }
+            try await repository.finishResearchExperiment(
+                id: experimentID,
+                state: state,
+                notes: option("--note", in: arguments) ?? "Resultado conservado para comparación"
+            )
+            print("Experimento cerrado:", state.rawValue)
+
+        case "research-complete":
+            guard arguments.count >= 3,
+                  let caseID = UUID(uuidString: arguments[1]),
+                  let experimentID = UUID(uuidString: arguments[2]),
+                  let resolution = option("--resolution", in: arguments) else {
+                throw RegressionCoreError.launchFailed(
+                    "Usa research-complete CASE_ID EXPERIMENT_ID --resolution TEXTO"
+                )
+            }
+            try await repository.completeResearchCase(
+                caseID: caseID,
+                experimentID: experimentID,
+                resolution: resolution
+            )
+            print("Expediente verificado y cerrado con evidencia reproducible.")
+
         case "database":
             try await repository.prepare()
             let health = try await repository.databaseHealth()
@@ -305,6 +509,11 @@ enum RegressionControl {
             print("Mediciones de rendimiento:", health.optimizationAssessmentCount)
             print("Requisitos declarativos:", health.runtimeRequirementCount)
             print("Recibos de reparación:", health.repairReceiptCount)
+            print("Expedientes de I+D:", health.researchCaseCount)
+            print("Hipótesis de I+D:", health.researchHypothesisCount)
+            print("Experimentos de I+D:", health.researchExperimentCount)
+            print("Puertas de validación:", health.researchGateCount)
+            print("Evidencias de I+D:", health.researchArtifactCount)
             if let backup = await repository.lastMigrationBackup() {
                 print("Backup de migración:", PrivacySanitizer.normalizedPath(backup.path))
             }
@@ -410,7 +619,6 @@ enum RegressionControl {
             guard let backend = BackendKind(rawValue: backendName) else {
                 throw RegressionCoreError.launchFailed("Usa --backend crossOver o --backend regression")
             }
-            let gameName = option("--name", in: arguments) ?? "Steam App \(appID)"
             let note = option("--note", in: arguments) ?? "Observación de compatibilidad importada"
             let bottleURL: URL
             let steamRootURL: URL
@@ -430,6 +638,9 @@ enum RegressionControl {
             }
             let game = SteamManifestParser.games(in: steamRootURL, backend: backend)
                 .first { $0.appID == appID }
+            let gameName = option("--name", in: arguments)
+                ?? game?.name
+                ?? SteamGameName.placeholder(for: appID)
             var configuration = ConfigurationCollector.snapshot(
                 bottleURL: bottleURL,
                 backend: backend,
@@ -480,7 +691,7 @@ enum RegressionControl {
             print("Exportación guardada en", PrivacySanitizer.normalizedPath(path))
 
         default:
-            print("Uso: regressionctl [status | share-library --shutdown [--restart] | launch APP_ID [--backend crossOver|regression] | switch crossOver|regression | runs | profiles | engines | certifications | technologies | candidates | optimization | requirements | repair-receipts | database | catalog | catalog-sync APP_ID [--force] | comparisons | verify RUN_ID perfect|playable|failed [--note TEXTO] | observe APP_ID perfect|playable|failed --backend MOTOR --name NOMBRE [--note TEXTO] | observations | export RUTA]")
+            print("Uso: regressionctl [status | share-library --shutdown [--restart] | launch APP_ID [--backend crossOver|regression] | switch crossOver|regression | runs | profiles | engines | certifications | technologies | candidates | optimization | requirements | repair-receipts | research | research-protocol | research-open | research-hypothesis | research-stage | research-attach-run | research-gate | research-artifact | research-finish | research-complete | database | catalog | catalog-sync APP_ID [--force] | comparisons | verify RUN_ID perfect|playable|failed [--note TEXTO] | observe APP_ID perfect|playable|failed --backend MOTOR --name NOMBRE [--note TEXTO] | observations | export RUTA]")
             exit(64)
         }
     }

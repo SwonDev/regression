@@ -59,6 +59,8 @@ final class RegressionAppModel {
     var certifications: [VerifiedGameCertification] = VerifiedGameCatalog.all
     var runtimeTechnologies: [RuntimeTechnology] = RuntimeTechnologyCatalog.all
     var activeRuntimeCandidateCount = 0
+    var activeResearchCaseCount = 0
+    var activeResearchExperimentCount = 0
     var externalCatalogEntries: [String: ExternalCompatibilityEntry] = [:]
     var compatibilityComparisons: [CompatibilityComparison] = []
     var databaseHealth: CompatibilityDatabaseHealth?
@@ -784,6 +786,13 @@ final class RegressionAppModel {
         games = byID.values.sorted {
             $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
         }
+        do {
+            try await repository.reconcileDiscoveredGames(games)
+        } catch {
+            logger.error(
+                "No se pudieron reconciliar los nombres públicos: \(error.localizedDescription, privacy: .public)"
+            )
+        }
     }
 
     private func beginTelemetryMonitoring() async {
@@ -842,6 +851,11 @@ final class RegressionAppModel {
             let refreshedActiveCandidateCount = try await repository.runtimeCandidateCount(
                 activeOnly: true
             )
+            let refreshedActiveResearchCaseCount = try await repository.researchCaseCount(
+                activeOnly: true
+            )
+            let refreshedActiveResearchExperimentCount = try await repository
+                .researchExperimentCount(activeOnly: true)
             let refreshedExternalEntries = try await repository.externalEntries(
                 sourceID: CodeWeaversCompatibilityProvider.codeWeaversSource.id
             )
@@ -853,6 +867,8 @@ final class RegressionAppModel {
             certifications = refreshedCertifications
             runtimeTechnologies = refreshedTechnologies
             activeRuntimeCandidateCount = refreshedActiveCandidateCount
+            activeResearchCaseCount = refreshedActiveResearchCaseCount
+            activeResearchExperimentCount = refreshedActiveResearchExperimentCount
             profilesByAppID = Dictionary(grouping: refreshedProfiles, by: \.appID)
             certificationsByAppID = Dictionary(grouping: refreshedCertifications, by: \.appID)
             externalCatalogEntries = Dictionary(

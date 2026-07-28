@@ -124,7 +124,7 @@ Los controles conservan su forma nativa. Los contenedores auxiliares usan radios
 - **Acción principal:** un botón prominente cuyo texto cambia entre “Abrir Steam”, “Mostrar Steam” y “Reintentar”.
 - **Selector de motor:** selector nativo que explica que cambiar de motor cerrará primero el Steam activo.
 - **Juegos:** campo nativo de búsqueda por nombre o App ID y filas compactas reveladas en lotes de 24, con nombre, App ID y botón de reproducción; no muestran datos privados de la cuenta. La certificación local verde y la referencia pública azul/gris son líneas independientes y siempre etiquetadas.
-- **Historial:** resumen de ejecuciones, perfiles y motores locales, blindados revelados en lotes de 8, comparación pública opcional y exportación bajo demanda. La sincronización muestra progreso y conserva el último dato válido si falla la red.
+- **Historial:** resumen de ejecuciones, perfiles y motores locales, blindados revelados en lotes de 8, comparación pública opcional y exportación bajo demanda. La sincronización muestra progreso y conserva el último dato válido si falla la red. La sección distingue candidatos tecnológicos de casos y pruebas reales de I+D; los contadores nunca presentan uno como si fuese el otro.
 - **Errores:** mensaje comprensible, causa técnica desplegable y una acción concreta como “Abrir CrossOver” o “Usar motor de Regression”.
 
 ## Do's and Don'ts

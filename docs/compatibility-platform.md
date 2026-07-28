@@ -1,6 +1,6 @@
 # Plataforma local de compatibilidad y aprendizaje
 
-Fecha de contrato: 28 de julio de 2026. Esquema SQLite actual: **v9**.
+Fecha de contrato: 28 de julio de 2026. Esquema SQLite actual: **v10**.
 
 Esta capa conserva evidencia reproducible de cada ejecución y permite comparar Regression con
 fuentes públicas. No altera el motor, la botella ni la configuración de un juego. La aplicación
@@ -39,6 +39,7 @@ integridad en cada apertura.
 | Evolución de runtimes | `runtime_technologies`, `runtime_candidates` | Baselines, versiones observadas y candidatos aislados con gates de promoción. |
 | Rendimiento | `optimization_assessments` | Métricas separadas de la certificación funcional. |
 | Requisitos y reparación | `game_runtime_requirements`, `repair_receipts` | Requisitos declarativos y recibos de recetas permitidas; nunca comandos aprendidos. |
+| Expedientes de I+D | `compatibility_research_cases`, `research_hypotheses`, `research_experiments`, `research_gate_results`, `research_artifacts` | Hipótesis falsables, pruebas de una variable, puertas funcionales y referencias privadas con huella. |
 | Migraciones | `schema_migrations` + `PRAGMA user_version` | Evolución atómica y auditable. |
 
 Dos triggers de inserción/actualización protegen tanto ejecuciones como observaciones: SQLite
@@ -65,6 +66,13 @@ Una certificación funcional y una optimización son afirmaciones distintas. El 
 ruta reproducible; las versiones más recientes se registran como candidatos aislados y no pueden
 promocionarse sin rollback, matriz completa y rendimiento medido. El contrato detallado está en
 [`runtime-evolution.md`](runtime-evolution.md).
+
+Un candidato tampoco equivale a un experimento: el primero describe una tecnología posible; el
+segundo demuestra qué hipótesis se probó, qué única dimensión cambió y qué run exacto produjo el
+resultado. El esquema v10 impide cerrar un expediente sin las ocho puertas funcionales, ocho
+artefactos con huella, identidades distintas de baseline/candidato y una certificación perfecta
+activa del mismo run de Regression. Los expedientes fallidos se conservan y una corrección del
+veredicto reabre automáticamente el que se había cerrado.
 
 ## Identidad normalizada de motor
 
@@ -138,6 +146,10 @@ La v9 cierra dos vías de falsa optimización: todas las métricas disponibles d
 cobertura en baseline y candidato, y los valores deben ser finitos, positivos y acotados. Además,
 la resolución y el preset dejan de ser opcionales para `bestKnown`, y la política Swift rechaza
 fuentes cuyo host no coincida con el sitio oficial registrado para la tecnología.
+La v10 añade expedientes de I+D, hipótesis falsables, experimentos de una sola dimensión,
+puertas y artefactos con huella. Sus triggers impiden cerrar un caso sin aislamiento, rollback,
+evidencia completa y el blindado perfecto del run exacto de Regression; una corrección posterior
+del veredicto reabre el expediente.
 
 Comprobaciones:
 
@@ -147,6 +159,8 @@ Regression.app/Contents/SharedSupport/bin/regressionctl engines
 Regression.app/Contents/SharedSupport/bin/regressionctl technologies
 Regression.app/Contents/SharedSupport/bin/regressionctl candidates
 Regression.app/Contents/SharedSupport/bin/regressionctl optimization
+Regression.app/Contents/SharedSupport/bin/regressionctl research
+Regression.app/Contents/SharedSupport/bin/regressionctl research-protocol
 Regression.app/Contents/SharedSupport/bin/regressionctl catalog
 Regression.app/Contents/SharedSupport/bin/regressionctl comparisons
 Regression.app/Contents/SharedSupport/bin/regressionctl export /tmp/regression.json

@@ -27,6 +27,23 @@ public enum SteamAppID {
     }
 }
 
+public enum SteamGameName {
+    public static func placeholder(for appID: String) -> String {
+        let canonicalAppID = SteamAppID.normalized(appID) ?? appID
+        return "Steam App \(canonicalAppID)"
+    }
+
+    public static func normalized(_ value: String, appID: String) -> String {
+        let candidate = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return candidate.isEmpty ? placeholder(for: appID) : candidate
+    }
+
+    public static func isPlaceholder(_ value: String, appID: String) -> Bool {
+        normalized(value, appID: appID)
+            .caseInsensitiveCompare(placeholder(for: appID)) == .orderedSame
+    }
+}
+
 public enum InstallationHealth: String, Codable, Sendable {
     case ready
     case updateRequired
@@ -618,6 +635,11 @@ public struct CompatibilityDatabaseHealth: Codable, Equatable, Sendable {
     public let optimizationAssessmentCount: Int
     public let runtimeRequirementCount: Int
     public let repairReceiptCount: Int
+    public let researchCaseCount: Int
+    public let researchHypothesisCount: Int
+    public let researchExperimentCount: Int
+    public let researchGateCount: Int
+    public let researchArtifactCount: Int
 
     public var isHealthy: Bool {
         integrity == "ok" && foreignKeyViolations == 0

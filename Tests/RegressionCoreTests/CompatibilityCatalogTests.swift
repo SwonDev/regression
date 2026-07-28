@@ -4,6 +4,59 @@ import Foundation
 import XCTest
 
 final class CompatibilityCatalogTests: XCTestCase {
+    func testProvisionalSteamAppNameCannotReplaceKnownManifestName() async throws {
+        let directory = temporaryDirectory("game-name-precedence")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repository = CompatibilityRepository(
+            databaseURL: directory.appendingPathComponent("compatibility.sqlite")
+        )
+        try await repository.prepare()
+
+        let known = makeContext(appID: "4570720", name: "DragonSword : Awakening")
+        try await repository.beginRun(known)
+        try await repository.failRunBeforeLaunch(id: known.id, reason: "prueba controlada")
+
+        let provisional = makeContext(appID: "4570720", name: "steam app 4570720")
+        try await repository.beginRun(provisional)
+        try await repository.failRunBeforeLaunch(id: provisional.id, reason: "prueba controlada")
+
+        let runs = try await repository.recentRuns()
+        XCTAssertEqual(runs.count, 2)
+        XCTAssertEqual(
+            Set(runs.map(\.gameName)),
+            Set(["DragonSword : Awakening"]),
+            "Un evento temprano de telemetría no puede degradar un nombre público ya conocido."
+        )
+        try await repository.close()
+    }
+
+    func testManifestReconciliationRepairsHistoricalProvisionalName() async throws {
+        let directory = temporaryDirectory("game-name-reconciliation")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repository = CompatibilityRepository(
+            databaseURL: directory.appendingPathComponent("compatibility.sqlite")
+        )
+        try await repository.prepare()
+
+        let provisional = makeContext(appID: "4570720", name: "Steam App 4570720")
+        try await repository.beginRun(provisional)
+        try await repository.failRunBeforeLaunch(id: provisional.id, reason: "prueba controlada")
+        try await repository.reconcileDiscoveredGames([
+            SteamGame(
+                appID: "4570720",
+                name: "DragonSword : Awakening",
+                installDirectory: "DragonSword  Awakening",
+                manifestURL: directory.appendingPathComponent("appmanifest_4570720.acf"),
+                sourceBackend: .crossOver
+            )
+        ])
+
+        let runs = try await repository.recentRuns()
+        let run = try XCTUnwrap(runs.first)
+        XCTAssertEqual(run.gameName, "DragonSword : Awakening")
+        try await repository.close()
+    }
+
     func testLegacyDatabaseMigratesAtomicallyAndPreservesPerfectGameplayEvidence() async throws {
         let directory = temporaryDirectory("legacy-migration")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -38,6 +91,12 @@ final class CompatibilityCatalogTests: XCTestCase {
                 DROP TRIGGER IF EXISTS run_verifications_complete_perfect_update;
                 DROP TRIGGER IF EXISTS observations_complete_perfect_insert;
                 DROP TRIGGER IF EXISTS observations_complete_perfect_update;
+                DROP TRIGGER IF EXISTS research_case_reopens_after_verdict_correction;
+                DROP TABLE IF EXISTS research_gate_results;
+                DROP TABLE IF EXISTS research_artifacts;
+                DROP TABLE IF EXISTS research_experiments;
+                DROP TABLE IF EXISTS research_hypotheses;
+                DROP TABLE IF EXISTS compatibility_research_cases;
                 DROP TABLE IF EXISTS external_game_links;
                 DROP TABLE IF EXISTS external_game_records;
                 DROP TABLE IF EXISTS external_catalog_sync_state;

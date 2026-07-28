@@ -50,9 +50,9 @@ Fuentes oficiales del snapshot:
 Las versiones se actualizan únicamente después de contrastar la fuente oficial y registrar la
 fecha. “Hay una versión nueva” significa **candidato de investigación**, no “actualizar estable”.
 
-## Esquema v9
+## Esquema v10
 
-La base local añade cinco áreas normalizadas:
+La base local conserva las cinco áreas de evolución tecnológica de v9:
 
 | Tabla | Guarda | No puede hacer |
 |---|---|---|
@@ -61,6 +61,17 @@ La base local añade cinco áreas normalizadas:
 | `optimization_assessments` | Resolución, preset, FPS, 1 % low, frame time p95 y conclusión. | Convertir un cierre limpio en “mejor conocido”. |
 | `game_runtime_requirements` | Requisitos declarativos de runtime, backend, arquitectura, dependencia o permiso. | Almacenar scripts o comandos arbitrarios. |
 | `repair_receipts` | Receta permitida/versionada, antes/después, resultado y rollback. | Contener ni ejecutar la implementación de la receta. |
+
+El esquema v10 añade el expediente de investigación que faltaba entre “candidato” y
+“promocionado”:
+
+| Tabla | Función |
+|---|---|
+| `compatibility_research_cases` | Síntoma reproducible, referencia CrossOver, estado y conclusión. |
+| `research_hypotheses` | Causas ordenadas y predicciones falsables. |
+| `research_experiments` | Una dimensión cambiada, aislamiento, rollback y run exacto. |
+| `research_gate_results` | Render, entrada, opciones, gameplay, independencia, matriz y rollback. |
+| `research_artifacts` | Referencias privadas y huellas de la evidencia reproducible. |
 
 Triggers de SQLite y la política Swift bloquean una promoción salvo que sea por juego, tenga
 fuente y huella verificadas, esté aislada, disponga de rollback, identifique baseline/candidato,
@@ -88,6 +99,10 @@ Reglas:
 5. La matriz funcional sigue mandando: render, entrada, opciones persistentes, gameplay y las
    regresiones exigidas por el componente tocado.
 6. Solo una revisión explícita puede promover. La base no aplica perfiles por sí sola.
+7. Un expediente nunca se cierra por número de intentos. Continúa con la siguiente hipótesis
+   discriminante o queda pausado únicamente por una dependencia externa concreta y reanudable.
+8. La certificación funcional, el expediente de causa raíz y la optimización se enlazan, pero no
+   se sustituyen: cada afirmación conserva sus propias puertas.
 
 ## Autoinstalación, autorreparación y autoselección
 

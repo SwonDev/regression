@@ -121,6 +121,12 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
     provocó un ciclo de AttributeGraph, cursor multicolor y 99,7 % de CPU. Tras tocar la UI,
     desplegar/plegar Aprendizaje repetidamente, confirmar que accesibilidad responde y medir que
     Regression vuelve a reposo antes de empaquetar.
+20. **Todo I+D abre y mantiene un expediente reproducible.** Antes del primer cambio registrar
+    síntoma, referencia CrossOver e hipótesis falsables; cada experimento cambia una sola
+    dimensión, está aislado y tiene rollback. No se cierra por cansancio ni por número de
+    intentos: solo con las puertas/evidencias de `docs/compatibility-research.md` y un run perfecto
+    exacto de Regression, o se pausa por una dependencia externa concreta y reanudable. Los
+    resultados negativos se conservan y nunca se convierten en recetas ejecutables.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 
@@ -222,7 +228,7 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   como backend predeterminado, motor propio seleccionable, conmutación con cierre limpio y una
   sola biblioteca física de juegos. El lanzador propio original está intacto en
   `Regression.app/Contents/MacOS/regression-engine`.
-- **Aprendizaje local**: SQLite v9 normalizada en
+- **Aprendizaje local**: SQLite v10 normalizada en
   `~/Library/Application Support/Regression/Compatibility/compatibility.sqlite`; registra
   sistema, comandos saneados, componentes, backend gráfico, configuración de juego y deltas.
   La identidad de motor excluye `gameconfig.*`, de modo que una resolución distinta no crea un
@@ -233,7 +239,8 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   Un exit code 0 queda **sin verificar**: solo una validación visual explícita crea un perfil
   perfecto o con incidencias. Nada se aplica automáticamente al motor propio. Base, exportaciones,
   recibos y logs son privados del usuario (`0700`/`0600`); se retienen como máximo 20 logs del
-  lanzador.
+  lanzador. Los expedientes de I+D separan casos, hipótesis, experimentos de una variable,
+  puertas y artefactos con huella; un trigger impide cerrar sin el run perfecto exacto.
 - **Evolución tecnológica**: el inventario local registra baseline, última versión oficial
   revisada, licencia/distribución y política de Wine, GPTK/D3DMetal, DXMT, DXVK, MoltenVK,
   vkd3d, Rosetta y CrossOver. Las tablas de candidatos, métricas, requisitos y recibos no aplican

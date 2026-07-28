@@ -7,8 +7,8 @@ MACOS_DIR="$APP/Contents/MacOS"
 PLIST="$APP/Contents/Info.plist"
 RESOURCES_DIR="$APP/Contents/Resources"
 STATE_ICON_DIR="$ROOT/assets/menubar/states"
-VERSION="1.5.1"
-BUILD_NUMBER="22"
+VERSION="1.5.2"
+BUILD_NUMBER="23"
 BACKUP_ROOT="$ROOT/backups/native-packaging"
 COMPATIBILITY_ROOT="$HOME/Library/Application Support/Regression/Compatibility"
 COMPATIBILITY_DB="$COMPATIBILITY_ROOT/compatibility.sqlite"
@@ -44,10 +44,18 @@ backup_compatibility_database()
     chmod 700 "$COMPATIBILITY_ROOT" "$COMPATIBILITY_BACKUP_ROOT"
     COMPATIBILITY_BACKUP="$COMPATIBILITY_BACKUP_ROOT/compatibility-before-${VERSION}-${BUILD_NUMBER}-${TIMESTAMP}-$$.sqlite"
     sqlite3 "$COMPATIBILITY_DB" ".timeout 5000" ".backup '$COMPATIBILITY_BACKUP'"
-    [[ "$(sqlite3 "$COMPATIBILITY_BACKUP" 'PRAGMA quick_check;')" == "ok" ]] || {
+    [[ "$(sqlite3 "file:$COMPATIBILITY_BACKUP?immutable=1" 'PRAGMA quick_check;')" == "ok" ]] || {
         echo "ERROR: el backup de la base de aprendizaje no es íntegro" >&2
         exit 1
     }
+    # Una lectura normal de una base cuyo journal_mode es WAL crea sidecars vacíos incluso
+    # dentro de Backups. La validación immutable evita esos residuos; elimina cualquiera que
+    # haya creado una versión anterior del empaquetador para que el respaldo sea autocontenido.
+    for sidecar in "$COMPATIBILITY_BACKUP-shm" "$COMPATIBILITY_BACKUP-wal"; do
+        if [[ -e "$sidecar" ]]; then
+            unlink "$sidecar"
+        fi
+    done
     chmod 600 "$COMPATIBILITY_BACKUP"
 }
 

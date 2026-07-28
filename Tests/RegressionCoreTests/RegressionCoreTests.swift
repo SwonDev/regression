@@ -3,6 +3,18 @@ import Foundation
 import XCTest
 
 final class RegressionCoreTests: XCTestCase {
+    func testSteamGameNameUsesCanonicalFallbackWithoutDiscardingRealNames() {
+        XCTAssertEqual(SteamGameName.placeholder(for: "004570720"), "Steam App 4570720")
+        XCTAssertEqual(
+            SteamGameName.normalized("  DragonSword : Awakening  ", appID: "4570720"),
+            "DragonSword : Awakening"
+        )
+        XCTAssertTrue(SteamGameName.isPlaceholder("steam app 4570720", appID: "4570720"))
+        XCTAssertFalse(
+            SteamGameName.isPlaceholder("DragonSword : Awakening", appID: "4570720")
+        )
+    }
+
     func testVerifiedGameCatalogContainsOnlyUniquePerfectRegressionCertifications() {
         let certifications = VerifiedGameCatalog.all
 

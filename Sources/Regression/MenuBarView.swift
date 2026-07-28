@@ -413,7 +413,7 @@ struct MenuBarView: View {
                         Label("Evolución tecnológica", systemImage: "gauge.with.dots.needle.67percent")
                             .font(.callout.weight(.medium))
                         Spacer()
-                        Text("\(researchTechnologies.count) tecnologías · \(model.activeRuntimeCandidateCount) experimentos")
+                        Text("\(researchTechnologies.count) tecnologías · \(model.activeRuntimeCandidateCount) candidatos")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
@@ -447,6 +447,22 @@ struct MenuBarView: View {
                     Text("Regression observa y recomienda: todavía no descarga, repara ni cambia motores automáticamente.")
                         .font(.caption2.weight(.medium))
                         .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Divider()
+
+                    HStack(spacing: 8) {
+                        Label("I+D verificable", systemImage: "checklist.checked")
+                            .font(.callout.weight(.medium))
+                        Spacer()
+                        Text("\(model.activeResearchCaseCount) casos · \(model.activeResearchExperimentCount) pruebas")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Text("Cada caso conserva la referencia de CrossOver, hipótesis ordenadas, una sola variable por prueba, rollback y la matriz visual completa. Ningún expediente puede cerrarse sin un blindado exacto de Regression.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
                     if let health = model.databaseHealth {

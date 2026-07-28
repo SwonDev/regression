@@ -20,7 +20,7 @@ private struct CertificationEvidenceRecord {
 }
 
 public actor CompatibilityRepository {
-    public static let currentSchemaVersion = 9
+    public static let currentSchemaVersion = 10
 
     private let databaseURL: URL
     private var database: OpaquePointer?
@@ -97,11 +97,7 @@ public actor CompatibilityRepository {
     public func beginRun(_ context: RunContext) throws {
         try ensurePrepared()
         try transaction {
-            try execute(
-                "INSERT INTO games(app_id, name, updated_at) VALUES(?, ?, ?) " +
-                "ON CONFLICT(app_id) DO UPDATE SET name=excluded.name, updated_at=excluded.updated_at;",
-                bindings: [context.appID, context.gameName, dateFormatter.string(from: Date())]
-            )
+            try upsertGame(appID: context.appID, name: context.gameName, at: Date())
             let configurationJSON = try jsonString(context.configuration)
             try execute(
                 "INSERT OR IGNORE INTO configuration_snapshots(fingerprint, values_json, created_at) VALUES(?, ?, ?);",
@@ -133,6 +129,21 @@ public actor CompatibilityRepository {
                 "INSERT INTO run_engine_snapshots(run_id, engine_fingerprint) VALUES(?, ?);",
                 bindings: [context.id.uuidString, engineFingerprint]
             )
+        }
+    }
+
+    public func reconcileDiscoveredGames(_ games: [SteamGame], observedAt: Date = Date()) throws {
+        try ensurePrepared()
+        var namesByAppID: [String: String] = [:]
+        for game in games {
+            guard let appID = SteamAppID.normalized(game.appID) else { continue }
+            namesByAppID[appID] = SteamGameName.normalized(game.name, appID: appID)
+        }
+        try transaction {
+            for appID in namesByAppID.keys.sorted() {
+                guard let name = namesByAppID[appID] else { continue }
+                try upsertGame(appID: appID, name: name, at: observedAt)
+            }
         }
     }
 
@@ -318,14 +329,10 @@ public actor CompatibilityRepository {
         }
         let notes = PrivacySanitizer.redactedLogExcerpt(observation.notes, limit: 2_000)
         try transaction {
-            try execute(
-                "INSERT INTO games(app_id, name, updated_at) VALUES(?, ?, ?) " +
-                "ON CONFLICT(app_id) DO UPDATE SET name=excluded.name, updated_at=excluded.updated_at;",
-                bindings: [
-                    observation.appID,
-                    observation.gameName,
-                    dateFormatter.string(from: observation.observedAt)
-                ]
+            try upsertGame(
+                appID: observation.appID,
+                name: observation.gameName,
+                at: observation.observedAt
             )
             let engineFingerprint = try persistEngineSnapshot(
                 configuration: observation.configuration,
@@ -1050,7 +1057,12 @@ public actor CompatibilityRepository {
             runtimeCandidateCount: try scalarInt("SELECT COUNT(*) FROM runtime_candidates;"),
             optimizationAssessmentCount: try scalarInt("SELECT COUNT(*) FROM optimization_assessments;"),
             runtimeRequirementCount: try scalarInt("SELECT COUNT(*) FROM game_runtime_requirements;"),
-            repairReceiptCount: try scalarInt("SELECT COUNT(*) FROM repair_receipts;")
+            repairReceiptCount: try scalarInt("SELECT COUNT(*) FROM repair_receipts;"),
+            researchCaseCount: try scalarInt("SELECT COUNT(*) FROM compatibility_research_cases;"),
+            researchHypothesisCount: try scalarInt("SELECT COUNT(*) FROM research_hypotheses;"),
+            researchExperimentCount: try scalarInt("SELECT COUNT(*) FROM research_experiments;"),
+            researchGateCount: try scalarInt("SELECT COUNT(*) FROM research_gate_results;"),
+            researchArtifactCount: try scalarInt("SELECT COUNT(*) FROM research_artifacts;")
         )
     }
 
@@ -1070,6 +1082,11 @@ public actor CompatibilityRepository {
             optimizationAssessments: try optimizationAssessments(),
             runtimeRequirements: try runtimeRequirements(),
             repairReceipts: try repairReceipts(),
+            researchCases: try researchCases(),
+            researchHypotheses: try researchHypotheses(),
+            researchExperiments: try researchExperiments(),
+            researchGates: try researchGates(),
+            researchArtifacts: try researchArtifacts(),
             databaseHealth: try databaseHealth()
         )
         let exportEncoder = JSONEncoder()
@@ -1167,6 +1184,11 @@ public actor CompatibilityRepository {
                 try executeScript(RuntimeEvolutionSchema.promotionGuardsSQL)
                 try recordMigration(version: 9, name: "integridad y cobertura de métricas")
                 try execute("PRAGMA user_version=9;")
+            }
+            if startingVersion < 10 {
+                try executeScript(ResearchSchema.sql)
+                try recordMigration(version: 10, name: "expedientes reproducibles de I+D")
+                try execute("PRAGMA user_version=10;")
             }
         }
     }
@@ -1457,18 +1479,35 @@ public actor CompatibilityRepository {
         }
     }
 
-    private func upsertGame(appID: String, name: String, at date: Date) throws {
+    func upsertGame(appID: String, name: String, at date: Date) throws {
         guard let normalized = SteamAppID.normalized(appID) else {
             throw RegressionCoreError.database("Steam App ID no válido: \(appID)")
         }
-        let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanName.isEmpty else {
-            throw RegressionCoreError.database("Un juego no puede guardarse sin nombre")
-        }
+        let provisionalName = SteamGameName.placeholder(for: normalized)
+        let normalizedName = SteamGameName.normalized(name, appID: normalized)
+        let cleanName = SteamGameName.isPlaceholder(normalizedName, appID: normalized)
+            ? provisionalName
+            : normalizedName
         try execute(
             "INSERT INTO games(app_id, name, updated_at) VALUES(?, ?, ?) " +
-            "ON CONFLICT(app_id) DO UPDATE SET name=excluded.name, updated_at=excluded.updated_at;",
-            bindings: [normalized, cleanName, dateFormatter.string(from: date)]
+            """
+            ON CONFLICT(app_id) DO UPDATE SET
+                name=excluded.name,
+                updated_at=excluded.updated_at
+            WHERE games.name<>excluded.name
+              AND (
+                   excluded.name<>?
+                   OR trim(games.name)=''
+                   OR lower(trim(games.name))=lower(?)
+              );
+            """,
+            bindings: [
+                normalized,
+                cleanName,
+                dateFormatter.string(from: date),
+                provisionalName,
+                provisionalName
+            ]
         )
     }
 
@@ -1692,6 +1731,7 @@ public actor CompatibilityRepository {
             )
         }
         try validateRuntimeEvolutionData()
+        try validateResearchData()
     }
 
     private func schemaVersion() throws -> Int {
@@ -2243,5 +2283,10 @@ public struct CompatibilityExport: Codable, Sendable {
     public let optimizationAssessments: [OptimizationAssessment]
     public let runtimeRequirements: [GameRuntimeRequirement]
     public let repairReceipts: [RepairReceipt]
+    public let researchCases: [CompatibilityResearchCase]
+    public let researchHypotheses: [ResearchHypothesis]
+    public let researchExperiments: [ResearchExperiment]
+    public let researchGates: [ResearchGateResult]
+    public let researchArtifacts: [ResearchArtifact]
     public let databaseHealth: CompatibilityDatabaseHealth
 }

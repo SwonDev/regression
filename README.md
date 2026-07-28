@@ -40,7 +40,7 @@ y por qué no se redistribuyen. Licencia: LGPL-2.1+ (`LICENSE`).
 5. La carpeta `steamapps` del motor propio enlaza a la biblioteca canónica de CrossOver. Los
    juegos se instalan una sola vez; credenciales, registro y datos externos a `steamapps` siguen
    separados de forma segura.
-6. SQLite v9 guarda ejecuciones, configuraciones, huellas de DLL/runtime, variables permitidas,
+6. SQLite v10 guarda ejecuciones, configuraciones, huellas de DLL/runtime, variables permitidas,
    resolución/configuración gráfica detectable, deltas y verificaciones. Además normaliza la
    identidad de cada motor para comparar resultados del mismo Wine/DXMT/DXVK/D3DMetal sin
    confundirlos con opciones propias del juego. Los perfiles se pueden consultar y exportar como
@@ -72,6 +72,13 @@ y por qué no se redistribuyen. Licencia: LGPL-2.1+ (`LICENSE`).
     componentes/configuración y lectura acotada de logs se ejecutan en actores dedicados. Los
     Steam App ID se validan una sola vez como enteros ASCII de 32 bits y los nombres procedentes
     de manifests no pueden escapar de sus raíces ni mediante `..` ni mediante enlaces simbólicos.
+13. Los nombres públicos descubiertos en los manifests tienen precedencia sobre cualquier
+    placeholder temprano de telemetría. `Steam App <ID>` solo se usa mientras el título es
+    realmente desconocido y nunca puede degradar el nombre histórico; cada escaneo reconcilia
+    automáticamente las filas antiguas.
+14. El esquema v10 distingue candidatos tecnológicos de experimentos reales. Todo I+D puede
+    persistir síntoma, referencia CrossOver, hipótesis, prueba de una variable, run exacto,
+    matriz, evidencias y rollback; SQLite impide cerrar el expediente si falta una puerta.
 
 Rutas principales:
 
@@ -94,6 +101,8 @@ Regression.app/Contents/SharedSupport/bin/regressionctl candidates
 Regression.app/Contents/SharedSupport/bin/regressionctl optimization
 Regression.app/Contents/SharedSupport/bin/regressionctl requirements
 Regression.app/Contents/SharedSupport/bin/regressionctl repair-receipts
+Regression.app/Contents/SharedSupport/bin/regressionctl research
+Regression.app/Contents/SharedSupport/bin/regressionctl research-protocol
 Regression.app/Contents/SharedSupport/bin/regressionctl catalog
 Regression.app/Contents/SharedSupport/bin/regressionctl comparisons
 Regression.app/Contents/SharedSupport/bin/regressionctl observations

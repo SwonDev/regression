@@ -24,6 +24,64 @@ práctica cuando un juego funciona en CrossOver y falla en Regression.
    sus binarios propietarios a Regression.
 6. **La promoción requiere rollback.** Antes de modificar la app o una botella se preservan los
    archivos afectados y se registran hashes.
+7. **No se abandona una línea por acumulación de intentos.** Un resultado negativo falsifica una
+   hipótesis o descarta un candidato, pero no cierra el problema. Se vuelve a la evidencia, se
+   reordena la lista de causas y se continúa con la siguiente prueba discriminante.
+8. **Una pausa no es una conclusión.** Solo se admite cuando falta una dependencia externa
+   concreta —fuente, artefacto, permiso, hardware o actualización del proveedor— y debe quedar
+   escrita de forma que otra sesión pueda reanudarla sin repetir trabajo.
+
+## Bucle obligatorio de diagnóstico
+
+Cada investigación parte de un feedback loop explícito:
+
+```text
+reproducir → capturar baseline → formular hipótesis ordenadas
+           → predecir una diferencia observable → cambiar una variable
+           → medir y mirar → conservar evidencia → aceptar o falsificar
+           → volver a la causa mientras el criterio de cierre no esté completo
+```
+
+Antes del primer cambio se abre un expediente local con `regressionctl research-open`. El
+expediente guarda el síntoma reproducible y el comportamiento observado en CrossOver. Cada causa
+posible se registra como hipótesis falsable, con una predicción que indique qué observación la
+apoyará y qué observación la descartará. “Probar otra DLL” no es una hipótesis; “la pareja
+`d3d11/dxgi` no pertenece al mismo backend y por eso el módulo efectivo difiere de CrossOver” sí
+lo es.
+
+Las hipótesis se ordenan por:
+
+1. capacidad de explicar todos los síntomas, no solo uno;
+2. evidencia diferencial contra CrossOver;
+3. coste y riesgo de la prueba;
+4. posibilidad de aislar una única variable;
+5. valor del resultado negativo para reducir el espacio de búsqueda.
+
+Si el fallo es intermitente, primero se mide su frecuencia con una escena y duración fijadas. Un
+candidato no se acepta porque haya funcionado una vez: debe superar suficientes repeticiones para
+que el síntoma histórico deje de reproducirse y conservar las mismas condiciones de comparación.
+El número exacto depende del fallo, pero debe declararse antes de ver el resultado.
+
+## Expediente persistente y estados
+
+El esquema local v10 separa los candidatos tecnológicos de los experimentos que realmente se han
+ejecutado:
+
+- `compatibility_research_cases`: problema, expectativa CrossOver, estado y conclusión;
+- `research_hypotheses`: causas ordenadas, predicción, apoyo o falsación;
+- `research_experiments`: una única dimensión cambiada, aislamiento, baseline, candidato, run y
+  rollback;
+- `research_gate_results`: resultado de cada puerta funcional;
+- `research_artifacts`: referencias privadas y huellas de capturas, inventarios, builds, tests,
+  firma y rollback.
+
+Los estados de un expediente son `open`, `investigating`, `validationPending`, `verified` y
+`pausedExternalDependency`. No existen “abandonado” ni “cerrado sin resolver”. Un experimento
+fallido o revertido permanece en el historial para que otra sesión no vuelva a dar el mismo paso.
+
+La base no almacena comandos, scripts ni blobs. Solo conserva descripciones saneadas, IDs,
+referencias privadas y fingerprints. Los perfiles y recetas ejecutables siguen compilados y
+revisados en el repositorio.
 
 ## Fase 1: establecer dos baselines
 
@@ -83,7 +141,7 @@ con la causa raíz.
 
 1. Crear backup de botella, perfil, DLL o bundle que vaya a cambiar.
 2. Usar una copia o variables de proceso para el primer candidato.
-3. Cambiar una sola variable.
+3. Registrar la hipótesis, la predicción y la única dimensión que cambia.
 4. Lanzar desde Steam cuando el DRM lo requiera.
 5. Capturar la ventana y mirar la imagen.
 6. Interactuar: menús, clicks en extremos, inventario, cámara y opciones.
@@ -92,6 +150,11 @@ con la causa raíz.
 
 Los fallos son datos, pero nunca se promocionan como perfiles. Una prueba que arregla el click y
 degrada la imagen sigue siendo fallida.
+
+Una prueba preparada se registra con `regressionctl research-stage`; tras el lanzamiento se
+vincula al run exacto mediante `research-attach-run`. Las puertas y evidencias se incorporan una
+por una. Así un reinicio de sesión, una compactación de contexto o un agente distinto no pueden
+convertir un recuerdo parcial en una conclusión.
 
 ## Fase 5: promover un perfil
 
@@ -130,6 +193,33 @@ Cada perfil perfecto debe conservar:
 - registro `perfect` en la base de compatibilidad y captura de la fila verde
   `Verificado perfecto: Regression` después de refrescar la app.
 
+El cierre estructurado exige además estas ocho puertas sobre el mismo experimento:
+
+1. referencia CrossOver reproducida;
+2. render correcto;
+3. entrada precisa;
+4. opciones gráficas modificables y persistentes;
+5. gameplay representativo;
+6. ausencia de recursos ejecutables de CrossOver en el motor propio;
+7. matriz de regresión correspondiente al componente tocado;
+8. rollback ensayado o verificado.
+
+Y estas ocho evidencias con huella:
+
+1. captura CrossOver;
+2. captura Regression;
+3. inventario de módulos;
+4. snapshot de configuración;
+5. informe de build;
+6. informe de tests;
+7. informe de firma;
+8. manifiesto de rollback.
+
+Los triggers SQLite y la política Swift impiden marcar el experimento como `passed` o el
+expediente como `verified` si falta cualquiera de ellas, si las huellas de baseline y candidato
+son iguales o si el run vinculado no creó un blindado perfecto y activo de Regression. Corregir
+posteriormente ese veredicto reabre el expediente automáticamente.
+
 La base SQLite de Regression registra ejecuciones, comparaciones y métricas, pero no debe aplicar
 por sí sola un perfil al motor propio. La promoción sigue siendo una decisión de ingeniería
 respaldada por evidencia visual, rendimiento y rollback.
@@ -149,3 +239,33 @@ Un juego queda blindado cuando, desde la instalación canónica:
 El cierre no termina con la frase del usuario: hay que asociar esa confirmación al run exacto con
 `regressionctl verify`, refrescar la app y comprobar visualmente el distintivo. Los intentos fallidos
 se mantienen porque explican el aprendizaje; la UI prioriza el mejor perfil perfecto confirmado.
+
+Solo hay dos salidas legítimas del trabajo activo:
+
+- **verificado**: toda la matriz, la evidencia, el blindado, la independencia y el rollback están
+  completos;
+- **pausado por dependencia externa concreta**: la causa bloqueante queda identificada, se
+  conserva el siguiente experimento y la investigación es reanudable.
+
+“Compila”, “ha abierto”, “esta vez no falló” o “se han probado muchas cosas” nunca son condiciones
+de cierre.
+
+## Comandos del expediente
+
+```bash
+regressionctl research
+regressionctl research-protocol
+regressionctl research-open APP_ID --symptom "..." --expected "..." [--name "..."]
+regressionctl research-hypothesis CASE_ID --rank 1 --statement "..." --prediction "..."
+regressionctl research-stage CASE_ID --dimension graphicsBackend --change "..." \
+  --rollback "..." --baseline "..." [--hypothesis UUID]
+regressionctl research-attach-run EXPERIMENT_ID RUN_ID
+regressionctl research-gate EXPERIMENT_ID rendering passed --evidence "..."
+regressionctl research-artifact EXPERIMENT_ID regressionCapture \
+  --reference "..." --fingerprint "sha256:..."
+regressionctl research-finish EXPERIMENT_ID failed --note "..."
+regressionctl research-complete CASE_ID EXPERIMENT_ID --resolution "..."
+```
+
+`research-protocol` enumera los valores permitidos vigentes. La exportación JSON incluye todo el
+expediente, pero nunca aplica ni ejecuta lo aprendido.
