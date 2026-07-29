@@ -625,6 +625,39 @@ public struct CompatibilityProfile: Codable, Equatable, Identifiable, Sendable {
     public let lastSuccessfulAt: Date?
 }
 
+public extension CompatibilityProfile {
+    /// Elige primero la mejor evidencia validada del motor seleccionado.
+    ///
+    /// La comparación entre backends solo es un fallback: una fila lanzable con Regression no
+    /// debe atribuir a CrossOver el estado visible cuando ambos tienen evidencia equivalente.
+    static func preferredValidated(
+        from candidates: [CompatibilityProfile],
+        selectedBackend: BackendKind
+    ) -> CompatibilityProfile? {
+        let validated = candidates.filter { $0.perfectRuns > 0 || $0.playableRuns > 0 }
+        guard !validated.isEmpty else { return nil }
+
+        let selected = validated.filter { $0.backend == selectedBackend }
+        return (selected.isEmpty ? validated : selected).sorted(by: isPreferred).first
+    }
+
+    private static func isPreferred(
+        _ left: CompatibilityProfile,
+        _ right: CompatibilityProfile
+    ) -> Bool {
+        if left.perfectRuns != right.perfectRuns { return left.perfectRuns > right.perfectRuns }
+        if left.playableRuns != right.playableRuns { return left.playableRuns > right.playableRuns }
+        if left.failedRuns != right.failedRuns { return left.failedRuns < right.failedRuns }
+        if left.unverifiedRuns != right.unverifiedRuns {
+            return left.unverifiedRuns < right.unverifiedRuns
+        }
+        if left.lastSuccessfulAt != right.lastSuccessfulAt {
+            return (left.lastSuccessfulAt ?? .distantPast) > (right.lastSuccessfulAt ?? .distantPast)
+        }
+        return left.configurationFingerprint < right.configurationFingerprint
+    }
+}
+
 /// Identidad normalizada de un stack de ejecución observado.
 ///
 /// El fingerprint excluye la configuración propia del juego. Por ello varias ejecuciones y

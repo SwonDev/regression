@@ -4,26 +4,29 @@
 
 - **Steam App ID:** `2054970`
 - **Ejecutable:** `DD2.exe`
-- **Estado:** perfil promocionado y matriz canónica completa superada; pendiente únicamente de la
-  confirmación visual final del usuario antes de crear `Verificado perfecto: Regression`.
-- **Render candidato:** D3DMetal a framebuffer Retina nativo de 3024×1890.
-- **Resolución que muestra el juego:** el selector enumera desde 1280×800 hasta 3024×1890. El
-  máximo fue aceptado, guardado y volvió a aparecer al reabrir opciones desde título y gameplay.
-- **Entrada:** click HID, navegación, movimiento y diálogo respondieron con precisión.
-- **Opciones:** accesibles desde título y gameplay, a 3024×1890 y 120 Hz; los cambios persisten.
-- **Gameplay:** partida cargada en menos de seis segundos; movimiento, diálogo, pausa y opciones
-  se comprobaron visualmente.
+- **Estado:** perfil promocionado, protegido y validado como `Funciona con incidencias` en el run
+  exacto `257CEEDB-8EE7-4D4E-AF6B-589741406C1F`.
+- **Render validado:** D3DMetal + Retina por proceso, con 1512×945 lógicos en ventana sin bordes y
+  framebuffer físico de 3024×1890.
+- **Presentación:** Dragon's Dogma 2 compone una imagen 16:9 dentro del panel 1512×945 y conserva
+  letterbox arriba y abajo. La misma franja se reprodujo en CrossOver; no procede del perfil de
+  Regression, pero impide etiquetar el resultado como visualmente perfecto.
+- **Entrada:** click, navegación, movimiento y diálogo respondieron con precisión a 1512×945. La
+  variante de 3024×1890 internos se descartó porque desbordaba la presentación y desplazaba el
+  puntero.
+- **Opciones:** accesibles desde título y gameplay; 1512×945, 120 Hz y ventana sin bordes quedaron
+  persistidos en `config.ini`.
+- **Gameplay:** carga, mundo, personaje, HUD, rendimiento, pausa y opciones se comprobaron
+  visualmente y el usuario confirmó que funcionaban bien.
 - **Dependencia de CrossOver:** ninguna en el perfil del motor propio. Los archivos del juego
   siguen en la biblioteca física compartida; los ejecutables cargan Wine, el driver y D3DMetal
   desde el árbol de Regression.
 
-Este expediente no certifica todavía el juego como perfecto. La confirmación del usuario de que
-el juego funcionaba muy bien se obtuvo sobre el primer candidato D3DMetal + Retina, cuando el
-selector todavía se detenía en 1512×945. Después se redujo el alcance para conservar literalmente
-el `winemac` global de Steam. La receta final aislada ya superó render, resolución nativa,
-persistencia, entrada, gameplay y cierre limpio tanto en clon aislado como en la instalación
-canónica. Falta que el usuario confirme explícitamente esta receta exacta; por diseño, la evidencia
-técnica y un cierre limpio no bastan para crear la etiqueta verde.
+Este expediente no certifica el juego como perfecto ni crea una entrada en
+`VerifiedGameCatalog`: el usuario autorizó blindar la receta estable dejando patente la limitación
+de encuadre compartida con CrossOver. La base local conserva el veredicto con incidencias, mientras
+que el runtime queda fijado por hashes y por el instalador transaccional del perfil. El cierre
+limpio o `exit=0` no se usaron para elevar el veredicto.
 
 ## Síntoma inicial
 
@@ -35,10 +38,11 @@ la GPU: ambas pruebas usaban el mismo Mac y la misma biblioteca física de Steam
 
 La ejecución de referencia usaba D3DMetal y un escritorio lógico de 1512×945. La captura completa
 de macOS era 3024×1890, por lo que CrossOver demostraba que el juego podía presentar correctamente
-sobre una superficie Retina. Al aislar `RetinaMode=y` en `DD2.exe`, Regression no solo conservó
-esa presentación física: el propio selector del juego pasó a enumerar 1800×1125, 1920×1200,
-2048×1280, 2560×1600, 2704×1690 y 3024×1890 antes de volver a 1280×800. Por tanto, el límite
-1512×945 no era del juego ni de la pantalla, sino del modo de monitor que Wine le exponía.
+sobre una superficie Retina. Al aislar `RetinaMode=y` en `DD2.exe`, Regression conservó esa
+presentación física y el selector pasó a enumerar también modos físicos superiores. La prueba
+final estableció que esos modos enumerados no deben confundirse con la resolución interna idónea:
+3024×1890 internos provocaban desbordamiento y un mapa de ratón incorrecto; 1512×945 lógicos con
+backing Retina reproducen la referencia correcta.
 
 La inspección permitida confirmó `d3d12.dll`, `dxgi.dll`, `D3DMetal.framework` y
 `libd3dshared.dylib`. Regression ya disponía localmente de las piezas Apple verificadas; no se
@@ -51,9 +55,11 @@ copió ningún binario propietario de CrossOver ni se enlazó su instalación.
 | Baseline Regression | negro/sin presentación útil | no evaluable | rechazado |
 | D3DMetal sin Retina por proceso | imagen, pero sin paridad de modos lógicos | incompleto | rechazado |
 | D3DMetal + Retina como cambio global | funcional | arriesga Steam y otros juegos | no promocionable |
-| D3DMetal + Retina solo en `DD2.exe` | 3024×1890 físico | preciso; opciones y gameplay | candidato funcional |
-| Perfil autocontenido + módulos globales restaurados | 3024×1890, título y gameplay | click, movimiento, pausa y opciones persistentes | matriz aislada superada; listo para promoción canónica |
-| Bundle canónico firmado + control Grim Dawn | 3024×1890 persistente | gameplay, HID, pausa, opciones y cierre | matriz canónica superada; pendiente de confirmación del usuario |
+| D3DMetal + Retina solo en `DD2.exe` | 3024×1890 físico | opciones y gameplay | candidato funcional |
+| 3024×1890 internos en pantalla completa | nítido, pero desbordado | puntero de macOS visible y click desplazado | rechazado |
+| 1512×945 lógicos en pantalla completa | render y rendimiento estables | click preciso; ventana desplazada | incompleto |
+| 1512×945 lógicos sin bordes + backing Retina | 3024×1890 físico, letterbox 16:9 igual que CrossOver | click, opciones y gameplay estables | validado con incidencia conocida |
+| Bundle canónico firmado + control Grim Dawn | perfil aislado, Steam y PIN intactos | matriz protegida | promocionado y protegido |
 
 ## Menú de pausa: carga fría y carga caliente
 
@@ -131,6 +137,11 @@ backups/dd2-investigation-20260728-212116/
 ├── evidence/
 ├── install-test/Regression.app
 └── candidate-auth-*/
+
+backups/dd2-final-confirmation-20260729-0738/
+├── prelaunch/
+├── postlaunch/
+└── *.png
 ```
 
 Evidencias principales:
@@ -152,6 +163,14 @@ Evidencias principales:
 - control protegido de Grim Dawn y Steam posterior: `../canonical-grimdawn-*.png` y
   `../canonical-steam-after-grimdawn-control.png`;
 - recibo canónico, run exacto y huellas: `canonical-matrix-receipt.md`.
+- confirmación final a 1512×945: `after-user-confirmation.png`;
+- selección y persistencia de ventana sin bordes: `window-mode-after-right.png` y
+  `borderless-saved.png`;
+- pausa/gameplay tras persistir la receta: `borderless-gameplay-after-save.png`;
+- estado instalado del backend seleccionado: `postlaunch/regression-popover-dd2-playable-summary.png`,
+  que muestra `Funciona con incidencias: Regression` sin atribuir el empate a CrossOver;
+- rollback de configuración, saves y SQLite: `dd2-final-confirmation-20260729-0738/prelaunch`
+  y `postlaunch`, con manifiesto `SHA256SUMS` verificado.
 
 Hashes seleccionados:
 
@@ -172,12 +191,18 @@ canónico 3024×1890:   b1239608c4bf502b17fc19c4c8ba4af20e613d0ce85defaf2915e02a
 canónico gameplay/HID:716144337e63590828c8b44c048d0ae555afbef08e4957270884676cc0e4ca5c
 canónico pausa t+1:   35a176a6961e844a1065823e1ac82bf860c228ffb6130e04504c5d646aa1d8d4
 control Grim opciones:7479902b7ef39d91079d7a3ec8ae77f3b5c2b8e02401ec1e18e890ccde68d760
+confirmación 1512×945:7008165c2b186d98d1dea919d27ecc2b9c1cbd03fb1d27f174bd302a45ad83d4
+sin bordes seleccionado:af5c57b98bf31a58f232dd32e456c6151515536cb39521de7b078d38fe5c48c1
+sin bordes guardado:  a09c662ad4848174437185b9f23632c9c215b796068bb0a4e9509b86221d1b76
+gameplay final:       8e997897bacbc32ea57b95366e7a383965188ea9232ea12652639637e9ddaef1
+config final:         428ace1583bd122dd768ddf5f15dc6989c1aff9e2fcd0e5885c87d9d8d4d9993
+resumen instalado:    235b5a0896a280e21e1c1014096753c9272f44760bc6089e45d48883fd63e092
 ```
 
 La evidencia tiene permisos privados y está excluida de Git. Los ficheros de autenticación de
 Steam usados en copias experimentales no se exportan ni se documentan.
 
-## Rollback, promoción y certificación pendiente
+## Rollback, promoción y veredicto
 
 La instalación se ensayó dos veces —incluida la idempotencia— sobre un clon APFS del bundle. Se
 forzó además un fallo de firma después de instalar router y perfil: el trap transaccional recuperó
@@ -185,13 +210,13 @@ el baseline y `verify-protected-state.sh --before-dd2-promotion` volvió a pasar
 backup de la transición conserva el antiguo `ntdll.so` con hash
 `2cd0f030fd0b92bbf17308021d23b2a2fede6ab02d528c44c03753dfcb049c97`.
 
-Antes de declarar este expediente `verified` todavía deben cumplirse, desde la app canónica:
+El run técnico `3853E126-1D58-427F-97A1-E36E43509A43` conserva la matriz previa de resolución
+física alta. El veredicto de usuario se registró únicamente sobre la repetición exacta
+`257CEEDB-8EE7-4D4E-AF6B-589741406C1F`, que terminó con `exit=0`, huella de configuración
+`a30c0026fbe0fbd95caa350dbecdeee4cc2ee81c1c206f6b878d4ad63fca6f9e` y huella de motor
+`8454bf44804d122d587261d7084ddc08db1185e8c6bc703c5701b5669087c0d7`.
 
-1. obtener la confirmación visual final del usuario sobre esta receta canónica exacta;
-2. registrar el veredicto `perfect` sobre la ejecución exacta o repetirla si ya no fuera elegible;
-3. comprobar la fila verde en Regression y cerrar transaccionalmente el expediente.
-
-El run canónico `3853E126-1D58-427F-97A1-E36E43509A43` está vinculado al experimento y sus ocho
-puertas técnicas constan como superadas. Sigue deliberadamente `unknown/sin verificar`: hasta la
-confirmación humana, el perfil está promocionado, protegido y reproducible, pero no blindado como
-perfecto.
+La base local muestra `Funciona con incidencias`; no se añadió una certificación perfecta ni una
+fila verde al catálogo embebido. El perfil D3DMetal + Retina sí queda promocionado, protegido y
+reproducible. Una futura eliminación del letterbox debe investigarse en otro candidato aislado y
+no autoriza a alterar esta receta estable.

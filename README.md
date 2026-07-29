@@ -193,12 +193,14 @@ backend y nota de evidencia. Nunca se infiere “perfecto” de un cierre normal
   `regression-last-good-20260726.tar.gz` conserva la base general
   restaurable y `grimdawn-d3dmetal-perfect-20260727-1802/` el perfil posterior verificado.
 
-### Candidato aislado pendiente de certificación
+### Perfil aislado validado con incidencia conocida
 
-- **Dragon's Dogma 2**: D3DMetal + Retina por proceso, con gameplay, entrada y opciones
-  persistentes a 3024×1890. Las matrices aislada y canónica, el cierre limpio y el control
-  protegido de Grim Dawn están completos. Falta exclusivamente la confirmación humana de esta
-  receta exacta para mostrarlo como perfecto. Expediente:
+- **Dragon's Dogma 2**: D3DMetal + Retina por proceso, 1512×945 lógicos en ventana sin bordes y
+  framebuffer físico de 3024×1890. Gameplay, rendimiento, entrada y opciones persistentes fueron
+  confirmados por el usuario en el run `257CEEDB-8EE7-4D4E-AF6B-589741406C1F`. Queda como
+  `Funciona con incidencias`, no como perfecto, porque el juego conserva letterbox 16:9; CrossOver
+  reproduce la misma franja. La variante de 3024×1890 internos se rechazó por desbordamiento y
+  click desplazado. Expediente:
   [`docs/games/dragons-dogma-2.md`](docs/games/dragons-dogma-2.md).
 
 ### Las dos claves de la paridad (aprendidas a las malas)

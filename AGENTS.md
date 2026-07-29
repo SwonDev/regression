@@ -134,13 +134,17 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
     proceso y a la ventana de unión. Un lanzamiento hecho dentro de Steam recibe una captura
     diagnóstica `processStartBoundary`; no llamarla prelaunch exacta ni mezclarla con la captura
     `preLaunch` del botón de Regression.
-22. **Todo I+D abre y mantiene un expediente reproducible.** Antes del primer cambio registrar
+22. **DD2 distingue resolución lógica de backing Retina.** El perfil estable usa 1512×945 en
+    ventana sin bordes y presenta 3024×1890 físicos. No fijar 3024×1890 como resolución interna:
+    esa variante desbordó la ventana, mostró el cursor de macOS y desplazó el click. El letterbox
+    16:9 de la receta estable también aparece en CrossOver y se conserva como incidencia conocida.
+23. **Todo I+D abre y mantiene un expediente reproducible.** Antes del primer cambio registrar
     síntoma, referencia CrossOver e hipótesis falsables; cada experimento cambia una sola
     dimensión, está aislado y tiene rollback. No se cierra por cansancio ni por número de
     intentos: solo con las puertas/evidencias de `docs/compatibility-research.md` y un run perfecto
     exacto de Regression, o se pausa por una dependencia externa concreta y reanudable. Los
     resultados negativos se conservan y nunca se convierten en recetas ejecutables.
-23. **Toda prueba de juego empieza con el preflight canónico.** La app y `regressionctl launch`
+24. **Toda prueba de juego empieza con el preflight canónico.** La app y `regressionctl launch`
     deben comprobar el App ID y backend exactos antes de enviar `-applaunch`. Un bloqueo detiene
     la prueba; un aviso se conserva con el run. El preflight solo observa: jamás termina procesos,
     borra marcadores, modifica botellas ni certifica compatibilidad. Su informe v1 debe persistir
@@ -291,13 +295,13 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   `8454bf44804d122d587261d7084ddc08db1185e8c6bc703c5701b5669087c0d7`; expediente y rollback:
   `docs/games/clair-obscur-expedition-33.md` y
   `backups/clair-obscur-investigation-20260729-050233/`.
-- **Dragon's Dogma 2 (perfil promocionado, aún no perfecto)**: D3DMetal + Retina por proceso
-  expone y conserva 3024×1890 en el selector, con gameplay, entrada, opciones y cierre observados.
-  La carga inicial del menú de pausa tardó 10–15 s y las siguientes aperturas menos de 1 s. Las
-  matrices aislada y canónica, el perfil autocontenido, el instalador idempotente y Grim Dawn como
-  control protegido están completos. Falta solo la confirmación final del usuario; no anticipar
-  la fila verde ni cerrar el expediente sin ella. Ver
-  `docs/games/dragons-dogma-2.md`.
+- **Dragon's Dogma 2 (perfil promocionado, validado con incidencia)**: D3DMetal + Retina por
+  proceso, 1512×945 lógicos en ventana sin bordes y backing físico de 3024×1890. El run
+  `257CEEDB-8EE7-4D4E-AF6B-589741406C1F` fue confirmado por el usuario con render, rendimiento,
+  click, gameplay y opciones estables. Queda como `Funciona con incidencias`, no como perfecto,
+  porque conserva letterbox 16:9; CrossOver presenta la misma franja. No promover 3024×1890
+  internos: esa variante desborda y desplaza el click. Perfil, instalador y rollback están
+  protegidos; ver `docs/games/dragons-dogma-2.md`.
 - **PIN: DXMT = v0.72 + parche cross-process** (versión exacta de CrossOver). `main` rompe los
   skeletal meshes de Palworld — NO actualizar sin probar Palworld.
 - **PIN: wine compilado con `--prefix` apuntando a la app** (Regression.app/Contents/SharedSupport/wine-root).

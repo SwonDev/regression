@@ -187,16 +187,15 @@ final class RegressionAppModel {
 
         let candidates = profilesByAppID[game.appID] ?? []
         guard !candidates.isEmpty else { return nil }
-        if let verified = candidates
-            .filter({ $0.perfectRuns > 0 || $0.playableRuns > 0 })
-            .sorted(by: {
-                if $0.perfectRuns != $1.perfectRuns { return $0.perfectRuns > $1.perfectRuns }
-                if $0.playableRuns != $1.playableRuns { return $0.playableRuns > $1.playableRuns }
-                return $0.failedRuns < $1.failedRuns
-            })
-            .first {
-            return verified.perfectRuns > 0
-                ? "Verificado perfecto: \(verified.backend.displayName)"
+        if let verified = CompatibilityProfile.preferredValidated(
+            from: candidates,
+            selectedBackend: selectedBackend
+        ) {
+            if verified.perfectRuns > 0 {
+                return "Verificado perfecto: \(verified.backend.displayName)"
+            }
+            return verified.backend == selectedBackend
+                ? "Funciona con incidencias: \(verified.backend.displayName)"
                 : "Mejor perfil observado: \(verified.backend.displayName)"
         }
         let failures = candidates.reduce(0) { $0 + $1.failedRuns }
