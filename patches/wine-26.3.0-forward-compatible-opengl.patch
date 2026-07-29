@@ -1,0 +1,30 @@
+diff --git a/dlls/winemac.drv/opengl.c b/dlls/winemac.drv/opengl.c
+index 0af1d3f7..a66124d6 100644
+--- a/dlls/winemac.drv/opengl.c
++++ b/dlls/winemac.drv/opengl.c
+@@ -2165,9 +2165,22 @@ static BOOL macdrv_context_create(int format, void *shared, const int *attrib_li
+     {
+         if (!(flags & WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB))
+         {
+-            WARN("OS X only supports forward-compatible 3.2+ contexts\n");
+-            RtlSetLastWin32Error(ERROR_INVALID_VERSION_ARB);
+-            return FALSE;
++            /* Regression: bgfx and similar renderers can request a core 3.2
++             * context without the forward-compatible bit, while macOS only
++             * exposes 3.2+ core contexts in forward-compatible form.  Keep
++             * the compatibility change opt-in so the default Wine behavior
++             * and every unrelated process remain byte-for-byte isolated. */
++            const char *force_fwd = getenv("CX_FWD_COMPAT_GL_CTX");
++            if (force_fwd && force_fwd[0] == '1')
++            {
++                flags |= WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB;
++            }
++            else
++            {
++                WARN("OS X only supports forward-compatible 3.2+ contexts\n");
++                RtlSetLastWin32Error(ERROR_INVALID_VERSION_ARB);
++                return FALSE;
++            }
+         }
+         if (profile != WGL_CONTEXT_CORE_PROFILE_BIT_ARB)
+         {

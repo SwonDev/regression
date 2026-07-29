@@ -597,6 +597,70 @@ final class CompatibilityCatalogTests: XCTestCase {
         try await repository.close()
     }
 
+    func testPerfectRunCanBeReconciledWithItsCompiledRuntimeProfile() async throws {
+        let directory = temporaryDirectory("compiled-profile-reconciliation")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repository = CompatibilityRepository(
+            databaseURL: directory.appendingPathComponent("compatibility.sqlite")
+        )
+        try await repository.prepare()
+        let context = makeContext(
+            appID: "619820",
+            name: "Heroes of Hammerwatch II",
+            configuration: ["backend": "regression", "provider.version": "1.7.3"],
+            providerVersion: "1.7.3"
+        )
+        try await repository.beginRun(context)
+        try await repository.markLaunched(
+            id: context.id,
+            processID: 619_820,
+            executable: "C:\\Games\\HWR2.exe",
+            launchMilliseconds: 100
+        )
+        try await repository.finishRun(
+            id: context.id,
+            endedAt: Date(),
+            exitCode: 0,
+            result: .succeeded,
+            afterConfiguration: context.configuration,
+            delta: ConfigurationDiffer.difference(
+                before: context.configuration,
+                after: context.configuration
+            )
+        )
+        try await repository.verifyRun(RunVerification(
+            runID: context.id,
+            verdict: .perfect,
+            rendering: .passed,
+            inputPrecision: .passed,
+            graphicsSettings: .passed,
+            gameplay: .passed,
+            source: .visualInspection,
+            notes: "Confirmación visual completa"
+        ))
+
+        let first = try await repository.reconcileCompiledRuntimeProfile(runID: context.id)
+        let second = try await repository.reconcileCompiledRuntimeProfile(runID: context.id)
+        XCTAssertEqual(first.configurationFingerprint, second.configurationFingerprint)
+        XCTAssertEqual(first.engineFingerprint, second.engineFingerprint)
+        XCTAssertNotEqual(first.engineFingerprint, context.configurationFingerprint)
+
+        let details = try await repository.runDetails()
+        let detail = try XCTUnwrap(details.first { $0.id == context.id })
+        XCTAssertEqual(
+            detail.configuration["profile.id"],
+            "heroes-hammerwatch-2.opengl-forward-compatible"
+        )
+        let certifications = try await repository.certifications()
+        let certification = try XCTUnwrap(
+            certifications.first { $0.appID == context.appID }
+        )
+        XCTAssertEqual(certification.sourceRunID, context.id)
+        XCTAssertEqual(certification.configurationFingerprint, first.configurationFingerprint)
+        XCTAssertEqual(certification.engineFingerprint, first.engineFingerprint)
+        try await repository.close()
+    }
+
     func testCodeWeaversJSONLDParserNormalizesSteamAndPlatformRatings() throws {
         let html = #"""
         <html><head>

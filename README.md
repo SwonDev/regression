@@ -195,6 +195,10 @@ backend y nota de evidencia. Nunca se infiere “perfecto” de un cierre normal
   la configuración y cierre limpio. Run blindado:
   `2F2DE49D-DE01-4A7F-B2D2-39195EA5D68B`. Expediente:
   [`docs/games/hell-clock.md`](docs/games/hell-clock.md).
+- **Heroes of Hammerwatch II** — OpenGL 3.2 mediante el hook forward-compatible público de Wine
+  CX 26.3, activado exclusivamente en `HWR2.exe`; menú, gameplay, entrada, opciones y cierre
+  confirmados perfectos. Run blindado: `F8E4EA27-2E6B-439C-AC93-BD927035B5B5`. Expediente:
+  [`docs/games/heroes-of-hammerwatch-2.md`](docs/games/heroes-of-hammerwatch-2.md).
 - **D3D9**: DXVK 1.10.3.
 - **Packaging**: app autocontenida (~1,8 GB, PE sin strip — el strip rompía el unwind SEH),
   firmada con identidad de desarrollo estable, runtime endurecido e icono propio.
@@ -255,7 +259,7 @@ Regression.app/
             │   ├── x86_64-windows/   # DLLs PE 64-bit + DXMT + Apple d3d12 + DXVK d3d9
             │   └── x86_64-unix/      # .so unix (winemac, winemetal, winevulkan, ...)
             ├── lib/runtime/           # gnutls, gstreamer, glib, freetype, SDL2, MoltenVK
-            ├── lib/profiles/            # rutas aisladas Grim Dawn/DD2/DragonSword
+            ├── lib/profiles/            # rutas aisladas Grim Dawn/DD2/DragonSword/HWR2
             └── lib/apple_gptk/        # D3DMetal.framework + libd3dshared.dylib (Apple)
 ```
 
@@ -349,7 +353,8 @@ bash build/create-steam-bottle.sh    # prefijo + receta crosstie + corefonts
 # 6) App
 make -C build/wine64 install DESTDIR=stage + strip (ver sección 7) → montar SharedSupport
 bash build/build-dd2-profile.sh        # build incremental compatible del router de perfiles
-bash build/install-game-profiles.sh    # fija Grim Dawn/DD2/DragonSword, hashes, backup y firma
+bash build/build-heroes-hammerwatch-2-profile.sh  # perfil OpenGL reproducible sin UUID
+bash build/install-game-profiles.sh    # fija Grim Dawn/DD2/DragonSword/HWR2, backup y firma
 Scripts/sign_regression.sh Regression.app  # refirma sin perder la identidad de permisos
 ```
 
@@ -414,6 +419,10 @@ Gotchas de build (todos resueltos, no redescubrir):
     `atidxx64`, `d3d9`, `dcomp`, `d3d11`, `d3d12`, `dxgi`, `nvapi64` y `nvngx`, solo en ese
     proceso. Seleccionar únicamente el directorio mezcló D3DMetal con DXMT y congeló Unreal en el
     logo; la receta completa eliminó los tirones y fue confirmada perfecta.
+14. **Heroes of Hammerwatch II = OpenGL forward-compatible por proceso.** El Wine CX 26.3
+    abierto ya implementa `CW Hack 24834`; `HWR2.exe` activa `CX_FWD_COMPAT_GL_CTX=1` sin tocar
+    Steam, registro, RetinaMode ni el driver global. Poner esa variable en el entorno general
+    está prohibido: la receta vive en su perfil y en el router exacto del ejecutable.
 
 ---
 
@@ -424,10 +433,12 @@ Gotchas de build (todos resueltos, no redescubrir):
   propósito general después de macOS 27 y la ruta arm64/WoW64 se desarrollará en paralelo, sin
   sustituir el baseline hasta igualar matriz y rendimiento.
 - **DXMT upstream + parche cross-process propio** en vez de su fork (privado, no publicable).
-- **winemac parcheado** (consumer IOSurface) — es el ÚNICO parche al árbol de wine.
+- **winemac global parcheado** (consumer IOSurface) — es el único parche que modifica el driver
+  compartido. HWR2 añade, dentro de una copia de perfil, el opt-in OpenGL público que no altera el
+  runtime global.
 - **D3DMetal = binarios de Apple del GPTK instalado** (licencia evaluación, uso local).
 - **Routing gráfico por ejecutable en ntdll**: cada perfil se antepone únicamente en su proceso;
-  Grim Dawn, DD2 y DragonSword no alteran Steam, Cube World, FFT ni el backend global.
+  Grim Dawn, DD2, DragonSword y HWR2 no alteran Steam, Cube World, FFT ni el backend global.
 - **Botella fuera de la app**: datos de usuario (login, juegos) separados del artefacto firmado.
 - **Strip agresivo** del runtime (mingw-strip PE, strip -x .so): 1,5 GB → 596 MB.
 

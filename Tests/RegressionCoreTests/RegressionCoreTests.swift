@@ -38,6 +38,11 @@ final class RegressionCoreTests: XCTestCase {
             VerifiedGameCatalog.certification(for: "1782460")?.gameName,
             "Hell Clock"
         )
+        XCTAssertEqual(
+            VerifiedGameCatalog.certification(for: "619820")?.gameName,
+            "Heroes of Hammerwatch II"
+        )
+        XCTAssertEqual(VerifiedGameCatalog.revision, "2026-07-29.5")
         XCTAssertNil(VerifiedGameCatalog.certification(for: "999999999"))
     }
 
@@ -282,6 +287,49 @@ final class RegressionCoreTests: XCTestCase {
         XCTAssertEqual(delta.removed, ["retina": "n"])
         XCTAssertEqual(delta.changed["renderer"]?.before, "d3dmetal")
         XCTAssertEqual(delta.changed["renderer"]?.after, "dxvk")
+    }
+
+    func testCompiledProfileIsCapturedOnlyForItsRegressionGame() {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-profile-capture-\(UUID().uuidString)")
+        let game = SteamGame(
+            appID: "619820",
+            name: "Heroes of Hammerwatch II",
+            installDirectory: "Heroes of Hammerwatch II",
+            manifestURL: root.appendingPathComponent("appmanifest_619820.acf"),
+            sourceBackend: .regression
+        )
+        let baseline = ["backend": "regression", "provider.version": "1.7.3"]
+        let regression = ConfigurationCollector.snapshot(
+            bottleURL: root,
+            backend: .regression,
+            providerVersion: "1.7.3",
+            game: game
+        )
+        let crossOver = ConfigurationCollector.snapshot(
+            bottleURL: root,
+            backend: .crossOver,
+            providerVersion: "26.3",
+            game: game
+        )
+
+        XCTAssertEqual(
+            regression["profile.id"],
+            "heroes-hammerwatch-2.opengl-forward-compatible"
+        )
+        XCTAssertEqual(regression["profile.opengl.forward-compatible"], "1")
+        XCTAssertNil(crossOver["profile.id"])
+        XCTAssertNotEqual(
+            ConfigurationCollector.engineFingerprint(for: baseline),
+            ConfigurationCollector.engineFingerprint(for: regression)
+        )
+        XCTAssertEqual(
+            ConfigurationCollector.engineValues(from: regression)["profile.scope"],
+            "exact-process"
+        )
+        XCTAssertNil(
+            GameRuntimeProfileCatalog.profile(for: "999999", backend: .regression)
+        )
     }
 
     func testGameConfigurationCollectorCapturesGraphicsWithoutPrivateValues() throws {

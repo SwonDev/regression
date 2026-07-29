@@ -43,6 +43,12 @@ public enum ConfigurationCollector {
         collectRegistryConfiguration(at: bottleURL, into: &values)
         collectGraphicsComponents(at: bottleURL, into: &values)
         collectRuntimeComponents(at: bottleURL, into: &values)
+        if let game {
+            values.merge(GameRuntimeProfileCatalog.configurationValues(
+                for: game.appID,
+                backend: backend
+            )) { _, profileValue in profileValue }
+        }
         if let game, let steamRootURL {
             values.merge(GameConfigurationCollector.snapshot(
                 bottleURL: bottleURL,
@@ -65,7 +71,9 @@ public enum ConfigurationCollector {
     /// conservan en el snapshot completo, pero no deben crear falsos motores distintos.
     public static func engineValues(from configuration: [String: String]) -> [String: String] {
         let exactKeys: Set<String> = ["backend", "provider.version"]
-        let prefixes = ["bottle.", "registry.", "component.", "graphics.", "runtime."]
+        let prefixes = [
+            "bottle.", "registry.", "component.", "graphics.", "runtime.", "profile."
+        ]
         return configuration.filter { key, _ in
             exactKeys.contains(key) || prefixes.contains(where: key.hasPrefix)
         }

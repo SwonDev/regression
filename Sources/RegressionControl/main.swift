@@ -276,6 +276,19 @@ enum RegressionControl {
                 )
             }
 
+        case "reconcile-profile":
+            guard arguments.count >= 2,
+                  let runID = UUID(uuidString: arguments[1]) else {
+                throw RegressionCoreError.launchFailed(
+                    "Usa reconcile-profile RUN_ID"
+                )
+            }
+            try await repository.prepare()
+            let reconciled = try await repository.reconcileCompiledRuntimeProfile(runID: runID)
+            print("Perfil compilado reconciliado:", runID.uuidString)
+            print("Configuración:", reconciled.configurationFingerprint)
+            print("Motor:", reconciled.engineFingerprint)
+
         case "engines":
             try await repository.prepare()
             for engine in try await repository.engineProfiles() {

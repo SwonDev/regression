@@ -11,10 +11,13 @@ GRIM_TARGET="../apple_gptk/wine"
 DD2_PROFILE="$PROFILE_ROOT/dragons-dogma-2"
 DRAGONSWORD_PROFILE="$PROFILE_ROOT/dragonsword"
 DRAGONSWORD_TARGET="../apple_gptk/wine"
+HWR2_PROFILE="$PROFILE_ROOT/heroes-hammerwatch-2"
 DD2_BUILD="$ROOT/build/wine-profile"
 DD2_NTDLL="$DD2_BUILD/dlls/ntdll/ntdll.so"
 DD2_WINEMAC_SO="$DD2_BUILD/dlls/winemac.drv/winemac.so"
 DD2_WINEMAC_DRV="$DD2_BUILD/dlls/winemac.drv/x86_64-windows/winemac.drv"
+HWR2_BUILD="$ROOT/build/wine-hwr2-profile"
+HWR2_WINEMAC_SO="$HWR2_BUILD/dlls/winemac.drv/winemac.so"
 GLOBAL_NTDLL="$WINE_ROOT/lib/wine/x86_64-unix/ntdll.so"
 GLOBAL_WINEMAC_SO="$WINE_ROOT/lib/wine/x86_64-unix/winemac.so"
 GLOBAL_WINEMAC_DRV="$WINE_ROOT/lib/wine/x86_64-windows/winemac.drv"
@@ -27,6 +30,8 @@ DD2_PROFILE_BACKUP=""
 DD2_PROFILE_INSTALLED=false
 DRAGONSWORD_PROFILE_BACKUP=""
 DRAGONSWORD_PROFILE_INSTALLED=false
+HWR2_PROFILE_BACKUP=""
+HWR2_PROFILE_INSTALLED=false
 INSTALL_COMMITTED=false
 STAGE=""
 
@@ -84,6 +89,9 @@ finish_install()
         if [[ "$DRAGONSWORD_PROFILE_INSTALLED" == true ]]; then
             remove_exact_path "$DRAGONSWORD_PROFILE"
         fi
+        if [[ "$HWR2_PROFILE_INSTALLED" == true ]]; then
+            remove_exact_path "$HWR2_PROFILE"
+        fi
         if [[ -n "$DD2_PROFILE_BACKUP" &&
               ( -e "$DD2_PROFILE_BACKUP" || -L "$DD2_PROFILE_BACKUP" ) ]]; then
             mv "$DD2_PROFILE_BACKUP" "$DD2_PROFILE"
@@ -92,6 +100,11 @@ finish_install()
         if [[ -n "$DRAGONSWORD_PROFILE_BACKUP" &&
               ( -e "$DRAGONSWORD_PROFILE_BACKUP" || -L "$DRAGONSWORD_PROFILE_BACKUP" ) ]]; then
             mv "$DRAGONSWORD_PROFILE_BACKUP" "$DRAGONSWORD_PROFILE"
+            restored=true
+        fi
+        if [[ -n "$HWR2_PROFILE_BACKUP" &&
+              ( -e "$HWR2_PROFILE_BACKUP" || -L "$HWR2_PROFILE_BACKUP" ) ]]; then
+            mv "$HWR2_PROFILE_BACKUP" "$HWR2_PROFILE"
             restored=true
         fi
         if [[ -n "$NTDLL_BACKUP" && -f "$NTDLL_BACKUP" ]]; then
@@ -140,6 +153,12 @@ dd2_profile_is_current()
     done
 }
 
+hwr2_profile_is_current()
+{
+    hash_matches 2e441e71c00738b7434f7161648cb5c0e78f63a9ae8f3ceefa6ab8100b107c67 \
+        "$HWR2_PROFILE/x86_64-unix/winemac.so"
+}
+
 # Recursos locales de Apple GPTK usados por CrossOver 26.3.0. Se verifican,
 # pero nunca se copian al repositorio ni se redistribuyen.
 verify_hash c999c40698b7fc23c864165fb1364e6a40a8572469775947845afd42f4dfc9e7 "$APPLE_ROOT/wine/x86_64-windows/atidxx64.dll"
@@ -159,15 +178,18 @@ verify_hash 44b1379db1b9e3472d1746830eddd88718dbbc761de2e406d45b8be198593ef3 "$G
 verify_hash 3d2b085b1dce4db5615a2a95d96860b644e1bfd4c907d0a68d177d02bd2010e8 "$GLOBAL_NTDLL_PE32"
 if ! hash_matches 2cd0f030fd0b92bbf17308021d23b2a2fede6ab02d528c44c03753dfcb049c97 "$GLOBAL_NTDLL" &&
    ! hash_matches 9e37f4a1c4c163909b7bc26b2a38b6408f02e261ddbf079b9608bc884b65f67d "$GLOBAL_NTDLL" &&
-   ! hash_matches 2a446467a9faa0885f350d096fb6424c92f62201b733f974150c931e3a535a6a "$GLOBAL_NTDLL"; then
+   ! hash_matches 2a446467a9faa0885f350d096fb6424c92f62201b733f974150c931e3a535a6a "$GLOBAL_NTDLL" &&
+   ! hash_matches d580644ea2604f76e16dbb9448255bdadd2543e3bcf2340a20f32202d6e45d45 "$GLOBAL_NTDLL"; then
     echo "ERROR: ntdll.so global no pertenece a una revisión protegida del router." >&2
     exit 1
 fi
 
 "$ROOT/build/build-dd2-profile.sh"
-verify_hash 2a446467a9faa0885f350d096fb6424c92f62201b733f974150c931e3a535a6a "$DD2_NTDLL"
+"$ROOT/build/build-heroes-hammerwatch-2-profile.sh"
+verify_hash d580644ea2604f76e16dbb9448255bdadd2543e3bcf2340a20f32202d6e45d45 "$DD2_NTDLL"
 verify_hash 34d373a22fd224fec6e32d1bf7f31c647c518345752dc6bc632883c8c9aefc42 "$DD2_WINEMAC_SO"
 verify_hash 2ee679fa891fa336b2dd3623a1945f47c1c5834853e66eff342ba356c12d8c32 "$DD2_WINEMAC_DRV"
+verify_hash 2e441e71c00738b7434f7161648cb5c0e78f63a9ae8f3ceefa6ab8100b107c67 "$HWR2_WINEMAC_SO"
 
 mkdir -p "$PROFILE_ROOT"
 if [[ -L "$GRIM_PROFILE" && "$(readlink "$GRIM_PROFILE")" == "$GRIM_TARGET" ]]; then
@@ -182,13 +204,32 @@ else
     ln -s "$GRIM_TARGET" "$GRIM_PROFILE"
 fi
 
-if ! hash_matches 2a446467a9faa0885f350d096fb6424c92f62201b733f974150c931e3a535a6a "$GLOBAL_NTDLL"; then
+if ! hash_matches d580644ea2604f76e16dbb9448255bdadd2543e3bcf2340a20f32202d6e45d45 "$GLOBAL_NTDLL"; then
     ensure_backup_root
     NTDLL_BACKUP="$BACKUP_ROOT/ntdll.so.before-profile-router"
     cp -p "$GLOBAL_NTDLL" "$NTDLL_BACKUP"
     cp -p "$DD2_NTDLL" "$GLOBAL_NTDLL"
     chmod 755 "$GLOBAL_NTDLL"
     echo "Router ntdll actualizado; copia anterior en $BACKUP_ROOT"
+fi
+
+if hwr2_profile_is_current; then
+    echo "Perfil Heroes of Hammerwatch II ya fijado al OpenGL compatible aislado."
+else
+    ensure_backup_root
+    if [[ -e "$HWR2_PROFILE" || -L "$HWR2_PROFILE" ]]; then
+        HWR2_PROFILE_BACKUP="$BACKUP_ROOT/heroes-hammerwatch-2.before-install"
+        mv "$HWR2_PROFILE" "$HWR2_PROFILE_BACKUP"
+    fi
+
+    STAGE="$(mktemp -d "$PROFILE_ROOT/.heroes-hammerwatch-2-stage.XXXXXX")"
+    mkdir -p "$STAGE/x86_64-unix"
+    cp -p "$HWR2_WINEMAC_SO" "$STAGE/x86_64-unix/winemac.so"
+    chmod 755 "$STAGE/x86_64-unix/winemac.so"
+    mv "$STAGE" "$HWR2_PROFILE"
+    STAGE=""
+    HWR2_PROFILE_INSTALLED=true
+    echo "Perfil aislado Heroes of Hammerwatch II instalado; rollback en $BACKUP_ROOT"
 fi
 
 if [[ -L "$DRAGONSWORD_PROFILE" &&
@@ -233,7 +274,7 @@ else
     echo "Perfil aislado Dragon's Dogma 2 instalado; rollback en $BACKUP_ROOT"
 fi
 
-verify_hash 2a446467a9faa0885f350d096fb6424c92f62201b733f974150c931e3a535a6a "$GLOBAL_NTDLL"
+verify_hash d580644ea2604f76e16dbb9448255bdadd2543e3bcf2340a20f32202d6e45d45 "$GLOBAL_NTDLL"
 verify_hash 50fda6d287a23324c39c75c7c887ae3ae0bf4e175c61bae4a92229053b5c65f2 "$GLOBAL_WINEMAC_SO"
 verify_hash da91ec701a18e97c0c3cd943d383ef996092c11d74983876fd44c90b03d5e5b1 "$GLOBAL_WINEMAC_DRV"
 verify_hash 44b1379db1b9e3472d1746830eddd88718dbbc761de2e406d45b8be198593ef3 "$GLOBAL_NTDLL_PE64"
@@ -246,7 +287,11 @@ link_matches "$DRAGONSWORD_TARGET" "$DRAGONSWORD_PROFILE" || {
     echo "ERROR: el perfil DragonSword instalado no coincide con la receta fijada." >&2
     exit 1
 }
+hwr2_profile_is_current || {
+    echo "ERROR: el perfil Heroes of Hammerwatch II instalado no coincide con la receta fijada." >&2
+    exit 1
+}
 
 "$SIGN_SCRIPT" "$APP"
 INSTALL_COMMITTED=true
-echo "Perfiles Grim Dawn, Dragon's Dogma 2 y DragonSword instalados, verificados y bundle firmado."
+echo "Perfiles Grim Dawn, Dragon's Dogma 2, DragonSword y Heroes of Hammerwatch II instalados, verificados y bundle firmado."

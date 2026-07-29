@@ -67,7 +67,7 @@ public struct VerifiedGameCertification: Codable, Equatable, Identifiable, Senda
 /// motor ni sustituye la telemetría: evita perder el estado blindado al regenerar los datos
 /// locales. Solo se añade una entrada después de validar render, entrada, opciones y gameplay.
 public enum VerifiedGameCatalog {
-    public static let revision = "2026-07-29.3"
+    public static let revision = "2026-07-29.5"
 
     public static let all: [VerifiedGameCertification] = [
         VerifiedGameCertification(
@@ -116,6 +116,18 @@ public enum VerifiedGameCatalog {
                 "aa2c5e6b85a6c077dfeb18bf0e626519000ee144eabf25ecccf0aa317a41f199",
             engineFingerprint:
                 "033fd4ebad662f34b73e309cc721cfae8cd32fdcd1b2b06b0d235e93e95a1dbb"
+        ),
+        VerifiedGameCertification(
+            appID: "619820",
+            gameName: "Heroes of Hammerwatch II",
+            backend: .regression,
+            verifiedAt: "2026-07-29",
+            evidence: "docs/games/heroes-of-hammerwatch-2.md",
+            sourceRunID: UUID(uuidString: "F8E4EA27-2E6B-439C-AC93-BD927035B5B5"),
+            configurationFingerprint:
+                "af59b82a9e8102995ccbf5a9c93e1e9e6c62afe3213bea8a0bbe2ff7726236f1",
+            engineFingerprint:
+                "af59b82a9e8102995ccbf5a9c93e1e9e6c62afe3213bea8a0bbe2ff7726236f1"
         )
     ]
 

@@ -1,6 +1,6 @@
 --- a/dlls/ntdll/unix/loader.c
 +++ b/dlls/ntdll/unix/loader.c
-@@ -382,8 +382,137 @@
+@@ -382,8 +382,143 @@
      dll_paths = new_dll_paths;
      if (path_len > dll_path_maxlen)
          dll_path_maxlen = path_len;
@@ -49,6 +49,7 @@
 +    int is_grim_dawn = regression_executable_is( "grim dawn.exe" );
 +    int is_dragons_dogma_2 = regression_executable_is( "dd2.exe" );
 +    int is_dragonsword = regression_executable_is( "dsclient-win64-shipping.exe" );
++    int is_heroes_hammerwatch_2 = regression_executable_is( "hwr2.exe" );
 +    const char *suffix;
 +    char *path;
 +
@@ -58,6 +59,7 @@
 +        else if (is_grim_dawn) backend = "grim-dawn";
 +        else if (is_dragons_dogma_2) backend = "dragons-dogma-2";
 +        else if (is_dragonsword) backend = "dragonsword";
++        else if (is_heroes_hammerwatch_2) backend = "heroes-hammerwatch-2";
 +        else if (regression_executable_is( "fft_enhanced.exe" )) backend = "d3dmetal";
 +        else return;
 +    }
@@ -66,6 +68,7 @@
 +    else if (!strcasecmp( backend, "grim-dawn" )) suffix = "/lib/profiles/grim-dawn";
 +    else if (!strcasecmp( backend, "dragons-dogma-2" )) suffix = "/lib/profiles/dragons-dogma-2";
 +    else if (!strcasecmp( backend, "dragonsword" )) suffix = "/lib/profiles/dragonsword";
++    else if (!strcasecmp( backend, "heroes-hammerwatch-2" )) suffix = "/lib/profiles/heroes-hammerwatch-2";
 +    else if (!strcasecmp( backend, "d3dmetal" )) suffix = "/lib/apple_gptk/wine";
 +    else
 +    {
@@ -89,6 +92,9 @@
 +    }
 +
 +    prepend_dll_path( path );
++    if (is_heroes_hammerwatch_2 && !strcasecmp( backend, "heroes-hammerwatch-2" ))
++        /* macOS exposes OpenGL 3.2+ core contexts only as forward-compatible. */
++        setenv( "CX_FWD_COMPAT_GL_CTX", "1", 1 );
 +    if (is_cubeworld && !strcasecmp( backend, "dxvk" ))
 +        /* CrossOver 26.3 emits discrete resource indexes for this DXVK path. */
 +        setenv( "MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "0", 1 );
@@ -139,7 +145,7 @@
  static void set_dll_path(void)
  {
      char *p, *path = getenv( "WINEDLLPATH" );
-@@ -2258,6 +2387,8 @@
+@@ -2258,6 +2393,8 @@
          }
      }
 -

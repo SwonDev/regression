@@ -429,6 +429,190 @@ public actor CompatibilityRepository {
         }
     }
 
+    /// Reasigna una ejecución histórica al perfil compilado que realmente la produjo.
+    ///
+    /// La operación es deliberadamente acotada: solo acepta una ejecución perfecta, real y del
+    /// backend propio para la que exista una receta compilada. Conserva los snapshots anteriores,
+    /// actualiza la procedencia del blindado y no interpreta datos ejecutables desde SQLite.
+    public func reconcileCompiledRuntimeProfile(
+        runID: UUID
+    ) throws -> (configurationFingerprint: String, engineFingerprint: String) {
+        try ensurePrepared()
+
+        struct TargetRun {
+            let appID: String
+            let backend: BackendKind
+            let providerVersion: String
+            let startedAt: Date
+            let result: RunResult
+            let processID: Int32?
+            let configuration: [String: String]
+            let afterConfiguration: [String: String]?
+            let verdict: VerificationVerdict
+            let rendering: VerificationDimension
+            let inputPrecision: VerificationDimension
+            let graphicsSettings: VerificationDimension
+            let gameplay: VerificationDimension
+        }
+
+        let targets: [TargetRun] = try query(
+            """
+            SELECT r.app_id, r.backend, r.provider_version, r.started_at, r.result,
+                   r.process_id, before.values_json, after.values_json,
+                   v.verdict, v.rendering, v.input_precision, v.graphics_settings,
+                   v.gameplay
+            FROM runs r
+            JOIN configuration_snapshots before
+              ON before.fingerprint=r.configuration_fingerprint
+            LEFT JOIN configuration_snapshots after
+              ON after.fingerprint=r.after_configuration_fingerprint
+            JOIN run_verifications v ON v.run_id=r.id
+            WHERE r.id=? LIMIT 1;
+            """,
+            bindings: [runID.uuidString]
+        ) { statement in
+            guard
+                let backend = BackendKind(rawValue: Self.text(statement, 1)),
+                let startedAt = dateFormatter.date(from: Self.text(statement, 3)),
+                let result = RunResult(rawValue: Self.text(statement, 4)),
+                let configurationData = Self.text(statement, 6).data(using: .utf8),
+                let configuration = try? decoder.decode(
+                    [String: String].self,
+                    from: configurationData
+                ),
+                let verdict = VerificationVerdict(rawValue: Self.text(statement, 8)),
+                let rendering = VerificationDimension(rawValue: Self.text(statement, 9)),
+                let inputPrecision = VerificationDimension(rawValue: Self.text(statement, 10)),
+                let graphicsSettings = VerificationDimension(rawValue: Self.text(statement, 11)),
+                let gameplay = VerificationDimension(rawValue: Self.text(statement, 12))
+            else { return nil }
+
+            let afterConfiguration: [String: String]?
+            if let text = Self.optionalText(statement, 7),
+               let data = text.data(using: .utf8) {
+                afterConfiguration = try? decoder.decode([String: String].self, from: data)
+            } else {
+                afterConfiguration = nil
+            }
+
+            return TargetRun(
+                appID: Self.text(statement, 0),
+                backend: backend,
+                providerVersion: Self.text(statement, 2),
+                startedAt: startedAt,
+                result: result,
+                processID: Self.optionalInt32(statement, 5),
+                configuration: configuration,
+                afterConfiguration: afterConfiguration,
+                verdict: verdict,
+                rendering: rendering,
+                inputPrecision: inputPrecision,
+                graphicsSettings: graphicsSettings,
+                gameplay: gameplay
+            )
+        }
+
+        guard let target = targets.first else {
+            throw RegressionCoreError.invalidEvidence(
+                "la ejecución no existe o no contiene una verificación completa"
+            )
+        }
+        guard target.backend == .regression,
+              target.processID != nil,
+              target.result != .preparing,
+              target.verdict == .perfect,
+              target.rendering == .passed,
+              target.inputPrecision == .passed,
+              target.graphicsSettings == .passed,
+              target.gameplay == .passed else {
+            throw RegressionCoreError.invalidEvidence(
+                "solo una ejecución perfecta y real de Regression puede reconciliarse"
+            )
+        }
+        let profileValues = GameRuntimeProfileCatalog.configurationValues(
+            for: target.appID,
+            backend: target.backend
+        )
+        guard !profileValues.isEmpty else {
+            throw RegressionCoreError.invalidEvidence(
+                "no existe un perfil compilado para esta ejecución"
+            )
+        }
+
+        func applyingProfile(to configuration: [String: String]) -> [String: String] {
+            var reconciled = configuration.filter { !$0.key.hasPrefix("profile.") }
+            reconciled.merge(profileValues) { _, compiledValue in compiledValue }
+            return reconciled
+        }
+
+        let configuration = applyingProfile(to: target.configuration)
+        let configurationFingerprint = ConfigurationCollector.fingerprint(configuration)
+        let afterConfiguration = target.afterConfiguration.map(applyingProfile(to:))
+        let afterFingerprint = afterConfiguration.map(ConfigurationCollector.fingerprint)
+
+        var engineFingerprint = ""
+        try transaction {
+            try execute(
+                "INSERT OR IGNORE INTO configuration_snapshots(fingerprint, values_json, created_at) VALUES(?, ?, ?);",
+                bindings: [
+                    configurationFingerprint,
+                    try jsonString(configuration),
+                    dateFormatter.string(from: target.startedAt)
+                ]
+            )
+            if let afterConfiguration, let afterFingerprint {
+                try execute(
+                    "INSERT OR IGNORE INTO configuration_snapshots(fingerprint, values_json, created_at) VALUES(?, ?, ?);",
+                    bindings: [
+                        afterFingerprint,
+                        try jsonString(afterConfiguration),
+                        dateFormatter.string(from: Date())
+                    ]
+                )
+            }
+            engineFingerprint = try persistEngineSnapshot(
+                configuration: configuration,
+                backend: target.backend,
+                providerVersion: target.providerVersion,
+                observedAt: target.startedAt
+            )
+            try execute(
+                "UPDATE runs SET configuration_fingerprint=?, after_configuration_fingerprint=? WHERE id=?;",
+                bindings: [
+                    configurationFingerprint,
+                    afterFingerprint ?? NSNull(),
+                    runID.uuidString
+                ]
+            )
+            try execute(
+                """
+                INSERT INTO run_engine_snapshots(run_id, engine_fingerprint) VALUES(?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET engine_fingerprint=excluded.engine_fingerprint;
+                """,
+                bindings: [runID.uuidString, engineFingerprint]
+            )
+            try execute(
+                """
+                UPDATE research_experiments
+                SET candidate_engine_fingerprint=?, updated_at=?
+                WHERE run_id=? AND state!='passed';
+                """,
+                bindings: [
+                    engineFingerprint,
+                    dateFormatter.string(from: Date()),
+                    runID.uuidString
+                ]
+            )
+            try synchronizeLocalCertification(forRunID: runID)
+            try recordEvent(
+                runID: runID,
+                phase: "compiled-profile-reconciled",
+                value: profileValues["profile.id"] ?? "perfil compilado"
+            )
+        }
+        return (configurationFingerprint, engineFingerprint)
+    }
+
     public func recordObservation(_ observation: CompatibilityObservation) throws {
         try ensurePrepared()
         guard observation.hasCompletePerfectEvidence else {

@@ -215,6 +215,13 @@ introducir módulos de otro backend. DragonSword demuestra que la ruta debe sele
 conjunto coherente dentro del proceso: perfil, variables y load-order. El diagnóstico y la receta
 blindada están en [`games/dragonsword-awakening.md`](games/dragonsword-awakening.md).
 
+Un fallo de creación OpenGL tampoco justifica cambiar de API por intuición. Heroes of Hammerwatch
+II demostró que primero hay que comparar el error exacto contra la fuente Wine de referencia:
+BGFX pedía core 3.2 sin el bit forward-compatible y el árbol CX 26.3 ya ofrecía un hook opt-in
+para ese caso. La promoción activa el hook solo en `HWR2.exe`, conserva el driver global y prueba
+Steam más Grim Dawn. El expediente reproducible está en
+[`games/heroes-of-hammerwatch-2.md`](games/heroes-of-hammerwatch-2.md).
+
 “Funciona perfecto” y “mejor opción conocida” son afirmaciones independientes. Una versión más
 reciente de Wine, GPTK/D3DMetal, DXMT, DXVK, MoltenVK o vkd3d solo puede promocionarse si el
 candidato es por juego, tiene fuente/huella verificadas, está aislado, dispone de rollback,

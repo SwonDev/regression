@@ -170,6 +170,16 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
     opciones, persistencia, restauración y cierre. Su huella de motor es `033fd4eb…` y la de
     configuración `aa2c5e6b…`; no crear un perfil por ejecutable ni tocar el runtime global para
     este juego sin una regresión reproducida y una matriz completa. Ver `docs/games/hell-clock.md`.
+28. **Heroes of Hammerwatch II activa OpenGL forward-compatible solo en `HWR2.exe`.** BGFX pide
+    un contexto core 3.2 sin el bit que macOS exige y falla con `0x2095`. El Wine CX 26.3 abierto
+    ya contiene `CW Hack 24834`; el router del proceso define `CX_FWD_COMPAT_GL_CTX=1` únicamente
+    para el ejecutable exacto y conserva intacto el driver global. No trasladar la variable a
+    Steam, al registro ni al entorno general. Run perfecto:
+    `F8E4EA27-2E6B-439C-AC93-BD927035B5B5`; ver
+    `docs/games/heroes-of-hammerwatch-2.md`.
+    Su identidad compilada `heroes-hammerwatch-2.opengl-forward-compatible@1` forma parte de la
+    huella de motor `af59b82a9e8102995ccbf5a9c93e1e9e6c62afe3213bea8a0bbe2ff7726236f1`;
+    no ejecutar jamás comandos aprendidos desde SQLite.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 
@@ -247,6 +257,7 @@ pruebas; sustituir un PIN global requiere validar toda la matriz correspondiente
 | d3d9 | DXVK 1.10.3, override `native` sí (PE plana) | Funciona | Juego D3D9 |
 | Grim Dawn | D3DMetal completo por proceso; `d3d9/atidxx64/nvapi64/nvngx=builtin` | Evita mezcla DXVK y parpadeo | Gameplay + opciones + captura 3024×1964 |
 | DragonSword | D3DMetal completo por proceso; ocho módulos builtin fijados | Evita ruta híbrida D3DMetal/DXMT y tirones | Gameplay + pausa + salida + captura 3024×1964 |
+| Heroes of Hammerwatch II | `CX_FWD_COMPAT_GL_CTX=1` solo en `HWR2.exe`; OpenGL CX 26.3 | BGFX omite el bit forward-compatible requerido por macOS | Menú + gameplay + foco + Steam + Grim Dawn |
 | RetinaMode | `n` (HKCU\Software\Wine\Mac Driver) | Alinea clicks | Click en tienda |
 | Fuentes | 55 TTFs (corefonts + CJK) en la botella | Sin ellas Steam crashea (assert Win32Font) | Steam arranca |
 | DLLs PE | **SIN strip** | El strip rompe unwind SEH y firma de módulos | Juegos Unity |
@@ -269,7 +280,7 @@ validación de su fila pasa entera con capturas, (3) hay backup del estado nuevo
 (4) README/AGENTS reflejan el cambio. Si solo cumples el punto 1, has arreglado una cosa y
 quizá roto otra — que es exactamente lo que este protocolo existe para evitar.
 
-## Estado rápido (2026-07-28)
+## Estado rápido (2026-07-29)
 
 - **Arquitectura operativa actual**: app nativa `LSUIElement` en barra de menús, CrossOver 26.3
   como backend predeterminado, motor propio seleccionable, conmutación con cierre limpio y una
@@ -343,6 +354,16 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   restauró el valor inicial y cerró limpiamente. La huella final de configuración coincidió con
   la inicial. La app instalada mostró `Verificado perfecto: Regression`; evidencia y rollback:
   `docs/games/hell-clock.md` y `backups/hell-clock-baseline-20260729-120152/`.
+- **Heroes of Hammerwatch II (OpenGL aislado perfecto)**: los baselines de Regression y
+  CrossOver fallaban de forma idéntica al crear BGFX OpenGL 3.2 (`0x2095`). El run
+  `F8E4EA27-2E6B-439C-AC93-BD927035B5B5` activó el hook público CX 26.3 solo dentro de
+  `HWR2.exe`, alcanzó menú y gameplay real, mantuvo entrada y opciones y cerró con `exit=0`.
+  Steam siguió renderizando y Grim Dawn superó la matriz de foco y cambio de ventanas. Perfil,
+  hashes, evidencia y rollback: `docs/games/heroes-of-hammerwatch-2.md` y
+  `backups/heroes-hammerwatch-2-baseline-20260729-122351/`.
+  La reconciliación local fija la huella compilada
+  `af59b82a9e8102995ccbf5a9c93e1e9e6c62afe3213bea8a0bbe2ff7726236f1` y conserva el snapshot
+  global anterior como historial.
 - **PIN: DXMT = v0.72 + parche cross-process** (versión exacta de CrossOver). `main` rompe los
   skeletal meshes de Palworld — NO actualizar sin probar Palworld.
 - **PIN: wine compilado con `--prefix` apuntando a la app** (Regression.app/Contents/SharedSupport/wine-root).
@@ -378,7 +399,7 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
 open -a "$PWD/Regression.app"            # debe abrir Steam y renderizar la tienda
 swift tools/diagnostics/list-windows.swift steam
 screencapture -x -l <id> /tmp/check.png  # captura y revisar visualmente
-bash build/install-game-profiles.sh      # verifica perfiles Grim Dawn/DD2/DragonSword y firma
+bash build/install-game-profiles.sh      # verifica perfiles Grim Dawn/DD2/DragonSword/HWR2 y firma
 bash build/verify-protected-state.sh --include-bottle  # verifica PINs sin lanzar juegos
 ```
 
