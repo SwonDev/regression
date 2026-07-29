@@ -285,6 +285,12 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   opciones y fue confirmado perfecto por el usuario. Evidencia y rollback local:
   `backups/grimdawn-d3dmetal-perfect-20260727-1802/`. Método y expediente reproducible:
   `docs/compatibility-research.md` y `docs/games/grim-dawn.md`.
+- **Clair Obscur: Expedition 33**: el baseline propio sin perfil especial fue confirmado perfecto
+  por el usuario en el run `4667F4AA-DE5C-4F7A-A7A5-AAAB29829D3C`: título, carga, combate,
+  Retina 3024×1964, entrada HID, pausa, opciones y salida limpia. La certificación fija la huella
+  `8454bf44804d122d587261d7084ddc08db1185e8c6bc703c5701b5669087c0d7`; expediente y rollback:
+  `docs/games/clair-obscur-expedition-33.md` y
+  `backups/clair-obscur-investigation-20260729-050233/`.
 - **Dragon's Dogma 2 (perfil promocionado, aún no perfecto)**: D3DMetal + Retina por proceso
   expone y conserva 3024×1890 en el selector, con gameplay, entrada, opciones y cierre observados.
   La carga inicial del menú de pausa tardó 10–15 s y las siguientes aperturas menos de 1 s. Las

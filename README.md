@@ -185,6 +185,8 @@ backend y nota de evidencia. Nunca se infiere “perfecto” de un cierre normal
 - **Palworld COMPLETO**: personaje + mundo + HUD (DXMT v0.72 + `-dx11`).
 - **Grim Dawn** (D3D11) — perfil aislado D3DMetal, 3024×1964 Retina, gameplay, clics y
   opciones gráficas confirmados sin parpadeo; **Romestead** (Unity) in-game.
+- **Clair Obscur: Expedition 33** — baseline propio sin perfil especial, título, carga,
+  combate, HUD, partículas, entrada HID, pausa y opciones confirmados a 3024×1964 Retina.
 - **D3D9**: DXVK 1.10.3.
 - **Packaging**: app autocontenida (~1,8 GB, PE sin strip — el strip rompía el unwind SEH),
   firmada con identidad de desarrollo estable, runtime endurecido e icono propio.
@@ -473,6 +475,20 @@ el perfil perfecto de Regression.
 Desactivado el cloud para 1128000 y 1004640 en
 `userdata/121123806/config/localconfig.vdf` (`"cloud" { "enabled" "0" }`). Si vuelve a
 pasar con otro juego: mismo arreglo.
+
+### Clair Obscur: Expedition 33 blindado (2026-07-29)
+
+El motor propio baseline, sin perfil ni override por ejecutable, superó título, carga de una
+partida existente, combate real, HUD, geometría, transparencias, partículas, entrada HID, pausa,
+opciones desde gameplay y salida limpia. El usuario confirmó explícitamente el funcionamiento
+perfecto del run canónico `4667F4AA-DE5C-4F7A-A7A5-AAAB29829D3C`; sus dos procesos terminaron
+con código 0 y la app mostró `Verificado perfecto: Regression`.
+
+La certificación fija la huella de motor/configuración
+`8454bf44804d122d587261d7084ddc08db1185e8c6bc703c5701b5669087c0d7` y no introduce ninguna
+dependencia ejecutable de CrossOver. El expediente reproducible, matriz, hashes, rollback y
+límites de la prueba están en
+[`docs/games/clair-obscur-expedition-33.md`](docs/games/clair-obscur-expedition-33.md).
 
 ### Cola de trabajo
 

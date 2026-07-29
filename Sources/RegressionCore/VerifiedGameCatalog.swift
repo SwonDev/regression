@@ -67,7 +67,7 @@ public struct VerifiedGameCertification: Codable, Equatable, Identifiable, Senda
 /// motor ni sustituye la telemetría: evita perder el estado blindado al regenerar los datos
 /// locales. Solo se añade una entrada después de validar render, entrada, opciones y gameplay.
 public enum VerifiedGameCatalog {
-    public static let revision = "2026-07-28.1"
+    public static let revision = "2026-07-29.1"
 
     public static let all: [VerifiedGameCertification] = [
         VerifiedGameCertification(
@@ -90,6 +90,13 @@ public enum VerifiedGameCatalog {
             backend: .regression,
             verifiedAt: "2026-07-27",
             evidence: "docs/games/grim-dawn.md"
+        ),
+        VerifiedGameCertification(
+            appID: "1903340",
+            gameName: "Clair Obscur: Expedition 33",
+            backend: .regression,
+            verifiedAt: "2026-07-29",
+            evidence: "docs/games/clair-obscur-expedition-33.md"
         )
     ]
 

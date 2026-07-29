@@ -26,6 +26,10 @@ final class RegressionCoreTests: XCTestCase {
             "FINAL FANTASY TACTICS - The Ivalice Chronicles"
         )
         XCTAssertEqual(VerifiedGameCatalog.certification(for: "219990")?.gameName, "Grim Dawn")
+        XCTAssertEqual(
+            VerifiedGameCatalog.certification(for: "1903340")?.gameName,
+            "Clair Obscur: Expedition 33"
+        )
         XCTAssertNil(VerifiedGameCatalog.certification(for: "999999999"))
     }
 
