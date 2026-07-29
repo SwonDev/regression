@@ -34,6 +34,10 @@ final class RegressionCoreTests: XCTestCase {
             VerifiedGameCatalog.certification(for: "4570720")?.gameName,
             "DragonSword : Awakening"
         )
+        XCTAssertEqual(
+            VerifiedGameCatalog.certification(for: "1782460")?.gameName,
+            "Hell Clock"
+        )
         XCTAssertNil(VerifiedGameCatalog.certification(for: "999999999"))
     }
 

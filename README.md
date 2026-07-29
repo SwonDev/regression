@@ -190,6 +190,11 @@ backend y nota de evidencia. Nunca se infiere “perfecto” de un cierre normal
 - **DragonSword : Awakening** — D3DMetal completo por proceso, gameplay Retina 3024×1964,
   entrada, pausa, opciones y salida limpia confirmados sin tirones; perfil y router protegidos.
   Expediente: [`docs/games/dragonsword-awakening.md`](docs/games/dragonsword-awakening.md).
+- **Hell Clock** — baseline general sin perfil especial, gameplay Retina 3024×1964, cursor y
+  clicks precisos, pausa, opciones gráficas modificables y persistentes, restauración exacta de
+  la configuración y cierre limpio. Run blindado:
+  `2F2DE49D-DE01-4A7F-B2D2-39195EA5D68B`. Expediente:
+  [`docs/games/hell-clock.md`](docs/games/hell-clock.md).
 - **D3D9**: DXVK 1.10.3.
 - **Packaging**: app autocontenida (~1,8 GB, PE sin strip — el strip rompía el unwind SEH),
   firmada con identidad de desarrollo estable, runtime endurecido e icono propio.

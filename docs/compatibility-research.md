@@ -281,9 +281,12 @@ Un juego queda blindado cuando, desde la instalación canónica:
 - Steam y al menos un perfil ya verificado siguen intactos cuando el cambio comparte una pieza;
 - existe rollback y el cambio es reproducible desde el repositorio.
 
-El cierre no termina con la frase del usuario: hay que asociar esa confirmación al run exacto con
-`regressionctl verify`, refrescar la app y comprobar visualmente el distintivo. Los intentos fallidos
-se mantienen porque explican el aprendizaje; la UI prioriza el mejor perfil perfecto confirmado.
+El cierre no termina con una impresión verbal ni con un exit code: hay que asociar la validación
+al run exacto con `regressionctl verify`, refrescar la app y comprobar visualmente el distintivo.
+La validación puede proceder del usuario o del agente cuando este haya controlado y capturado
+directamente toda la matriz: render, entrada en distintas zonas, gameplay, pausa, cambio y
+persistencia de opciones, restauración del estado y cierre. Los intentos fallidos se mantienen
+porque explican el aprendizaje; la UI prioriza el mejor perfil perfecto confirmado.
 
 Solo hay dos salidas legítimas del trabajo activo:
 

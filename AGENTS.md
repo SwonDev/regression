@@ -90,10 +90,13 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
 13. Responde siempre en **español**, con tildes. Código y comentarios del repo en el idioma del
     código existente.
 14. **Todo juego confirmado perfecto debe quedar visible como blindado.** Inmediatamente después
-    de la confirmación visual, verificar la ejecución exacta en la base local con veredicto
-    `perfect` (render, entrada, opciones y gameplay en `passed`) y refrescar la app hasta comprobar la fila
-    verde `Verificado perfecto: Regression`. Los fallos anteriores se conservan como historial;
-    el perfil perfecto tiene prioridad. Si la validación es histórica y anterior a la telemetría,
+    de la confirmación visual —del usuario o del agente cuando este haya controlado directamente
+    toda la matriz—, verificar la ejecución exacta en la base local con veredicto `perfect`
+    (render, entrada, opciones y gameplay en `passed`) y refrescar la app hasta comprobar la fila
+    verde `Verificado perfecto: Regression`. La validación autónoma exige capturas de gameplay,
+    cursor/entrada, pausa, cambio y persistencia de opciones, restauración del estado y cierre;
+    no se infiere de procesos o logs. Los fallos anteriores se conservan como historial y el
+    perfil perfecto tiene prioridad. Si la validación es histórica y anterior a la telemetría,
     registrar una observación importada con App ID, nombre, backend, nota y evidencia/rollback.
     Un exit code 0 jamás crea este estado por sí solo. La confirmación modal del veredicto
     perfecto es una salvaguarda deliberada y no se elimina. Tampoco puede certificarse un run que
@@ -162,6 +165,11 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
     captura y configuración A/B. No forzar resoluciones ni relaciones de aspecto en el estado
     bueno: cualquier mejora entra como candidato aislado. Rotwood fija 1512×870 dentro de
     1512×982 en ambos backends; ver `docs/games/rotwood.md`.
+27. **Hell Clock está blindado sobre el baseline general, sin perfil especial.** El run
+    `2F2DE49D-DE01-4A7F-B2D2-39195EA5D68B` pasó render, gameplay real, cursor Retina, pausa,
+    opciones, persistencia, restauración y cierre. Su huella de motor es `033fd4eb…` y la de
+    configuración `aa2c5e6b…`; no crear un perfil por ejecutable ni tocar el runtime global para
+    este juego sin una regresión reproducida y una matriz completa. Ver `docs/games/hell-clock.md`.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 
@@ -329,6 +337,12 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   pantalla 1512×982. La base muestra `Funciona con incidencias`; no se creó un perfil innecesario
   ni una certificación perfecta. Evidencia y rollback:
   `docs/games/rotwood.md` y `backups/rotwood-baseline-20260729-111437/`.
+- **Hell Clock (baseline general perfecto)**: el run
+  `2F2DE49D-DE01-4A7F-B2D2-39195EA5D68B` cargó un save real, renderizó gameplay y HUD sin
+  artefactos, mantuvo cursor y clicks precisos, abrió pausa/opciones, persistió VSync al reabrir,
+  restauró el valor inicial y cerró limpiamente. La huella final de configuración coincidió con
+  la inicial. La app instalada mostró `Verificado perfecto: Regression`; evidencia y rollback:
+  `docs/games/hell-clock.md` y `backups/hell-clock-baseline-20260729-120152/`.
 - **PIN: DXMT = v0.72 + parche cross-process** (versión exacta de CrossOver). `main` rompe los
   skeletal meshes de Palworld — NO actualizar sin probar Palworld.
 - **PIN: wine compilado con `--prefix` apuntando a la app** (Regression.app/Contents/SharedSupport/wine-root).

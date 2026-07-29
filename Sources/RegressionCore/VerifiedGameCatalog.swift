@@ -67,7 +67,7 @@ public struct VerifiedGameCertification: Codable, Equatable, Identifiable, Senda
 /// motor ni sustituye la telemetría: evita perder el estado blindado al regenerar los datos
 /// locales. Solo se añade una entrada después de validar render, entrada, opciones y gameplay.
 public enum VerifiedGameCatalog {
-    public static let revision = "2026-07-29.2"
+    public static let revision = "2026-07-29.3"
 
     public static let all: [VerifiedGameCertification] = [
         VerifiedGameCertification(
@@ -104,6 +104,18 @@ public enum VerifiedGameCatalog {
             backend: .regression,
             verifiedAt: "2026-07-29",
             evidence: "docs/games/dragonsword-awakening.md"
+        ),
+        VerifiedGameCertification(
+            appID: "1782460",
+            gameName: "Hell Clock",
+            backend: .regression,
+            verifiedAt: "2026-07-29",
+            evidence: "docs/games/hell-clock.md",
+            sourceRunID: UUID(uuidString: "2F2DE49D-DE01-4A7F-B2D2-39195EA5D68B"),
+            configurationFingerprint:
+                "aa2c5e6b85a6c077dfeb18bf0e626519000ee144eabf25ecccf0aa317a41f199",
+            engineFingerprint:
+                "033fd4ebad662f34b73e309cc721cfae8cd32fdcd1b2b06b0d235e93e95a1dbb"
         )
     ]
 
