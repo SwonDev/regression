@@ -4,6 +4,8 @@
 #  forzamos -arch x86_64 explícito en lugar de `arch -x86_64`)
 source "$(dirname "$0")/toolchain-common.sh"
 
+"$ROOT/build/apply-wine-patches.sh"
+
 export PATH="$PREFIX/bin:/opt/homebrew/opt/bison/bin:/opt/homebrew/opt/flex/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export LIBRARY_PATH="$PREFIX/lib"
 export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:$PREFIX/share/pkgconfig"

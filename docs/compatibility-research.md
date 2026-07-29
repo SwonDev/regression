@@ -23,11 +23,18 @@ práctica cuando un juego funciona en CrossOver y falla en Regression.
    instalación y uso normal de sus herramientas oficiales. No se enlazan sus rutas ni se copian
    sus binarios propietarios a Regression.
 6. **La promoción requiere rollback.** Antes de modificar la app o una botella se preservan los
-   archivos afectados y se registran hashes.
-7. **No se abandona una línea por acumulación de intentos.** Un resultado negativo falsifica una
+   archivos afectados y se registran hashes. El instalador debe restaurarlos automáticamente si
+   falla cualquier etapa posterior —incluida la firma— y esa ruta de error se prueba en un clon,
+   no sobre el bundle canónico.
+7. **Los módulos builtin se tratan como familias de build.** No se copia una mitad Unix de
+   `ntdll`, `winemac` o un backend desde un directorio reconfigurado sobre las mitades PE de otro.
+   Primero se identifica el build que produjo el runtime canónico, se recompila ahí y se protegen
+   por hash todas las mitades que deliberadamente deben permanecer iguales. Un warning conocido
+   en un log no sustituye la reproducción: `Win32Font.cpp:1129` también aparece con Steam sano.
+8. **No se abandona una línea por acumulación de intentos.** Un resultado negativo falsifica una
    hipótesis o descarta un candidato, pero no cierra el problema. Se vuelve a la evidencia, se
    reordena la lista de causas y se continúa con la siguiente prueba discriminante.
-8. **Una pausa no es una conclusión.** Solo se admite cuando falta una dependencia externa
+9. **Una pausa no es una conclusión.** Solo se admite cuando falta una dependencia externa
    concreta —fuente, artefacto, permiso, hardware o actualización del proveedor— y debe quedar
    escrita de forma que otra sesión pueda reanudarla sin repetir trabajo.
 
@@ -182,6 +189,12 @@ Un candidato verificado se integra con este orden de preferencia:
 
 No se acepta como perfil individual una mutación global de `system32`, `WINEDLLPATH`, registro o
 RetinaMode. Si el cambio debe ser global, se aplica la matriz completa de `AGENTS.md`.
+
+Cuando el candidato necesita Retina y el baseline mantiene `RetinaMode=n`, el patrón aceptado es
+un driver dentro del perfil por proceso que lea una variable también definida por ese proceso.
+El driver global y el registro de Steam no cambian. Dragon's Dogma 2 documenta esta técnica y la
+incidencia de emparejamiento de módulos en
+[`games/dragons-dogma-2.md`](games/dragons-dogma-2.md).
 
 “Funciona perfecto” y “mejor opción conocida” son afirmaciones independientes. Una versión más
 reciente de Wine, GPTK/D3DMetal, DXMT, DXVK, MoltenVK o vkd3d solo puede promocionarse si el

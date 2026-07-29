@@ -121,19 +121,26 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
     provocó un ciclo de AttributeGraph, cursor multicolor y 99,7 % de CPU. Tras tocar la UI,
     desplegar/plegar Aprendizaje repetidamente, confirmar que accesibilidad responde y medir que
     Regression vuelve a reposo antes de empaquetar.
-20. **Una prueba de Steam es una sesión por backend + App ID, no una fila por PID.** Launchers y
+20. **No instalar mitades de builds Wine distintos ni diagnosticar por una línea aislada.** Para
+    perfiles se usa `build/wine-profile`, que conserva la configuración de origen, y se verifican
+    también `x86_64-windows/ntdll.dll` e `i386-windows/ntdll.dll`. El warning
+    `Win32Font.cpp:1129` aparece igualmente mientras Steam sigue vivo, renderiza y lanza juegos:
+    no prueba un crash. La decisión exige proceso, captura y huella. El perfil DD2 mantiene el
+    `winemac` global intacto y lleva su driver Retina solo en
+    `lib/profiles/dragons-dogma-2`.
+21. **Una prueba de Steam es una sesión por backend + App ID, no una fila por PID.** Launchers y
     ejecutables principales se conservan en `run_processes`, pero comparten un único run y una
     única verificación. No volver a cerrar en el primer `no longer tracking`: esperar al último
     proceso y a la ventana de unión. Un lanzamiento hecho dentro de Steam recibe una captura
     diagnóstica `processStartBoundary`; no llamarla prelaunch exacta ni mezclarla con la captura
     `preLaunch` del botón de Regression.
-20. **Todo I+D abre y mantiene un expediente reproducible.** Antes del primer cambio registrar
+22. **Todo I+D abre y mantiene un expediente reproducible.** Antes del primer cambio registrar
     síntoma, referencia CrossOver e hipótesis falsables; cada experimento cambia una sola
     dimensión, está aislado y tiene rollback. No se cierra por cansancio ni por número de
     intentos: solo con las puertas/evidencias de `docs/compatibility-research.md` y un run perfecto
     exacto de Regression, o se pausa por una dependencia externa concreta y reanudable. Los
     resultados negativos se conservan y nunca se convierten en recetas ejecutables.
-21. **Toda prueba de juego empieza con el preflight canónico.** La app y `regressionctl launch`
+23. **Toda prueba de juego empieza con el preflight canónico.** La app y `regressionctl launch`
     deben comprobar el App ID y backend exactos antes de enviar `-applaunch`. Un bloqueo detiene
     la prueba; un aviso se conserva con el run. El preflight solo observa: jamás termina procesos,
     borra marcadores, modifica botellas ni certifica compatibilidad. Su informe v1 debe persistir
@@ -278,6 +285,13 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   opciones y fue confirmado perfecto por el usuario. Evidencia y rollback local:
   `backups/grimdawn-d3dmetal-perfect-20260727-1802/`. Método y expediente reproducible:
   `docs/compatibility-research.md` y `docs/games/grim-dawn.md`.
+- **Dragon's Dogma 2 (perfil promocionado, aún no perfecto)**: D3DMetal + Retina por proceso
+  expone y conserva 3024×1890 en el selector, con gameplay, entrada, opciones y cierre observados.
+  La carga inicial del menú de pausa tardó 10–15 s y las siguientes aperturas menos de 1 s. Las
+  matrices aislada y canónica, el perfil autocontenido, el instalador idempotente y Grim Dawn como
+  control protegido están completos. Falta solo la confirmación final del usuario; no anticipar
+  la fila verde ni cerrar el expediente sin ella. Ver
+  `docs/games/dragons-dogma-2.md`.
 - **PIN: DXMT = v0.72 + parche cross-process** (versión exacta de CrossOver). `main` rompe los
   skeletal meshes de Palworld — NO actualizar sin probar Palworld.
 - **PIN: wine compilado con `--prefix` apuntando a la app** (Regression.app/Contents/SharedSupport/wine-root).
@@ -313,7 +327,7 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
 open -a "$PWD/Regression.app"            # debe abrir Steam y renderizar la tienda
 swift tools/diagnostics/list-windows.swift steam
 screencapture -x -l <id> /tmp/check.png  # captura y revisar visualmente
-bash build/install-game-profiles.sh      # verifica hashes/perfil Grim Dawn y vuelve a firmar
+bash build/install-game-profiles.sh      # verifica perfiles Grim Dawn/DD2 y vuelve a firmar
 bash build/verify-protected-state.sh --include-bottle  # verifica PINs sin lanzar juegos
 ```
 

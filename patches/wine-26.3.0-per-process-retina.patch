@@ -1,0 +1,22 @@
+--- a/dlls/winemac.drv/macdrv_main.c
++++ b/dlls/winemac.drv/macdrv_main.c
+@@ -285,6 +285,7 @@
+ static void setup_options(void)
+ {
+     static const WCHAR macdriverW[] = {'\\','M','a','c',' ','D','r','i','v','e','r',0};
++    const char *retina_override = getenv("REGRESSION_RETINA_MODE");
+     WCHAR buffer[MAX_PATH + 16], *p, *appname;
+     HKEY hkey, appkey = 0;
+     DWORD len;
+@@ -392,4 +393,8 @@
+-    /* Don't use appkey.  The DPI and monitor sizes should be consistent for all
+-       processes in the prefix. */
+-    if (!get_config_key(hkey, NULL, "RetinaMode", buffer, sizeof(buffer)))
++    /* Regression profiles may isolate Retina to one executable without
++       changing the prefix-wide Steam/input baseline. */
++    if (retina_override && retina_override[0])
++        retina_enabled = IS_OPTION_TRUE(retina_override[0]);
++    /* Don't use appkey.  The DPI and monitor sizes should otherwise remain
++       consistent for all processes in the prefix. */
++    else if (!get_config_key(hkey, NULL, "RetinaMode", buffer, sizeof(buffer)))
+         retina_enabled = IS_OPTION_TRUE(buffer[0]);

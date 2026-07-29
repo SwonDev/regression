@@ -143,8 +143,9 @@ bash Scripts/package_regression.sh
 codesign --verify --deep --strict Regression.app
 ```
 
-`verify-protected-state.sh` detiene el proceso si cambia un PIN del runtime, el perfil aislado de
-Grim Dawn, la pareja DXMT de la botella o la firma. El empaquetador crea primero un backup pequeño
+`verify-protected-state.sh` detiene el proceso si cambia un PIN del runtime, los perfiles aislados
+de Grim Dawn/Dragon's Dogma 2, la pareja DXMT de la botella o la firma. El empaquetador crea
+primero un backup pequeño
 de la capa nativa y una copia APFS temporal del bundle completo; si falla, restaura el bundle
 anterior. La auditoría de arquitectura, privacidad, accesibilidad y errores está en
 [`docs/native-app-audit.md`](docs/native-app-audit.md). El contrato completo del esquema,
@@ -189,6 +190,14 @@ backend y nota de evidencia. Nunca se infiere “perfecto” de un cierre normal
   firmada con identidad de desarrollo estable, runtime endurecido e icono propio.
   `regression-last-good-20260726.tar.gz` conserva la base general
   restaurable y `grimdawn-d3dmetal-perfect-20260727-1802/` el perfil posterior verificado.
+
+### Candidato aislado pendiente de certificación
+
+- **Dragon's Dogma 2**: D3DMetal + Retina por proceso, con gameplay, entrada y opciones
+  persistentes a 3024×1890. Las matrices aislada y canónica, el cierre limpio y el control
+  protegido de Grim Dawn están completos. Falta exclusivamente la confirmación humana de esta
+  receta exacta para mostrarlo como perfecto. Expediente:
+  [`docs/games/dragons-dogma-2.md`](docs/games/dragons-dogma-2.md).
 
 ### Las dos claves de la paridad (aprendidas a las malas)
 1. **DXMT = v0.72** (versión exacta de CX; `main` tiene una regresión que hace invisibles los
@@ -318,7 +327,8 @@ bash build/build-dxmt.sh             # DXMT win64 (PE + winemetal.so)
 bash build/create-steam-bottle.sh    # prefijo + receta crosstie + corefonts
 # 6) App
 make -C build/wine64 install DESTDIR=stage + strip (ver sección 7) → montar SharedSupport
-bash build/install-game-profiles.sh    # fija Grim Dawn a D3DMetal, verifica hashes y firma
+bash build/build-dd2-profile.sh        # build incremental compatible del perfil DD2
+bash build/install-game-profiles.sh    # fija Grim Dawn/DD2, verifica hashes, backup y firma
 Scripts/sign_regression.sh Regression.app  # refirma sin perder la identidad de permisos
 ```
 

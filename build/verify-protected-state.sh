@@ -7,13 +7,22 @@ WINE_ROOT="$APP/Contents/SharedSupport/wine-root"
 APPLE_ROOT="$WINE_ROOT/lib/apple_gptk"
 DEFAULT_BOTTLE="$HOME/Library/Application Support/Regression/Bottles/Steam"
 INCLUDE_BOTTLE=false
+BEFORE_DD2_PROMOTION=false
 
-if [[ "${1:-}" == "--include-bottle" ]]; then
-    INCLUDE_BOTTLE=true
-elif [[ $# -gt 0 ]]; then
-    echo "Uso: $0 [--include-bottle]" >&2
-    exit 64
-fi
+for argument in "$@"; do
+    case "$argument" in
+        --include-bottle)
+            INCLUDE_BOTTLE=true
+            ;;
+        --before-dd2-promotion)
+            BEFORE_DD2_PROMOTION=true
+            ;;
+        *)
+            echo "Uso: $0 [--include-bottle] [--before-dd2-promotion]" >&2
+            exit 64
+            ;;
+    esac
+done
 
 verify_hash()
 {
@@ -63,8 +72,15 @@ verify_bottle_hash()
 
 # Lanzador y módulos propios que protegen Steam, DXMT, entrada y routing por juego.
 verify_hash 539fee086fed6aebda5984c0e928c3b4632499d8129250b5f37188c10ac7409b "Contents/MacOS/regression-engine"
-verify_hash 2cd0f030fd0b92bbf17308021d23b2a2fede6ab02d528c44c03753dfcb049c97 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+if $BEFORE_DD2_PROMOTION; then
+    verify_hash 2cd0f030fd0b92bbf17308021d23b2a2fede6ab02d528c44c03753dfcb049c97 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+else
+    verify_hash 9e37f4a1c4c163909b7bc26b2a38b6408f02e261ddbf079b9608bc884b65f67d "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+fi
+verify_hash 44b1379db1b9e3472d1746830eddd88718dbbc761de2e406d45b8be198593ef3 "Contents/SharedSupport/wine-root/lib/wine/x86_64-windows/ntdll.dll"
+verify_hash 3d2b085b1dce4db5615a2a95d96860b644e1bfd4c907d0a68d177d02bd2010e8 "Contents/SharedSupport/wine-root/lib/wine/i386-windows/ntdll.dll"
 verify_hash 50fda6d287a23324c39c75c7c887ae3ae0bf4e175c61bae4a92229053b5c65f2 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/winemac.so"
+verify_hash da91ec701a18e97c0c3cd943d383ef996092c11d74983876fd44c90b03d5e5b1 "Contents/SharedSupport/wine-root/lib/wine/x86_64-windows/winemac.drv"
 verify_hash aaf38489b18bfeb967b7e6298510b46973ed79f516441b7fd74c95a3cf6b15ec "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/winemetal.so"
 verify_hash 87ed91e86f1f4620f5229b7a0d4f1f8c5436a56088e8d4692201fe0c7d5b0deb "Contents/SharedSupport/wine-root/lib/wine/x86_64-windows/d3d10core.dll"
 verify_hash e6209af3a04947504af1f12b4533eded103687841197cff45a92d1a5f916c0a8 "Contents/SharedSupport/wine-root/lib/wine/x86_64-windows/d3d11.dll"
@@ -86,6 +102,30 @@ GRIM_PROFILE="$WINE_ROOT/lib/profiles/grim-dawn"
     exit 1
 }
 
+if $BEFORE_DD2_PROMOTION; then
+    [[ ! -e "$WINE_ROOT/lib/profiles/dragons-dogma-2" &&
+       ! -L "$WINE_ROOT/lib/profiles/dragons-dogma-2" ]] || {
+        echo "ERROR: el baseline previo ya contiene un perfil DD2 inesperado." >&2
+        exit 1
+    }
+else
+    DD2_PROFILE="$WINE_ROOT/lib/profiles/dragons-dogma-2"
+    verify_hash 34d373a22fd224fec6e32d1bf7f31c647c518345752dc6bc632883c8c9aefc42 "Contents/SharedSupport/wine-root/lib/profiles/dragons-dogma-2/x86_64-unix/winemac.so"
+    verify_hash 2ee679fa891fa336b2dd3623a1945f47c1c5834853e66eff342ba356c12d8c32 "Contents/SharedSupport/wine-root/lib/profiles/dragons-dogma-2/x86_64-windows/winemac.drv"
+    for module in atidxx64 d3d11 d3d12 dxgi nvapi64 nvngx; do
+        [[ -L "$DD2_PROFILE/x86_64-unix/$module.so" &&
+           "$(readlink "$DD2_PROFILE/x86_64-unix/$module.so")" == "../../../apple_gptk/wine/x86_64-unix/$module.so" ]] || {
+            echo "ERROR: enlace Unix inesperado en el perfil DD2: $module" >&2
+            exit 1
+        }
+        [[ -L "$DD2_PROFILE/x86_64-windows/$module.dll" &&
+           "$(readlink "$DD2_PROFILE/x86_64-windows/$module.dll")" == "../../../apple_gptk/wine/x86_64-windows/$module.dll" ]] || {
+            echo "ERROR: enlace PE inesperado en el perfil DD2: $module" >&2
+            exit 1
+        }
+    done
+fi
+
 if $INCLUDE_BOTTLE; then
     verify_bottle_hash 0b97d99a61eeeefefc4451d49477d31dc8c6e50ecca7651003655ac67f72aef4 "drive_c/windows/system32/d3d10core.dll"
     verify_bottle_hash e6209af3a04947504af1f12b4533eded103687841197cff45a92d1a5f916c0a8 "drive_c/windows/system32/d3d11.dll"
@@ -94,7 +134,11 @@ if $INCLUDE_BOTTLE; then
 fi
 
 codesign --verify --deep --strict "$APP"
-echo "Estado protegido verificado: runtime, perfil Grim Dawn y firma intactos."
+if $BEFORE_DD2_PROMOTION; then
+    echo "Baseline previo a DD2 verificado: runtime, Grim Dawn y firma intactos."
+else
+    echo "Estado protegido verificado: runtime, perfiles Grim Dawn/DD2 y firma intactos."
+fi
 if $INCLUDE_BOTTLE; then
     echo "Botella canónica verificada: pareja DXMT y D3D9 fijadas."
 fi
