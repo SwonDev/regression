@@ -206,6 +206,15 @@ backend y nota de evidencia. Nunca se infiere “perfecto” de un cierre normal
   click desplazado. Expediente:
   [`docs/games/dragons-dogma-2.md`](docs/games/dragons-dogma-2.md).
 
+### Baseline validado con incidencia de presentación compartida
+
+- **Rotwood**: el baseline general de Regression completó gameplay, entrada, pausa, opciones y
+  cierre con guardado en el run `E9316F8E-A6C3-4DE2-A075-6884A923AE4D`. El usuario confirmó un
+  funcionamiento excelente, pero el juego compone 1512×870 dentro de la pantalla 1512×982 y deja
+  bandas negras arriba y abajo. CrossOver 26.3 reproduce la misma geometría y las mismas bandas,
+  así que no se creó un perfil artificial ni una certificación perfecta. La base local conserva
+  `Funciona con incidencias`. Expediente: [`docs/games/rotwood.md`](docs/games/rotwood.md).
+
 ### Las dos claves de la paridad (aprendidas a las malas)
 1. **DXMT = v0.72** (versión exacta de CX; `main` tiene una regresión que hace invisibles los
    skeletal meshes en Palworld).

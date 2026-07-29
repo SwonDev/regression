@@ -124,6 +124,20 @@ revisados en el repositorio.
 - Registrar la versión exacta de CrossOver y el backend explícito de la botella. El modo
   “automático” no se presupone: hay que comprobar qué ruta termina activa.
 
+### Distinguir una regresión de una limitación compartida
+
+Si una imperfección visual aparece en Regression, primero hay que reproducir la misma escena en
+CrossOver y comparar tanto la captura como la configuración escrita por el juego. Cuando ambos
+backends producen la misma superficie y la propia interfaz del título no ofrece otra relación de
+aspecto, el defecto no demuestra una regresión del motor. Se conserva el baseline funcional como
+`Funciona con incidencias`; no se fuerza una resolución en el estado bueno ni se crea un perfil
+que solo oculte el síntoma. Rotwood documenta este caso con una superficie 1512×870 compartida en
+una pantalla 1512×982: [`games/rotwood.md`](games/rotwood.md).
+
+La paridad con CrossOver tampoco convierte el resultado en perfecto. Si el usuario considera la
+presentación incorrecta, la incidencia sigue explícita. Una mejora posterior debe investigarse
+como candidato aislado y superar render, composición, entrada, opciones, persistencia y rollback.
+
 ## Fase 2: observar sin descompilar
 
 La observación permitida y útil incluye:

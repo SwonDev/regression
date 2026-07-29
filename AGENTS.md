@@ -156,6 +156,12 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
     perfil sin neutralizar el load-order global mezcló D3DMetal con la `dxgi` de DXMT y congeló
     Unreal en el logo. No mover este conjunto al registro ni al entorno global; ver
     `docs/games/dragonsword-awakening.md`.
+26. **Una limitación visual compartida con CrossOver no se atribuye al motor ni se maquilla como
+    perfecta.** Si ambos backends producen la misma superficie y el juego no ofrece el modo de
+    pantalla necesario, conservar el baseline funcional como `Funciona con incidencias`, con
+    captura y configuración A/B. No forzar resoluciones ni relaciones de aspecto en el estado
+    bueno: cualquier mejora entra como candidato aislado. Rotwood fija 1512×870 dentro de
+    1512×982 en ambos backends; ver `docs/games/rotwood.md`.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 
@@ -316,6 +322,13 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   quedó registrada como fallo. Perfil, hashes, evidencia y rollback:
   `docs/games/dragonsword-awakening.md` y
   `backups/dragonsword-d3dmetal-rerun-20260729-100602/`.
+- **Rotwood (baseline funcional con incidencia visual)**: el run
+  `E9316F8E-A6C3-4DE2-A075-6884A923AE4D` completó gameplay, entrada, pausa, opciones y cierre con
+  guardado. El usuario confirmó funcionamiento excelente. Las bandas negras superior e inferior
+  también aparecen en CrossOver 26.3 porque el juego fija una superficie 1512×870 dentro de la
+  pantalla 1512×982. La base muestra `Funciona con incidencias`; no se creó un perfil innecesario
+  ni una certificación perfecta. Evidencia y rollback:
+  `docs/games/rotwood.md` y `backups/rotwood-baseline-20260729-111437/`.
 - **PIN: DXMT = v0.72 + parche cross-process** (versión exacta de CrossOver). `main` rompe los
   skeletal meshes de Palworld — NO actualizar sin probar Palworld.
 - **PIN: wine compilado con `--prefix` apuntando a la app** (Regression.app/Contents/SharedSupport/wine-root).
