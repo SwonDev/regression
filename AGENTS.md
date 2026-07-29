@@ -150,6 +150,12 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
     borra marcadores, modifica botellas ni certifica compatibilidad. Su informe v1 debe persistir
     vinculado a la ejecución exacta y conservarse en la exportación; ver
     `docs/game-test-readiness.md`.
+25. **DragonSword usa D3DMetal como conjunto indivisible por proceso.**
+    `DSClient-Win64-Shipping.exe` selecciona `lib/profiles/dragonsword` y fuerza como builtin
+    `atidxx64/d3d9/dcomp/d3d11/d3d12/dxgi/nvapi64/nvngx` únicamente en ese proceso. Anteponer el
+    perfil sin neutralizar el load-order global mezcló D3DMetal con la `dxgi` de DXMT y congeló
+    Unreal en el logo. No mover este conjunto al registro ni al entorno global; ver
+    `docs/games/dragonsword-awakening.md`.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 
@@ -226,6 +232,7 @@ pruebas; sustituir un PIN global requiere validar toda la matriz correspondiente
 | d3d11/dxgi de Apple | **NO** en system32 (solo d3d12*) | CEF muere | Steam tienda |
 | d3d9 | DXVK 1.10.3, override `native` sí (PE plana) | Funciona | Juego D3D9 |
 | Grim Dawn | D3DMetal completo por proceso; `d3d9/atidxx64/nvapi64/nvngx=builtin` | Evita mezcla DXVK y parpadeo | Gameplay + opciones + captura 3024×1964 |
+| DragonSword | D3DMetal completo por proceso; ocho módulos builtin fijados | Evita ruta híbrida D3DMetal/DXMT y tirones | Gameplay + pausa + salida + captura 3024×1964 |
 | RetinaMode | `n` (HKCU\Software\Wine\Mac Driver) | Alinea clicks | Click en tienda |
 | Fuentes | 55 TTFs (corefonts + CJK) en la botella | Sin ellas Steam crashea (assert Win32Font) | Steam arranca |
 | DLLs PE | **SIN strip** | El strip rompe unwind SEH y firma de módulos | Juegos Unity |
@@ -302,6 +309,13 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   porque conserva letterbox 16:9; CrossOver presenta la misma franja. No promover 3024×1890
   internos: esa variante desborda y desplaza el click. Perfil, instalador y rollback están
   protegidos; ver `docs/games/dragons-dogma-2.md`.
+- **DragonSword : Awakening (perfil perfecto promocionado)**: el run
+  `6074F679-9CE1-4D6C-A386-2021F06FDE96` fue confirmado por el usuario con gameplay Retina
+  3024×1964, entrada, pausa, opciones, rendimiento sin tirones y salida limpia. El router fuerza
+  una ruta D3DMetal completa solo en `DSClient-Win64-Shipping.exe`; la variante híbrida anterior
+  quedó registrada como fallo. Perfil, hashes, evidencia y rollback:
+  `docs/games/dragonsword-awakening.md` y
+  `backups/dragonsword-d3dmetal-rerun-20260729-100602/`.
 - **PIN: DXMT = v0.72 + parche cross-process** (versión exacta de CrossOver). `main` rompe los
   skeletal meshes de Palworld — NO actualizar sin probar Palworld.
 - **PIN: wine compilado con `--prefix` apuntando a la app** (Regression.app/Contents/SharedSupport/wine-root).
@@ -337,7 +351,7 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
 open -a "$PWD/Regression.app"            # debe abrir Steam y renderizar la tienda
 swift tools/diagnostics/list-windows.swift steam
 screencapture -x -l <id> /tmp/check.png  # captura y revisar visualmente
-bash build/install-game-profiles.sh      # verifica perfiles Grim Dawn/DD2 y vuelve a firmar
+bash build/install-game-profiles.sh      # verifica perfiles Grim Dawn/DD2/DragonSword y firma
 bash build/verify-protected-state.sh --include-bottle  # verifica PINs sin lanzar juegos
 ```
 

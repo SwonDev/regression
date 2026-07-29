@@ -12,12 +12,12 @@ verify_hash()
     local actual
 
     [[ -f "$path" ]] || {
-        echo "ERROR: falta el artefacto DD2: $path" >&2
+        echo "ERROR: falta el artefacto de perfiles: $path" >&2
         exit 1
     }
     actual="$(shasum -a 256 "$path" | awk '{print $1}')"
     [[ "$actual" == "$expected" ]] || {
-        echo "ERROR: el artefacto DD2 no coincide con la receta fijada: $path" >&2
+        echo "ERROR: el artefacto de perfiles no coincide con la receta fijada: $path" >&2
         echo "Esperado: $expected" >&2
         echo "Actual:   $actual" >&2
         exit 1
@@ -41,11 +41,11 @@ make -C "$BUILD_DIR" -j"$JOBS" \
     dlls/winemac.drv/winemac.so \
     dlls/winemac.drv/x86_64-windows/winemac.drv
 
-verify_hash 9e37f4a1c4c163909b7bc26b2a38b6408f02e261ddbf079b9608bc884b65f67d \
+verify_hash 2a446467a9faa0885f350d096fb6424c92f62201b733f974150c931e3a535a6a \
     "$BUILD_DIR/dlls/ntdll/ntdll.so"
 verify_hash 34d373a22fd224fec6e32d1bf7f31c647c518345752dc6bc632883c8c9aefc42 \
     "$BUILD_DIR/dlls/winemac.drv/winemac.so"
 verify_hash 2ee679fa891fa336b2dd3623a1945f47c1c5834853e66eff342ba356c12d8c32 \
     "$BUILD_DIR/dlls/winemac.drv/x86_64-windows/winemac.drv"
 
-echo "Artefactos aislados de Dragon's Dogma 2 construidos y verificados."
+echo "Router de perfiles y artefactos aislados construidos y verificados."

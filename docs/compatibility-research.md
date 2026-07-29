@@ -196,6 +196,11 @@ El driver global y el registro de Steam no cambian. Dragon's Dogma 2 documenta e
 incidencia de emparejamiento de módulos en
 [`games/dragons-dogma-2.md`](games/dragons-dogma-2.md).
 
+Anteponer un directorio tampoco basta si la botella conserva overrides globales que vuelven a
+introducir módulos de otro backend. DragonSword demuestra que la ruta debe seleccionarse como un
+conjunto coherente dentro del proceso: perfil, variables y load-order. El diagnóstico y la receta
+blindada están en [`games/dragonsword-awakening.md`](games/dragonsword-awakening.md).
+
 “Funciona perfecto” y “mejor opción conocida” son afirmaciones independientes. Una versión más
 reciente de Wine, GPTK/D3DMetal, DXMT, DXVK, MoltenVK o vkd3d solo puede promocionarse si el
 candidato es por juego, tiene fuente/huella verificadas, está aislado, dispone de rollback,

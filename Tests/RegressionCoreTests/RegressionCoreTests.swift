@@ -30,6 +30,10 @@ final class RegressionCoreTests: XCTestCase {
             VerifiedGameCatalog.certification(for: "1903340")?.gameName,
             "Clair Obscur: Expedition 33"
         )
+        XCTAssertEqual(
+            VerifiedGameCatalog.certification(for: "4570720")?.gameName,
+            "DragonSword : Awakening"
+        )
         XCTAssertNil(VerifiedGameCatalog.certification(for: "999999999"))
     }
 

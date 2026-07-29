@@ -1,6 +1,6 @@
 --- a/dlls/ntdll/unix/loader.c
 +++ b/dlls/ntdll/unix/loader.c
-@@ -382,8 +382,116 @@
+@@ -382,8 +382,137 @@
      dll_paths = new_dll_paths;
      if (path_len > dll_path_maxlen)
          dll_path_maxlen = path_len;
@@ -48,6 +48,7 @@
 +    int is_cubeworld = regression_executable_is( "cubeworld.exe" );
 +    int is_grim_dawn = regression_executable_is( "grim dawn.exe" );
 +    int is_dragons_dogma_2 = regression_executable_is( "dd2.exe" );
++    int is_dragonsword = regression_executable_is( "dsclient-win64-shipping.exe" );
 +    const char *suffix;
 +    char *path;
 +
@@ -56,6 +57,7 @@
 +        if (is_cubeworld) backend = "dxvk";
 +        else if (is_grim_dawn) backend = "grim-dawn";
 +        else if (is_dragons_dogma_2) backend = "dragons-dogma-2";
++        else if (is_dragonsword) backend = "dragonsword";
 +        else if (regression_executable_is( "fft_enhanced.exe" )) backend = "d3dmetal";
 +        else return;
 +    }
@@ -63,6 +65,7 @@
 +    if (!strcasecmp( backend, "dxvk" )) suffix = "/lib/dxvk";
 +    else if (!strcasecmp( backend, "grim-dawn" )) suffix = "/lib/profiles/grim-dawn";
 +    else if (!strcasecmp( backend, "dragons-dogma-2" )) suffix = "/lib/profiles/dragons-dogma-2";
++    else if (!strcasecmp( backend, "dragonsword" )) suffix = "/lib/profiles/dragonsword";
 +    else if (!strcasecmp( backend, "d3dmetal" )) suffix = "/lib/apple_gptk/wine";
 +    else
 +    {
@@ -89,9 +92,10 @@
 +    if (is_cubeworld && !strcasecmp( backend, "dxvk" ))
 +        /* CrossOver 26.3 emits discrete resource indexes for this DXVK path. */
 +        setenv( "MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "0", 1 );
-+    if ((is_grim_dawn || is_dragons_dogma_2) &&
++    if ((is_grim_dawn || is_dragons_dogma_2 || is_dragonsword) &&
 +        (!strcasecmp( backend, "grim-dawn" ) ||
 +         !strcasecmp( backend, "dragons-dogma-2" ) ||
++         !strcasecmp( backend, "dragonsword" ) ||
 +         !strcasecmp( backend, "d3dmetal" )))
 +    {
 +        /* Match CrossOver's explicit D3DMetal mode for these processes only. */
@@ -101,6 +105,23 @@
 +        {
 +            setenv( "WINED3DMETAL", "1", 1 );
 +            setenv( "REGRESSION_RETINA_MODE", "y", 1 );
++        }
++        if (is_dragonsword)
++        {
++            /* The Regression bottle globally owns DXMT/DXVK modules.  A
++             * D3DMetal process must select the complete Apple route and the
++             * builtin Wine fallbacks as one coherent set, matching a clean
++             * CrossOver D3DMetal bottle without changing any global key. */
++            setenv( "WINED3DMETAL", "1", 1 );
++            setenv( "REGRESSION_RETINA_MODE", "y", 1 );
++            regression_force_builtin_load_order( "atidxx64" );
++            regression_force_builtin_load_order( "d3d9" );
++            regression_force_builtin_load_order( "dcomp" );
++            regression_force_builtin_load_order( "d3d11" );
++            regression_force_builtin_load_order( "d3d12" );
++            regression_force_builtin_load_order( "dxgi" );
++            regression_force_builtin_load_order( "nvapi64" );
++            regression_force_builtin_load_order( "nvngx" );
 +        }
 +        if (is_grim_dawn)
 +        {
@@ -118,7 +139,7 @@
  static void set_dll_path(void)
  {
      char *p, *path = getenv( "WINEDLLPATH" );
-@@ -2258,5 +2366,7 @@
+@@ -2258,6 +2387,8 @@
          }
      }
 -

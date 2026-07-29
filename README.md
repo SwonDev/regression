@@ -187,6 +187,9 @@ backend y nota de evidencia. Nunca se infiere “perfecto” de un cierre normal
   opciones gráficas confirmados sin parpadeo; **Romestead** (Unity) in-game.
 - **Clair Obscur: Expedition 33** — baseline propio sin perfil especial, título, carga,
   combate, HUD, partículas, entrada HID, pausa y opciones confirmados a 3024×1964 Retina.
+- **DragonSword : Awakening** — D3DMetal completo por proceso, gameplay Retina 3024×1964,
+  entrada, pausa, opciones y salida limpia confirmados sin tirones; perfil y router protegidos.
+  Expediente: [`docs/games/dragonsword-awakening.md`](docs/games/dragonsword-awakening.md).
 - **D3D9**: DXVK 1.10.3.
 - **Packaging**: app autocontenida (~1,8 GB, PE sin strip — el strip rompía el unwind SEH),
   firmada con identidad de desarrollo estable, runtime endurecido e icono propio.
@@ -238,7 +241,7 @@ Regression.app/
             │   ├── x86_64-windows/   # DLLs PE 64-bit + DXMT + Apple d3d12 + DXVK d3d9
             │   └── x86_64-unix/      # .so unix (winemac, winemetal, winevulkan, ...)
             ├── lib/runtime/           # gnutls, gstreamer, glib, freetype, SDL2, MoltenVK
-            ├── lib/profiles/grim-dawn # enlace aislado al árbol D3DMetal verificado
+            ├── lib/profiles/            # rutas aisladas Grim Dawn/DD2/DragonSword
             └── lib/apple_gptk/        # D3DMetal.framework + libd3dshared.dylib (Apple)
 ```
 
@@ -331,8 +334,8 @@ bash build/build-dxmt.sh             # DXMT win64 (PE + winemetal.so)
 bash build/create-steam-bottle.sh    # prefijo + receta crosstie + corefonts
 # 6) App
 make -C build/wine64 install DESTDIR=stage + strip (ver sección 7) → montar SharedSupport
-bash build/build-dd2-profile.sh        # build incremental compatible del perfil DD2
-bash build/install-game-profiles.sh    # fija Grim Dawn/DD2, verifica hashes, backup y firma
+bash build/build-dd2-profile.sh        # build incremental compatible del router de perfiles
+bash build/install-game-profiles.sh    # fija Grim Dawn/DD2/DragonSword, hashes, backup y firma
 Scripts/sign_regression.sh Regression.app  # refirma sin perder la identidad de permisos
 ```
 
@@ -392,6 +395,11 @@ Gotchas de build (todos resueltos, no redescubrir):
     `CX_ACTIVE_GRAPHICS_BACKEND=d3dmetal` dentro de ese proceso y fuerza a builtin
     `atidxx64`, `d3d9`, `nvapi64` y `nvngx`. No trasladar esos cambios al registro global:
     mezclar D3DMetal con el `d3d9` DXVK de la botella produjo negro y parpadeos.
+13. **DragonSword = D3DMetal completo y load-order indivisible.**
+    `DSClient-Win64-Shipping.exe` antepone `lib/profiles/dragonsword` y fuerza como builtin
+    `atidxx64`, `d3d9`, `dcomp`, `d3d11`, `d3d12`, `dxgi`, `nvapi64` y `nvngx`, solo en ese
+    proceso. Seleccionar únicamente el directorio mezcló D3DMetal con DXMT y congeló Unreal en el
+    logo; la receta completa eliminó los tirones y fue confirmada perfecta.
 
 ---
 
@@ -405,7 +413,7 @@ Gotchas de build (todos resueltos, no redescubrir):
 - **winemac parcheado** (consumer IOSurface) — es el ÚNICO parche al árbol de wine.
 - **D3DMetal = binarios de Apple del GPTK instalado** (licencia evaluación, uso local).
 - **Routing gráfico por ejecutable en ntdll**: cada perfil se antepone únicamente en su proceso;
-  Grim Dawn no altera Steam, Cube World, FFT ni el backend global.
+  Grim Dawn, DD2 y DragonSword no alteran Steam, Cube World, FFT ni el backend global.
 - **Botella fuera de la app**: datos de usuario (login, juegos) separados del artefacto firmado.
 - **Strip agresivo** del runtime (mingw-strip PE, strip -x .so): 1,5 GB → 596 MB.
 

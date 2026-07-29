@@ -8,6 +8,7 @@ APPLE_ROOT="$WINE_ROOT/lib/apple_gptk"
 DEFAULT_BOTTLE="$HOME/Library/Application Support/Regression/Bottles/Steam"
 INCLUDE_BOTTLE=false
 BEFORE_DD2_PROMOTION=false
+BEFORE_DRAGONSWORD_PROMOTION=false
 
 for argument in "$@"; do
     case "$argument" in
@@ -17,12 +18,20 @@ for argument in "$@"; do
         --before-dd2-promotion)
             BEFORE_DD2_PROMOTION=true
             ;;
+        --before-dragonsword-promotion)
+            BEFORE_DRAGONSWORD_PROMOTION=true
+            ;;
         *)
-            echo "Uso: $0 [--include-bottle] [--before-dd2-promotion]" >&2
+            echo "Uso: $0 [--include-bottle] [--before-dd2-promotion|--before-dragonsword-promotion]" >&2
             exit 64
             ;;
     esac
 done
+
+if $BEFORE_DD2_PROMOTION && $BEFORE_DRAGONSWORD_PROMOTION; then
+    echo "ERROR: las verificaciones históricas de promoción son mutuamente excluyentes." >&2
+    exit 64
+fi
 
 verify_hash()
 {
@@ -74,8 +83,24 @@ verify_bottle_hash()
 verify_hash 539fee086fed6aebda5984c0e928c3b4632499d8129250b5f37188c10ac7409b "Contents/MacOS/regression-engine"
 if $BEFORE_DD2_PROMOTION; then
     verify_hash 2cd0f030fd0b92bbf17308021d23b2a2fede6ab02d528c44c03753dfcb049c97 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
-else
+elif $BEFORE_DRAGONSWORD_PROMOTION; then
     verify_hash 9e37f4a1c4c163909b7bc26b2a38b6408f02e261ddbf079b9608bc884b65f67d "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+else
+    verify_hash 2a446467a9faa0885f350d096fb6424c92f62201b733f974150c931e3a535a6a "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+fi
+
+DRAGONSWORD_PROFILE="$WINE_ROOT/lib/profiles/dragonsword"
+if $BEFORE_DD2_PROMOTION || $BEFORE_DRAGONSWORD_PROMOTION; then
+    [[ ! -e "$DRAGONSWORD_PROFILE" && ! -L "$DRAGONSWORD_PROFILE" ]] || {
+        echo "ERROR: el baseline previo ya contiene un perfil DragonSword inesperado." >&2
+        exit 1
+    }
+else
+    [[ -L "$DRAGONSWORD_PROFILE" &&
+       "$(readlink "$DRAGONSWORD_PROFILE")" == "../apple_gptk/wine" ]] || {
+        echo "ERROR: el perfil protegido de DragonSword ya no apunta al runtime Apple interno." >&2
+        exit 1
+    }
 fi
 verify_hash 44b1379db1b9e3472d1746830eddd88718dbbc761de2e406d45b8be198593ef3 "Contents/SharedSupport/wine-root/lib/wine/x86_64-windows/ntdll.dll"
 verify_hash 3d2b085b1dce4db5615a2a95d96860b644e1bfd4c907d0a68d177d02bd2010e8 "Contents/SharedSupport/wine-root/lib/wine/i386-windows/ntdll.dll"
@@ -136,8 +161,10 @@ fi
 codesign --verify --deep --strict "$APP"
 if $BEFORE_DD2_PROMOTION; then
     echo "Baseline previo a DD2 verificado: runtime, Grim Dawn y firma intactos."
+elif $BEFORE_DRAGONSWORD_PROMOTION; then
+    echo "Baseline previo a DragonSword verificado: runtime, Grim Dawn/DD2 y firma intactos."
 else
-    echo "Estado protegido verificado: runtime, perfiles Grim Dawn/DD2 y firma intactos."
+    echo "Estado protegido verificado: runtime, perfiles Grim Dawn/DD2/DragonSword y firma intactos."
 fi
 if $INCLUDE_BOTTLE; then
     echo "Botella canónica verificada: pareja DXMT y D3D9 fijadas."
