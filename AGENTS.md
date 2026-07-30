@@ -180,6 +180,26 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
     Su identidad compilada `heroes-hammerwatch-2.opengl-forward-compatible@1` forma parte de la
     huella de motor `af59b82a9e8102995ccbf5a9c93e1e9e6c62afe3213bea8a0bbe2ff7726236f1`;
     no ejecutar jamás comandos aprendidos desde SQLite.
+29. **Easy Anti-Cheat solo se investiga mediante su ruta oficial.** No desactivar, parchear,
+    simular ni eludir EAC. En FANTASY LIFE i, el código `206` de macOS ya se superó únicamente
+    en un laboratorio Linux ARM aislado ejecutando Proton x86-64 oficial sobre FEX. La prueba
+    anónima terminaba en `210` porque `lsteamclient` no obtenía `ConnectToGlobalUser`; con el
+    cliente Steam Linux oficial autenticado, el mismo candidato descarga el módulo, obtiene
+    HTTP `200`, inicia el mapeo Wine 11 y avanza hasta `208 Cannot run under Virtual Machine`.
+    Ese resultado es una política externa observada, no una autorización para ocultar, simular
+    o falsear la VM. Antes de cerrar el expediente debe repetirse desde una instalación creada y
+    lanzada íntegramente por el Steam oficial. El candidato FEX válido es la revisión FS/GS v3:
+    conserva las bases dedicadas en long mode y pasa las sondas no-cero; la v2 que devolvía
+    selector `0` queda descartada aunque también alcanzase `210`. Proton debe compartir `HOME`
+    con el cliente Steam Linux oficial de la misma sesión aislada; no se copian credenciales ni
+    tokens de otro backend. El laboratorio gráfico UTM/Venus es un clon separado:
+    `/usr/bin/FEX` permanece intacto. Como los `execve` x86 descendientes reentran por
+    `binfmt_misc`, la A/B v3 completa usa overrides no persistentes en `/run/binfmt.d` solo con
+    Steam/FEX en reposo y restaura ambos handlers a `/usr/bin/FEX` al detenerse. La relajación
+    temporal de AppArmor userns solo puede vivir dentro de esa VM y debe revertirse al pausar.
+    Este avance no es una integración estable, no
+    ha iniciado el ejecutable principal y no permite marcar el juego como compatible; ver
+    `docs/games/fantasy-life-i.md`.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 
@@ -364,6 +384,20 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   La reconciliación local fija la huella compilada
   `af59b82a9e8102995ccbf5a9c93e1e9e6c62afe3213bea8a0bbe2ff7726236f1` y conserva el snapshot
   global anterior como historial.
+- **FANTASY LIFE i (I+D EAC, no certificado)**: el host macOS estable y CrossOver fallan con
+  código `206` al mapear el módulo Linux. En la VM Linux ARM aislada, Proton 11 x86-64 oficial
+  sobre el candidato FEX FS/GS v3 superó el `210` tras autenticar manualmente el cliente oficial:
+  EAC descargó el módulo, obtuvo HTTP `200`, inició el mapeo Wine 11 y devolvió `208 Cannot run
+  under Virtual Machine`. Todavía no inició el ejecutable principal. Un clon UTM 5.0.3 expone
+  Venus sobre el Apple M5 Pro; DXVK 1.10.3 crea D3D11 y presenta sobre esa GPU, mientras 2.7.1
+  queda descartado por la ausencia de `VK_EXT_depth_clip_enable`. El Steam autenticado ya ofrece
+  la instalación local de 14,39 GB, usa únicamente el candidato Proton para App ID `2993780` y
+  ha llegado al EULA oficial; la aceptación corresponde al usuario. El runtime está aislado y no
+  sustituye el FEX del sistema; los overrides temporales de `binfmt_misc` se restauran al parar.
+  No ocultar la VM, copiar tokens, desactivar EAC ni presentar este avance como compatibilidad.
+  Expediente y rollback:
+  `docs/games/fantasy-life-i.md` y
+  `/var/lib/regression-fli-arm-lab/official-valve/compatdata-fli-x86-fex-fsselector-v1-from-arm-prereqs-before-eac-launch.tar.zst`.
 - **PIN: DXMT = v0.72 + parche cross-process** (versión exacta de CrossOver). `main` rompe los
   skeletal meshes de Palworld — NO actualizar sin probar Palworld.
 - **PIN: wine compilado con `--prefix` apuntando a la app** (Regression.app/Contents/SharedSupport/wine-root).

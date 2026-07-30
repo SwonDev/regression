@@ -319,8 +319,11 @@ regressionctl research-gate EXPERIMENT_ID rendering passed --evidence "..."
 regressionctl research-artifact EXPERIMENT_ID regressionCapture \
   --reference "..." --fingerprint "sha256:..."
 regressionctl research-finish EXPERIMENT_ID failed --note "..."
+regressionctl research-pause CASE_ID --blocker "Dependencia externa concreta y verificable"
 regressionctl research-complete CASE_ID EXPERIMENT_ID --resolution "..."
 ```
 
 `research-protocol` enumera los valores permitidos vigentes. La exportación JSON incluye todo el
-expediente, pero nunca aplica ni ejecuta lo aprendido.
+expediente, pero nunca aplica ni ejecuta lo aprendido. `research-pause` conserva el caso y sus
+resultados negativos para reanudarlo cuando aparezca el artefacto externo pendiente; no cierra
+el expediente ni certifica compatibilidad.

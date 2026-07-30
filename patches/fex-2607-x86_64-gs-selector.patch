@@ -1,0 +1,32 @@
+--- a/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
++++ b/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
+@@ -1284,13 +1284,12 @@
+       break;
+     case FEXCore::X86State::REG_RBP: // GS
+     case FEXCore::X86State::REG_R13: // GS
++      _StoreContextGPR(OpSize::i16Bit, Src, offsetof(FEXCore::Core::CPUState, gs_idx));
+       if (!Is64BitMode) {
+-        _StoreContextGPR(OpSize::i16Bit, Src, offsetof(FEXCore::Core::CPUState, gs_idx));
+         UpdatePrefixFromSegment(Src, FEXCore::X86Tables::DecodeFlags::FLAG_GS_PREFIX);
+-      } else {
+-        LogMan::Msg::EFmt("We don't support modifying GS selector in 64bit mode!");
+-        DecodeFailure = true;
+       }
++      // Long mode updates only the visible selector. The GS base remains the
++      // value managed through the dedicated 64-bit base mechanism.
+       break;
+     case FEXCore::X86State::REG_RSP: // FS
+     case FEXCore::X86State::REG_R12: // FS
+@@ -1325,11 +1324,7 @@
+       break;
+     case FEXCore::X86State::REG_RBP: // GS
+     case FEXCore::X86State::REG_R13: // GS
+-      if (Is64BitMode) {
+-        Segment = Constant(0);
+-      } else {
+-        Segment = _LoadContextGPR(OpSize::i16Bit, offsetof(FEXCore::Core::CPUState, gs_idx));
+-      }
++      Segment = _LoadContextGPR(OpSize::i16Bit, offsetof(FEXCore::Core::CPUState, gs_idx));
+       break;
+     case FEXCore::X86State::REG_RSP: // FS
+     case FEXCore::X86State::REG_R12: // FS

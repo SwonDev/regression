@@ -574,6 +574,17 @@ enum RegressionControl {
             )
             print("Experimento cerrado:", state.rawValue)
 
+        case "research-pause":
+            guard arguments.count >= 2,
+                  let caseID = UUID(uuidString: arguments[1]),
+                  let blocker = option("--blocker", in: arguments) else {
+                throw RegressionCoreError.launchFailed(
+                    "Usa research-pause CASE_ID --blocker DEPENDENCIA_EXTERNA"
+                )
+            }
+            try await repository.pauseResearch(caseID: caseID, externalBlocker: blocker)
+            print("Expediente pausado por dependencia externa concreta.")
+
         case "research-complete":
             guard arguments.count >= 3,
                   let caseID = UUID(uuidString: arguments[1]),
@@ -792,7 +803,7 @@ enum RegressionControl {
             print("Exportación guardada en", PrivacySanitizer.normalizedPath(path))
 
         default:
-            print("Uso: regressionctl [status | preflight [APP_ID] [--backend crossOver|regression] | share-library --shutdown [--restart] | launch APP_ID [--backend crossOver|regression] | switch crossOver|regression | runs | processes [RUN_ID] | profiles | engines | certifications | technologies | candidates | optimization | requirements | repair-receipts | research | research-protocol | research-open | research-hypothesis | research-stage | research-attach-run | research-gate | research-artifact | research-finish | research-complete | database | catalog | catalog-sync APP_ID [--force] | comparisons | verify RUN_ID perfect|playable|failed [--note TEXTO] | observe APP_ID perfect|playable|failed --backend MOTOR --name NOMBRE [--note TEXTO] | observations | export RUTA]")
+            print("Uso: regressionctl [status | preflight [APP_ID] [--backend crossOver|regression] | share-library --shutdown [--restart] | launch APP_ID [--backend crossOver|regression] | switch crossOver|regression | runs | processes [RUN_ID] | profiles | engines | certifications | technologies | candidates | optimization | requirements | repair-receipts | research | research-protocol | research-open | research-hypothesis | research-stage | research-attach-run | research-gate | research-artifact | research-finish | research-pause | research-complete | database | catalog | catalog-sync APP_ID [--force] | comparisons | verify RUN_ID perfect|playable|failed [--note TEXTO] | observe APP_ID perfect|playable|failed --backend MOTOR --name NOMBRE [--note TEXTO] | observations | export RUTA]")
             exit(64)
         }
     }

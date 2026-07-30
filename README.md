@@ -205,6 +205,24 @@ backend y nota de evidencia. Nunca se infiere “perfecto” de un cierre normal
   `regression-last-good-20260726.tar.gz` conserva la base general
   restaurable y `grimdawn-d3dmetal-perfect-20260727-1802/` el perfil posterior verificado.
 
+### En investigación, sin certificación
+
+- **FANTASY LIFE i**: Regression y CrossOver alcanzan el código EAC `206` al intentar mapear el
+  módulo Linux desde un host Mach-O. En el laboratorio Linux ARM aislado, Proton 11 x86-64
+  oficial sobre FEX FS/GS v3 superó primero `206` y, después de autenticar manualmente el cliente
+  Steam Linux oficial, también superó `210`: EAC descargó su módulo, obtuvo HTTP `200`, inició el
+  mapeo Wine 11 y terminó con `208 Cannot run under Virtual Machine`. Todavía no se ha iniciado
+  `NFL1-Win64-Shipping.exe`; no se oculta ni falsea la VM. El laboratorio UTM 5.0.3 presenta
+  Vulkan real mediante Venus sobre el Apple M5 Pro. DXVK 1.10.3 crea y presenta D3D11 sobre esa
+  GPU; DXVK 2.7.1 se descartó por requerir `VK_EXT_depth_clip_enable`, ausente en Venus. La copia
+  ext4 del juego está verificada y Steam ya la puede escribir sin alterar sus hashes. El cliente
+  autenticado selecciona el Proton candidato solo para App ID `2993780` y ofrece la instalación
+  oficial de 14,39 GB; el flujo visible ha alcanzado el EULA, cuya aceptación debe realizar el
+  usuario antes de que Steam cree su propio manifiesto y verifique los archivos. Los descendientes
+  x86 usan una selección temporal y reversible de v3 en `binfmt_misc`. No se ha integrado Proton
+  en el backend estable ni se presenta este avance como compatibilidad. Expediente:
+  [`docs/games/fantasy-life-i.md`](docs/games/fantasy-life-i.md).
+
 ### Perfil aislado validado con incidencia conocida
 
 - **Dragon's Dogma 2**: D3DMetal + Retina por proceso, 1512×945 lógicos en ventana sin bordes y
