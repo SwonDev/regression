@@ -224,6 +224,10 @@ backend y nota de evidencia. Nunca se infiere “perfecto” de un cierre normal
   usan una selección temporal y reversible de v3 en `binfmt_misc`; al cerrar, ambos handlers
   volvieron a `/usr/bin/FEX` y AppArmor userns a `1`. No se oculta la VM, no se modifica EAC, no
   se ha integrado Proton en el backend estable ni se presenta este avance como compatibilidad.
+  La vía no virtualizada ya construye FEXCore público `a04b0241` como Mach-O arm64, carga la
+  biblioteca bajo runtime endurecido y supera mediante `MAP_JIT` una A/B de memoria ejecutable.
+  Aún no ejecuta ELF huésped: está pausada en el `SIGSEGV` reproducible de la primera sonda de
+  contexto, antes de `InitCore`. La VM quedó apagada y el backend estable permanece intacto.
   Expediente:
   [`docs/games/fantasy-life-i.md`](docs/games/fantasy-life-i.md).
 

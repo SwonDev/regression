@@ -8,7 +8,8 @@
 - **Easy Anti-Cheat product ID:** `1c57494d93e24d2091a070296910acec`.
 - **Deployment ID:** `607d68cfa8b24890ba88764cc2879d57`.
 - **Expediente local:** `CD577AEA-7058-4194-9948-8B7806207D6D`.
-- **Estado:** pausado por dependencia externa (`EAC 208`); **no está certificado ni blindado**.
+- **Estado:** I+D host nativo pausado de forma reproducible en la creación del primer contexto
+  FEX; **no está certificado ni blindado**.
 
 El juego sigue fallando en el motor macOS estable de Regression y en CrossOver después de que
 EAC descargue correctamente su módulo. El candidato Linux ARM aislado ya supera ese fallo de
@@ -34,6 +35,11 @@ Este avance no equivale todavía a «Proton integrado en macOS» ni a compatibil
 juego. Aunque ya existe una ruta gráfica real en la VM, sigue siendo obligatorio superar EAC y
 completar render, entrada, opciones, gameplay, estabilidad y cierre antes de considerar cualquier
 promoción.
+
+El rechazo `208` cierra la VM como solución final, pero abrió una vía distinta y no virtualizada:
+un host macOS arm64 que ejecute el proceso Linux oficial sin modificar Steam, Proton o EAC. Esa
+línea ya compila y carga FEXCore de forma nativa; su frontera exacta y el punto de reanudación se
+documentan más adelante. Ninguna de sus sondas ha cargado todavía un huésped x86-64.
 
 ## Límites inviolables
 
@@ -436,11 +442,65 @@ La última traza tiene huella de árbol
 directorios de autenticación son privados, están fuera del repo y no deben exportarse. Nunca se
 registran contenidos de `steam.token`, QR, contraseñas ni identificadores de cuenta.
 
+## Ruta host nativa macOS arm64 — frontera reproducida
+
+La VM no puede convertirse en la solución del juego porque EAC la rechaza explícitamente. Por
+eso se abrió el expediente host nativo `76976A0F-0B95-4363-B5AA-90AF9D0747EB`, completamente
+separado del runtime estable. La hipótesis
+`5F211890-DC8E-43B8-80FA-64EB06E1F760` exige conservar sin cambios Steam Linux, Proton y EAC y
+reemplazar únicamente la dependencia de hipervisor por una ejecución FEX nativa sobre macOS.
+
+La fuente usada es el submódulo público FEX incluido por Proton en la revisión exacta
+`a04b0241c2fe3911729842205cd8643981108aad`. El experimento
+`8E6CA24A-9414-4534-8E48-2249CD205DA8` produjo dos hitos reproducibles:
+
+1. `fex-a04b0241-darwin-core-stage1.patch` permite construir las 163 unidades de FEXCore como
+   `libFEXCore.dylib` Mach-O arm64. La biblioteca carga y descarga mediante `dyld` bajo runtime
+   endurecido, sin invocar APIs FEX ni ejecutar ELF huésped.
+2. El baseline endurecido rechaza la memoria ejecutable RWX de FEX con `errno 13`. El cambio
+   único `fex-a04b0241-darwin-map-jit-stage2.patch` añade `MAP_JIT` solo a asignaciones marcadas
+   como ejecutables. La misma sonda, firmada con `allow-jit`, escribe dos instrucciones arm64,
+   reactiva la protección de escritura y devuelve `42`.
+
+El constructor de contexto es la siguiente frontera. La primera sonda enlazada con las mismas
+cabeceras y biblioteca stage 2 termina con `EXC_BAD_ACCESS / SIGSEGV`, escritura nula, en
+`main+88`, antes de poder emitir el recibo `context_created`. La traza por sí sola no demuestra
+todavía si el fallo está en la construcción de `HostFeatures.CPUMIDRs`, en una definición de ABI
+de `fextl` o dentro de `CreateNewContext`; por tanto, no se modifica FEX hasta instrumentar esas
+tres fronteras por separado. El primer paso al reanudar es compilar la sonda con símbolos y
+marcadores antes/después de `CPUMIDRs.emplace_back`, usando exactamente el árbol y las
+definiciones CMake que produjeron la dylib. Después se probará `CreateNewContext` sin `InitCore`.
+
+Evidencia privada conservada:
+
+```text
+~/Library/Application Support/Regression/Research/
+  fli-nonvm-host/official-eac-elf-header-v1/
+  fli-fexcore-darwin-stage1-repro-v1/
+  fli-fexcore-darwin-stage1-allocator-blocked-v1/
+  fli-fexcore-darwin-stage2-repro-v1/
+  fli-fexcore-darwin-stage2-context-crash-v1/context-crash.ips
+```
+
+La traza de crash tiene SHA-256
+`37340928533a4ba449bf89e5c3825e6ca94e3c276a81c3f18596483c17eae3b2`.
+
+La reproducción stage 2 completa tiene huella de árbol
+`0aa65bd81fb58528d36d9d5d75f75507d2f485088a2221f82b8ad7ec5d1fb4dd`. El baseline bloqueado
+tiene `be5ceffd3ab12ffd9b63e34d312ced7c003d0ae7a03a3082d3cceb1378dc5196` y la primera A/B
+`MAP_JIT` aprobada `72afc54ea0a4acac653dcf64d0ebd7c89b9ab44b45fff663d09b4e82da137a8e`.
+
+Estos resultados no son Proton para macOS ni una ejecución de FANTASY LIFE i. Todavía faltan el
+contexto FEX, dispatcher, ventanas de escritura JIT internas, ABI de proceso Linux, señales,
+syscalls, cargador ELF, Steam/Proton y gráficos. Todas las sondas host actuales declaran
+explícitamente `guest_elf_executed=false`; el motor estable y la botella canónica no se tocaron.
+
 ## Conclusión y siguiente vía legítima
 
 La A/B oficial ya se completó y reprodujo `208`. No queda otra variable local legítima que
-cambiar dentro de esta VM: ocultar su naturaleza, parchear el launcher, alterar EAC o falsear
-sus respuestas sería una elusión y queda expresamente fuera del proyecto.
+cambiar dentro de esa VM: ocultar su naturaleza, parchear el launcher, alterar EAC o falsear sus
+respuestas sería una elusión y queda expresamente fuera del proyecto. La ruta activa es ahora el
+host nativo no virtualizado descrito arriba; permanece en fase de núcleo y no ha alcanzado EAC.
 
 La interpretación coincide con la documentación pública vigente: el
 [soporte oficial de Epic](https://www.epicgames.com/help/c-202300000001639/c-202300000001736/easy-anti-cheat-eac-error-cannot-run-under-virtual-machine-a202300000085408)
@@ -481,3 +541,10 @@ todos los resultados negativos y no declara el juego compatible. El 30 de julio 
 su mecanismo oficial, no quedaron procesos Steam/FEX/EAC, ambos handlers x86 volvieron a
 `/usr/bin/FEX` y AppArmor userns quedó restaurado a `1`. El manifiesto oficial permanece completo,
 los hashes EAC siguen intactos y el expediente decisivo pasa su índice SHA-256.
+
+En el checkpoint host nativo del 30 de julio no quedó ninguna compilación ni sonda en ejecución.
+La VM Venus se detuvo mediante `systemctl poweroff` después de verificar: Steam parado, handlers
+x86/x86-64 restaurados a `/usr/bin/FEX`, AppArmor userns en `1`, manifiesto oficial
+`StateFlags=4`, 153 archivos, cero enlaces y los dos hashes EAC sin cambios. Al reanudar no se
+debe arrancar la VM: la siguiente acción pertenece al laboratorio macOS nativo y consiste en
+instrumentar la sonda de contexto en el punto `HostFeatures.CPUMIDRs` antes de modificar FEX.

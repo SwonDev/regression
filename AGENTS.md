@@ -200,7 +200,12 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
     Steam/FEX en reposo y restaura ambos handlers a `/usr/bin/FEX` al detenerse. La relajación
     temporal de AppArmor userns solo puede vivir dentro de esa VM y debe revertirse al pausar.
     No quedan A/B legítimas dentro de esa VM: solo se reabre si el proveedor cambia su soporte o
-    existe una futura ruta no-VM oficial. Este avance no es una integración estable, no ha
+    existe una ruta no-VM que conserve intactos los componentes oficiales. El I+D host nativo ya
+    compila FEXCore público `a04b0241` como Mach-O arm64, carga la dylib y verificó mediante A/B
+    que `MAP_JIT` resuelve el bloqueo `errno 13`; todavía no ejecuta ELF huésped. La siguiente
+    frontera es una sonda de `Context`: el primer intento cayó con escritura nula en `main+88`,
+    por lo que se debe separar primero `HostFeatures.CPUMIDRs`, ABI `fextl` y
+    `CreateNewContext`, sin apilar parches. Este avance no es una integración estable, no ha
     iniciado el ejecutable principal y no permite marcar el juego como compatible; ver
     `docs/games/fantasy-life-i.md`.
 
@@ -400,6 +405,9 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   como causas pendientes. El runtime está aislado y no sustituye el FEX del sistema; al cerrar,
   ambos handlers volvieron a `/usr/bin/FEX`, AppArmor userns a `1` y no quedaron procesos.
   No ocultar la VM, copiar tokens, desactivar EAC ni presentar este avance como compatibilidad.
+  La vía no-VM ya tiene FEXCore público nativo arm64 cargable y memoria `MAP_JIT` reproducida;
+  está pausada en el `SIGSEGV` de la primera creación de contexto, antes de `InitCore` y sin ELF
+  huésped. La VM quedó apagada y el motor estable no se tocó.
   Expediente y rollback:
   `docs/games/fantasy-life-i.md` y
   `/var/lib/regression-fli-arm-lab/official-valve/compatdata-fli-x86-fex-fsselector-v1-from-arm-prereqs-before-eac-launch.tar.zst`.
