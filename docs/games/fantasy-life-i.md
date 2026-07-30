@@ -8,7 +8,7 @@
 - **Easy Anti-Cheat product ID:** `1c57494d93e24d2091a070296910acec`.
 - **Deployment ID:** `607d68cfa8b24890ba88764cc2879d57`.
 - **Expediente local:** `CD577AEA-7058-4194-9948-8B7806207D6D`.
-- **Estado:** investigación activa; **no está certificado ni blindado**.
+- **Estado:** pausado por dependencia externa (`EAC 208`); **no está certificado ni blindado**.
 
 El juego sigue fallando en el motor macOS estable de Regression y en CrossOver después de que
 EAC descargue correctamente su módulo. El candidato Linux ARM aislado ya supera ese fallo de
@@ -23,8 +23,12 @@ El laboratorio gráfico ya no está limitado a CPU. Un clon APFS independiente a
 presenta `vkcube` por X11 y renderiza visualmente el cliente Steam Linux oficial con CEF. Steam
 elige Venus como GPU predeterminada. El usuario ya completó el login manual dentro de ese cliente;
 la investigación solo verifica el booleano de sesión y no lee, exporta ni copia identificadores,
-credenciales o tokens. Steam reconoce la propiedad y ofrece instalar localmente los 14,39 GB.
-El flujo oficial está detenido deliberadamente en el EULA del juego, que debe aceptar el usuario.
+credenciales o tokens. El usuario aceptó personalmente el EULA y Steam completó la instalación
+oficial: el manifiesto de App ID `2993780` quedó en `StateFlags=4`, build `21998011`, con
+`15.203.991.960` bytes en disco. Tras ejecutar el App ID desde esa misma biblioteca y sesión
+autenticada, Steam completó EOS, EAC, UEPrereq y DirectX; EAC volvió a descargar su módulo con
+HTTP `200`, inició Wine module mapping 11.0 y devolvió exactamente `208 Cannot run under Virtual
+Machine`. El ejecutable principal no llegó a aparecer.
 
 Este avance no equivale todavía a «Proton integrado en macOS» ni a compatibilidad funcional del
 juego. Aunque ya existe una ruta gráfica real en la VM, sigue siendo obligatorio superar EAC y
@@ -131,8 +135,8 @@ este expediente:
 - el lado Wine solo alcanza Steamworks/EAC cuando existe un `libsteamclient.so` autenticado con
   pipe, usuario global y preparación de propiedad/ticket para el App ID.
 
-Eso refuerza la hipótesis activa: no basta con que la biblioteca cargue; la sesión Steam host
-debe existir y pertenecer legítimamente al usuario. Sin embargo, la pieza que GameNative emplea
+Eso sustentó la hipótesis ya comprobada: no basta con que la biblioteca cargue; la sesión Steam
+host debe existir y pertenecer legítimamente al usuario. Sin embargo, la pieza que GameNative emplea
 para crear esa sesión (`libsteambootstrap.so`) es propietaria, su fuente está retirada
 deliberadamente y encapsula interfaces internas no documentadas de Valve. Sus propios avisos de
 terceros lo declaran de forma expresa. Por ello Regression no copiará ese binario, no intentará
@@ -163,11 +167,14 @@ del propietario y Proton/EAC oficiales, todo dentro del laboratorio aislado.
 | Proton 11 + DXVK 2.7.1 | D3D11/Venus | falta `VK_EXT_depth_clip_enable`; no crea dispositivo | descartado para esta GPU virtual |
 | Proton 11 + DXVK 1.10.3 | D3D11/Venus | feature level 11_0 y presentación visible | candidato gráfico válido y aislado |
 | Steam autenticado + FEX v3 + EAC oficial | autenticación | HTTP `200`, mapeo Wine 11; código `208 Cannot run under Virtual Machine` | bloqueo de política externo observado; no eludir |
-| Instalación oficial visible | distribución | propiedad y 14,39 GB reconocidos; botón responde y alcanza el EULA | espera aceptación humana antes de crear manifiesto |
+| Instalación oficial visible | distribución | EULA aceptado por el usuario; manifiesto oficial `StateFlags=4`, build `21998011`; archivos verificados | instalación completa |
+| App ID oficial + FEX v3 + Proton 11/DXVK 1.10.3 | lanzamiento íntegro desde Steam | prerrequisitos oficiales completos; EAC HTTP `200`, mapeo Wine 11 y código `208`; ejecutable principal ausente | bloqueo de virtualización confirmado; no eludir |
 
-La ruta ARM directa quedó cerrada como resultado negativo. La hipótesis activa
+La ruta ARM directa quedó cerrada como resultado negativo. La hipótesis investigada
 `69B64100-BEDD-46CE-B931-00BFC1B152ED` prueba Proton x86-64 oficial sobre FEX y está vinculada al
-experimento `BA3FA6CD-199B-4691-BBFA-02910F958CD4`.
+experimento `BA3FA6CD-199B-4691-BBFA-02910F958CD4`, cerrado como `failed`. El expediente
+`CD577AEA-7058-4194-9948-8B7806207D6D` queda en `pausedExternalDependency` con las huellas del
+manifiesto y de la prueba oficial vinculadas en la base local.
 
 ## Causa exacta del bloqueo actual
 
@@ -207,13 +214,13 @@ La comprobación de requisitos de Steam también debe ejecutarse dentro de la tr
 inicia `steam-runtime-launcher-service`, pressure-vessel y CEF, y mantiene un único árbol de
 procesos controlado por systemd.
 
-La prueba que produjo `208` lanzó el conjunto oficial desde una copia verificada, pero aún no
-desde un `appmanifest_2993780.acf` creado por el propio cliente Linux. Antes de atribuir el
-resultado definitivamente a la política del proveedor, la siguiente puerta es completar la
-instalación oficial y lanzar desde la biblioteca de esa misma sesión. Steam reconoce la propiedad
-y el tamaño, y el modo visible ya alcanzó el EULA. El usuario debe aceptar ese acuerdo; después
-Steam podrá crear su manifiesto y verificar la copia local sin importar estado de cuenta desde
-otro backend.
+Esa puerta ya se cerró también con la distribución íntegramente creada por Steam. El usuario
+aceptó el EULA, el cliente creó `appmanifest_2993780.acf`, verificó el contenido, dejó el
+manifiesto en `StateFlags=4` y lanzó el App ID desde su biblioteca autenticada. La repetición
+terminó en el mismo `208` antes de `NFL1-Win64-Shipping.exe`. Por tanto, no quedan como causas
+pendientes la propiedad, el acuerdo legal, la instalación, los prerrequisitos, el manifiesto,
+la sesión Steam ni el puente inicial de EAC. La frontera observada es la comprobación de
+virtualización del módulo oficial y no se rodeará ocultando o falseando la VM.
 
 ## Candidato FEX y alcance de los parches
 
@@ -351,7 +358,8 @@ EasyAntiCheat/Settings.json
   604da8db104b1e4de245bbdf8fdb43cc71b9fa902975f7168f96974e98c85cfe
 ```
 
-La biblioteca de Steam contiene únicamente un enlace `common/FANTASY LIFE i` hacia esa copia.
+La biblioteca de Steam contiene `common/FANTASY LIFE i` enlazado hacia esa copia aislada; el
+manifiesto, la propiedad y el estado de instalación los creó y validó el propio cliente oficial.
 La primera instalación oficial no podía progresar porque los 214 nodos de la copia aislada eran
 `root:root`; Steam podía leerlos, pero no escribirlos ni verificarlos. El comando
 `prepare-steam-library` exige Steam/FEX en reposo, rechaza propietarios mezclados, conserva
@@ -359,8 +367,10 @@ propietarios y hashes críticos antes/después y cambia únicamente esa copia a 
 laboratorio. El recibo privado es
 `evidence/steam-library-ownership-2993780-20260730-095503/`; los hashes de EAC no cambiaron.
 
-No se ha importado `appmanifest_2993780.acf`: será el propio Steam oficial quien compruebe la
-licencia, cree el manifiesto y verifique los archivos existentes. La asociación Proton fue
+No se importó `appmanifest_2993780.acf`: el propio Steam oficial comprobó la licencia, creó el
+manifiesto y verificó los archivos existentes. El resultado final es `StateFlags=4`, build
+`21998011`; su huella SHA-256 es
+`1486485c0eab4e5d36bb07f45ba9d38a13bc8bf9458ccb6e5e0bf11e423bd88f`. La asociación Proton fue
 escrita por Steam solo para App ID `2993780`; su recibo está en
 `evidence/steam-compat-tool-2993780-20260730-093229/`. El modo silencioso dejaba el modal de
 instalación en un callback CEF sin crear tarea de contenido. La A/B `start-steam-system-visible`
@@ -410,7 +420,14 @@ evidence/logs-fli-x86-fex-fs-gs-preserve-base-v3-real-steam-anonymous-shared-hom
 /var/lib/regression-fli-utm/evidence/steam-library-ownership-2993780-20260730-095503/
 /var/lib/regression-fli-utm/evidence/steam-install-system-visible-20260730-100921/
 /var/lib/regression-fli-utm/evidence/pause-eula-20260730-103158/
+/var/lib/regression-fli-utm/evidence/official-install-complete-20260730-112540/
+/var/lib/regression-fli-utm/evidence/official-manifest-v3-dxvk1103-run-20260730-113358/
 ```
+
+El último directorio es el expediente decisivo del lanzamiento oficial. Contiene el estado
+previo, capturas, ventana X11, procesos, resultado, log EAC y un log Steam saneado; sus ocho
+artefactos pasan `sha256sum -c SHA256SUMS`. Permanece privado (`0700` para el directorio y
+`0600` para los archivos) y no almacena credenciales ni identificadores de cuenta.
 
 La última traza tiene huella de árbol
 `3abc09b179669e65b52dca191bb61eb22a24bfe4cfc280b70e1dff430a2bb20d` sobre su manifiesto
@@ -419,30 +436,30 @@ La última traza tiene huella de árbol
 directorios de autenticación son privados, están fuera del repo y no deben exportarse. Nunca se
 registran contenidos de `steam.token`, QR, contraseñas ni identificadores de cuenta.
 
-## Próxima A/B legítima
+## Conclusión y siguiente vía legítima
 
-1. Mantener abierto el EULA oficial y pedir al usuario que lo acepte; ningún agente lo acepta en
-   su nombre.
-2. Comprobar que Steam crea `appmanifest_2993780.acf`, inicia una tarea real de contenido y
-   verifica la copia local en vez de descargar otra instalación completa. El comando de solo
-   lectura `tools/research/fli_utm_lab.sh install-status` muestra únicamente campos técnicos
-   permitidos y omite `LastOwner` y cualquier dato de cuenta.
-3. Registrar la huella del manifiesto creado por Steam y de los archivos críticos después de la
-   verificación; cualquier cambio inesperado invalida la copia y exige un nuevo baseline.
-4. Detener Steam limpiamente y repetir con el runtime FS/GS v3 autocontenido. El orquestador
-   conmutará los handlers FEX solo con Steam/FEX en reposo y conservará el mismo `HOME`
-   autenticado sin inspeccionar sus contenidos privados.
-5. Lanzar App ID `2993780` desde el cliente oficial usando exclusivamente
-   `Regression FLI — Proton 11 + DXVK 1.10.3` y capturar proceso, logs y ventana.
-6. Verificar si la ruta íntegramente creada por Steam reproduce `208` o alcanza
-   `NFL1-Win64-Shipping.exe`. No ocultar la VM si vuelve a aparecer `208`.
-7. Si EAC pasa, validar la presentación Venus sin cambiar simultáneamente otra dimensión.
-8. Solo después: validar render, cursor/entrada, opciones, persistencia, gameplay,
-   cambio de foco, estabilidad y cierre; después ejecutar la matriz de regresión protegida.
+La A/B oficial ya se completó y reprodujo `208`. No queda otra variable local legítima que
+cambiar dentro de esta VM: ocultar su naturaleza, parchear el launcher, alterar EAC o falsear
+sus respuestas sería una elusión y queda expresamente fuera del proyecto.
 
-Si la prueba oficial vuelve a devolver `208`, se conservará como evidencia de una política
-externa concreta. No se apilarán flags, no se modificará EAC y no se falseará la virtualización
-para forzar un resultado.
+La interpretación coincide con la documentación pública vigente: el
+[soporte oficial de Epic](https://www.epicgames.com/help/c-202300000001639/c-202300000001736/easy-anti-cheat-eac-error-cannot-run-under-virtual-machine-a202300000085408)
+indica que la interfaz cliente de EAC no admite actualmente máquinas virtuales, y
+[Steamworks](https://partner.steamgames.com/doc/steamhardware/proton?l=spanish) aclara que el
+soporte EAC de Proton se habilita por compilación y que los fallos restantes deben escalarse al
+proveedor y a Valve. Ninguna de las dos fuentes ofrece una corrección del lado del jugador.
+
+El expediente solo se reabre si ocurre una de estas condiciones verificables:
+
+1. LEVEL5/Epic habilitan oficialmente este deployment para el entorno virtualizado empleado o
+   publican una actualización de EAC que cambie el resultado.
+2. Valve publica una ruta macOS/ARM no virtualizada y compatible con el módulo oficial del juego.
+3. Regression desarrolla una ejecución ARM no-VM que conserve Steam y EAC oficiales; antes de
+   probar el juego deberá superar sondas independientes de ABI, gráficos y aislamiento.
+
+Si alguna condición cambia, la primera prueba repetirá el App ID oficial sin modificar EAC y
+comparará su huella con este baseline. Solo si aparece `NFL1-Win64-Shipping.exe` se abrirá la
+matriz de render, cursor/entrada, opciones, persistencia, gameplay, foco, estabilidad y cierre.
 
 ## Estado que debe quedar al pausar
 
@@ -458,10 +475,9 @@ Antes de apagar o devolver la VM a su baseline:
 - comprobar que no quedan procesos Wine/EAC huérfanos;
 - ejecutar las pruebas Swift y `build/verify-protected-state.sh --include-bottle` en Regression.
 
-El expediente puede pausarse con el bloqueo concreto «aceptación manual del EULA oficial en el
-cliente Steam Linux aislado» o, después, con un rechazo `208` reproducido mediante la instalación
-creada por Steam. Esa pausa conserva todos los resultados negativos y no declara el juego
-compatible. La pausa del 30 de julio quedó con Steam/FEX detenidos, ambos handlers en
-`/usr/bin/FEX`, AppArmor userns restaurado a `1`, manifiesto ausente y hashes EAC intactos. Su
-recibo `RESUME.txt` tiene SHA-256
-`b842c5c5038e936cd31fb53987c8dbe091e90b1e7aab68244b1e6c8db02c01e1`.
+El expediente queda pausado por el bloqueo externo concreto `208 Cannot run under Virtual
+Machine`, reproducido mediante la instalación y el lanzamiento oficiales. Esta pausa conserva
+todos los resultados negativos y no declara el juego compatible. El 30 de julio Steam salió por
+su mecanismo oficial, no quedaron procesos Steam/FEX/EAC, ambos handlers x86 volvieron a
+`/usr/bin/FEX` y AppArmor userns quedó restaurado a `1`. El manifiesto oficial permanece completo,
+los hashes EAC siguen intactos y el expediente decisivo pasa su índice SHA-256.

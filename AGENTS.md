@@ -187,8 +187,10 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
     cliente Steam Linux oficial autenticado, el mismo candidato descarga el módulo, obtiene
     HTTP `200`, inicia el mapeo Wine 11 y avanza hasta `208 Cannot run under Virtual Machine`.
     Ese resultado es una política externa observada, no una autorización para ocultar, simular
-    o falsear la VM. Antes de cerrar el expediente debe repetirse desde una instalación creada y
-    lanzada íntegramente por el Steam oficial. El candidato FEX válido es la revisión FS/GS v3:
+    o falsear la VM. La repetición desde la instalación creada y lanzada íntegramente por Steam
+    ya confirmó el mismo `208`: EULA aceptado por el usuario, manifiesto `StateFlags=4`, build
+    `21998011`, prerrequisitos oficiales completos y ejecutable principal ausente. El candidato
+    FEX válido es la revisión FS/GS v3:
     conserva las bases dedicadas en long mode y pasa las sondas no-cero; la v2 que devolvía
     selector `0` queda descartada aunque también alcanzase `210`. Proton debe compartir `HOME`
     con el cliente Steam Linux oficial de la misma sesión aislada; no se copian credenciales ni
@@ -197,8 +199,9 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
     `binfmt_misc`, la A/B v3 completa usa overrides no persistentes en `/run/binfmt.d` solo con
     Steam/FEX en reposo y restaura ambos handlers a `/usr/bin/FEX` al detenerse. La relajación
     temporal de AppArmor userns solo puede vivir dentro de esa VM y debe revertirse al pausar.
-    Este avance no es una integración estable, no
-    ha iniciado el ejecutable principal y no permite marcar el juego como compatible; ver
+    No quedan A/B legítimas dentro de esa VM: solo se reabre si el proveedor cambia su soporte o
+    existe una futura ruta no-VM oficial. Este avance no es una integración estable, no ha
+    iniciado el ejecutable principal y no permite marcar el juego como compatible; ver
     `docs/games/fantasy-life-i.md`.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
@@ -390,10 +393,12 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   EAC descargó el módulo, obtuvo HTTP `200`, inició el mapeo Wine 11 y devolvió `208 Cannot run
   under Virtual Machine`. Todavía no inició el ejecutable principal. Un clon UTM 5.0.3 expone
   Venus sobre el Apple M5 Pro; DXVK 1.10.3 crea D3D11 y presenta sobre esa GPU, mientras 2.7.1
-  queda descartado por la ausencia de `VK_EXT_depth_clip_enable`. El Steam autenticado ya ofrece
-  la instalación local de 14,39 GB, usa únicamente el candidato Proton para App ID `2993780` y
-  ha llegado al EULA oficial; la aceptación corresponde al usuario. El runtime está aislado y no
-  sustituye el FEX del sistema; los overrides temporales de `binfmt_misc` se restauran al parar.
+  queda descartado por la ausencia de `VK_EXT_depth_clip_enable`. El usuario aceptó el EULA y
+  Steam completó la instalación oficial (`StateFlags=4`, build `21998011`, 15.203.991.960 bytes).
+  El lanzamiento oficial del App ID completó EOS/EAC/UEPrereq/DirectX y reprodujo `208` antes del
+  ejecutable principal, descartando propiedad, acuerdo, manifiesto, instalación, sesión e IPC
+  como causas pendientes. El runtime está aislado y no sustituye el FEX del sistema; al cerrar,
+  ambos handlers volvieron a `/usr/bin/FEX`, AppArmor userns a `1` y no quedaron procesos.
   No ocultar la VM, copiar tokens, desactivar EAC ni presentar este avance como compatibilidad.
   Expediente y rollback:
   `docs/games/fantasy-life-i.md` y
