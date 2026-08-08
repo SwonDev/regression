@@ -172,24 +172,34 @@ verify_hash 05a7beaed4494a4f5f53d3f626a82fffc3b70146436a908b7048a0632a49e1a8 "$A
 
 # Los módulos globales de Steam se protegen antes de construir o instalar el
 # perfil. Los perfiles solo pueden cambiar el router ntdll y sus directorios por proceso.
-verify_hash 50fda6d287a23324c39c75c7c887ae3ae0bf4e175c61bae4a92229053b5c65f2 "$GLOBAL_WINEMAC_SO"
+verify_hash 4723d219a704ce6fe5a42bfe3340840083582c38f3436e0e614a205c0214f382 "$GLOBAL_WINEMAC_SO"
 verify_hash da91ec701a18e97c0c3cd943d383ef996092c11d74983876fd44c90b03d5e5b1 "$GLOBAL_WINEMAC_DRV"
 verify_hash 44b1379db1b9e3472d1746830eddd88718dbbc761de2e406d45b8be198593ef3 "$GLOBAL_NTDLL_PE64"
 verify_hash 3d2b085b1dce4db5615a2a95d96860b644e1bfd4c907d0a68d177d02bd2010e8 "$GLOBAL_NTDLL_PE32"
 if ! hash_matches 2cd0f030fd0b92bbf17308021d23b2a2fede6ab02d528c44c03753dfcb049c97 "$GLOBAL_NTDLL" &&
    ! hash_matches 9e37f4a1c4c163909b7bc26b2a38b6408f02e261ddbf079b9608bc884b65f67d "$GLOBAL_NTDLL" &&
    ! hash_matches 2a446467a9faa0885f350d096fb6424c92f62201b733f974150c931e3a535a6a "$GLOBAL_NTDLL" &&
-   ! hash_matches d580644ea2604f76e16dbb9448255bdadd2543e3bcf2340a20f32202d6e45d45 "$GLOBAL_NTDLL"; then
+   ! hash_matches d580644ea2604f76e16dbb9448255bdadd2543e3bcf2340a20f32202d6e45d45 "$GLOBAL_NTDLL" &&
+   ! hash_matches 3da615918fe1bd16d51c66dcb098e7e357aa1a19523d8d4d271c9eb21d8fb84e "$GLOBAL_NTDLL" &&
+   ! hash_matches 86bb3e4be008abbcbe144933ba60c663f445f5a0b439a2fdfdd00d822d0dfbd0 "$GLOBAL_NTDLL" &&
+   ! hash_matches f847505cafb9085f5d681eb92ccb581344ccab2fc9a261e524881a7036398765 "$GLOBAL_NTDLL" &&
+   ! hash_matches ba0ff12c86bf97c0c711c20a5aee689123a0e0aee0800769def84c9ed9abe115 "$GLOBAL_NTDLL" &&
+   ! hash_matches 2f8a2b140e8c3b09be7570154f21538c29b9dcc0af3c3d1c47e3774c2a35a89c "$GLOBAL_NTDLL" &&
+   ! hash_matches 4ce87db782b94fadd92204857ace1b19a6cdd9fb803fefdedea0792283fcd80e "$GLOBAL_NTDLL" &&
+   ! hash_matches b52f619ad7d85276c61b5267d65f03ca063251293ddb54f8540bdc0289ff25de "$GLOBAL_NTDLL" &&
+   ! hash_matches adb97ddb229a7e20b1cac89b88ba81cfd9c9871c801b97dc50a596f0c5e2f113 "$GLOBAL_NTDLL"; then
     echo "ERROR: ntdll.so global no pertenece a una revisión protegida del router." >&2
     exit 1
 fi
 
 "$ROOT/build/build-dd2-profile.sh"
-"$ROOT/build/build-heroes-hammerwatch-2-profile.sh"
-verify_hash d580644ea2604f76e16dbb9448255bdadd2543e3bcf2340a20f32202d6e45d45 "$DD2_NTDLL"
-verify_hash 34d373a22fd224fec6e32d1bf7f31c647c518345752dc6bc632883c8c9aefc42 "$DD2_WINEMAC_SO"
+verify_hash adb97ddb229a7e20b1cac89b88ba81cfd9c9871c801b97dc50a596f0c5e2f113 "$DD2_NTDLL"
+verify_hash 9efbe99b5ac093036d5819604a391a06af8ba1e337eeed55a2033c1c4dd6af70 "$DD2_WINEMAC_SO"
 verify_hash 2ee679fa891fa336b2dd3623a1945f47c1c5834853e66eff342ba356c12d8c32 "$DD2_WINEMAC_DRV"
-verify_hash 2e441e71c00738b7434f7161648cb5c0e78f63a9ae8f3ceefa6ab8100b107c67 "$HWR2_WINEMAC_SO"
+if ! hwr2_profile_is_current; then
+    "$ROOT/build/build-heroes-hammerwatch-2-profile.sh"
+    verify_hash 2e441e71c00738b7434f7161648cb5c0e78f63a9ae8f3ceefa6ab8100b107c67 "$HWR2_WINEMAC_SO"
+fi
 
 mkdir -p "$PROFILE_ROOT"
 if [[ -L "$GRIM_PROFILE" && "$(readlink "$GRIM_PROFILE")" == "$GRIM_TARGET" ]]; then
@@ -204,7 +214,7 @@ else
     ln -s "$GRIM_TARGET" "$GRIM_PROFILE"
 fi
 
-if ! hash_matches d580644ea2604f76e16dbb9448255bdadd2543e3bcf2340a20f32202d6e45d45 "$GLOBAL_NTDLL"; then
+if ! hash_matches adb97ddb229a7e20b1cac89b88ba81cfd9c9871c801b97dc50a596f0c5e2f113 "$GLOBAL_NTDLL"; then
     ensure_backup_root
     NTDLL_BACKUP="$BACKUP_ROOT/ntdll.so.before-profile-router"
     cp -p "$GLOBAL_NTDLL" "$NTDLL_BACKUP"
@@ -274,8 +284,8 @@ else
     echo "Perfil aislado Dragon's Dogma 2 instalado; rollback en $BACKUP_ROOT"
 fi
 
-verify_hash d580644ea2604f76e16dbb9448255bdadd2543e3bcf2340a20f32202d6e45d45 "$GLOBAL_NTDLL"
-verify_hash 50fda6d287a23324c39c75c7c887ae3ae0bf4e175c61bae4a92229053b5c65f2 "$GLOBAL_WINEMAC_SO"
+verify_hash adb97ddb229a7e20b1cac89b88ba81cfd9c9871c801b97dc50a596f0c5e2f113 "$GLOBAL_NTDLL"
+verify_hash 4723d219a704ce6fe5a42bfe3340840083582c38f3436e0e614a205c0214f382 "$GLOBAL_WINEMAC_SO"
 verify_hash da91ec701a18e97c0c3cd943d383ef996092c11d74983876fd44c90b03d5e5b1 "$GLOBAL_WINEMAC_DRV"
 verify_hash 44b1379db1b9e3472d1746830eddd88718dbbc761de2e406d45b8be198593ef3 "$GLOBAL_NTDLL_PE64"
 verify_hash 3d2b085b1dce4db5615a2a95d96860b644e1bfd4c907d0a68d177d02bd2010e8 "$GLOBAL_NTDLL_PE32"

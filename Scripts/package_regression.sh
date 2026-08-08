@@ -7,8 +7,8 @@ MACOS_DIR="$APP/Contents/MacOS"
 PLIST="$APP/Contents/Info.plist"
 RESOURCES_DIR="$APP/Contents/Resources"
 STATE_ICON_DIR="$ROOT/assets/menubar/states"
-VERSION="1.7.4"
-BUILD_NUMBER="30"
+VERSION="1.8.0"
+BUILD_NUMBER="31"
 BACKUP_ROOT="$ROOT/backups/native-packaging"
 COMPATIBILITY_ROOT="$HOME/Library/Application Support/Regression/Compatibility"
 COMPATIBILITY_DB="$COMPATIBILITY_ROOT/compatibility.sqlite"
@@ -19,11 +19,37 @@ MUTATION_STARTED=false
 
 verify_protected_state()
 {
+    local phase="${1:-final}"
     local bottle="$HOME/Library/Application Support/Regression/Bottles/Steam"
+    local arguments=()
+    if [[ "$phase" == "before-tq2-route-unification" ]]; then
+        arguments+=(--before-tq2-route-unification)
+    fi
     if [[ -d "$bottle" ]]; then
-        "$ROOT/build/verify-protected-state.sh" --include-bottle
+        arguments+=(--include-bottle)
+        "$ROOT/build/verify-protected-state.sh" "${arguments[@]}"
     else
-        "$ROOT/build/verify-protected-state.sh"
+        "$ROOT/build/verify-protected-state.sh" "${arguments[@]}"
+    fi
+}
+
+verify_prepackage_state()
+{
+    local installed_engine="$APP/Contents/MacOS/regression-engine"
+    local source_engine="$ROOT/Scripts/regression-engine.sh"
+    local installed_hash
+    local source_hash
+    installed_hash="$(shasum -a 256 "$installed_engine" | awk '{print $1}')"
+    source_hash="$(shasum -a 256 "$source_engine" | awk '{print $1}')"
+
+    if [[ "$installed_hash" == "$source_hash" ]]; then
+        verify_protected_state
+    elif [[ "$installed_hash" == "5d8f999827ae6cf8ccdf292e8bed4c388ca5120ac4778a305f0890d9a41cdbbc" &&
+            "$source_hash" == "fd4e3e7ca59926b7977c63d9400dfb44a156f0aeb96b222ee3eba2c57fab3e4e" ]]; then
+        verify_protected_state before-tq2-route-unification
+    else
+        echo "ERROR: el lanzador instalado no es el baseline anterior ni el candidato canónico." >&2
+        exit 1
     fi
 }
 
@@ -113,7 +139,7 @@ fi
     shasum -a 256 -c SHA256SUMS
 )
 
-verify_protected_state
+verify_prepackage_state
 
 cd "$ROOT"
 swift build -c release --product Regression
@@ -139,6 +165,7 @@ NATIVE_BACKUP="$BACKUP_ROOT/regression-native-before-${VERSION}-${BUILD_NUMBER}-
 tar -czf "$NATIVE_BACKUP" -C "$APP" \
     Contents/Info.plist \
     Contents/MacOS/Regression \
+    Contents/MacOS/regression-engine \
     Contents/Resources \
     Contents/SharedSupport/bin/regressionctl \
     Contents/_CodeSignature
@@ -151,17 +178,15 @@ cp -cR "$APP" "$ROLLBACK_DIR/Regression.app"
 MUTATION_STARTED=true
 
 mkdir -p "$MACOS_DIR"
-LEGACY_LAUNCHER="$MACOS_DIR/regression"
 ENGINE_LAUNCHER="$MACOS_DIR/regression-engine"
-
-if [[ ! -e "$ENGINE_LAUNCHER" ]]; then
-    if [[ ! -f "$LEGACY_LAUNCHER" ]] || ! head -n 1 "$LEGACY_LAUNCHER" | grep -q '^#!/bin/bash'; then
-        echo "ERROR: no se encontró el lanzador original del motor propio" >&2
-        exit 1
-    fi
-    mv "$LEGACY_LAUNCHER" "$ENGINE_LAUNCHER"
-    chmod 755 "$ENGINE_LAUNCHER"
-fi
+ENGINE_SOURCE="$ROOT/Scripts/regression-engine.sh"
+[[ -x "$ENGINE_SOURCE" ]] || {
+    echo "ERROR: falta el lanzador versionado del motor propio." >&2
+    exit 1
+}
+TEMP_ENGINE="$MACOS_DIR/.regression-engine.new"
+install -m 755 "$ENGINE_SOURCE" "$TEMP_ENGINE"
+mv "$TEMP_ENGINE" "$ENGINE_LAUNCHER"
 
 TEMP_BINARY="$MACOS_DIR/.Regression.new"
 install -m 755 "$BINARY" "$TEMP_BINARY"
@@ -170,6 +195,15 @@ mkdir -p "$APP/Contents/SharedSupport/bin"
 TEMP_CONTROL="$APP/Contents/SharedSupport/bin/.regressionctl.new"
 install -m 755 "$CONTROL_BINARY" "$TEMP_CONTROL"
 mv "$TEMP_CONTROL" "$APP/Contents/SharedSupport/bin/regressionctl"
+COMPONENT_INSTALLER_SOURCE="$ROOT/Scripts/install_apple_gptk_component.sh"
+COMPONENT_INSTALLER="$APP/Contents/SharedSupport/bin/install-apple-gptk-component"
+[[ -x "$COMPONENT_INSTALLER_SOURCE" ]] || {
+    echo "ERROR: falta el instalador autorreparable de Apple GPTK." >&2
+    exit 1
+}
+TEMP_COMPONENT_INSTALLER="$APP/Contents/SharedSupport/bin/.install-apple-gptk-component.new"
+install -m 755 "$COMPONENT_INSTALLER_SOURCE" "$TEMP_COMPONENT_INSTALLER"
+mv "$TEMP_COMPONENT_INSTALLER" "$COMPONENT_INSTALLER"
 
 mkdir -p "$RESOURCES_DIR"
 for state in ready working running error; do

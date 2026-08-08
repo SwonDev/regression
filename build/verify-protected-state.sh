@@ -10,6 +10,7 @@ INCLUDE_BOTTLE=false
 BEFORE_DD2_PROMOTION=false
 BEFORE_DRAGONSWORD_PROMOTION=false
 BEFORE_HWR2_PROMOTION=false
+BEFORE_TQ2_ROUTE_UNIFICATION=false
 
 for argument in "$@"; do
     case "$argument" in
@@ -25,8 +26,11 @@ for argument in "$@"; do
         --before-hwr2-promotion)
             BEFORE_HWR2_PROMOTION=true
             ;;
+        --before-tq2-route-unification)
+            BEFORE_TQ2_ROUTE_UNIFICATION=true
+            ;;
         *)
-            echo "Uso: $0 [--include-bottle] [--before-dd2-promotion|--before-dragonsword-promotion|--before-hwr2-promotion]" >&2
+            echo "Uso: $0 [--include-bottle] [--before-dd2-promotion|--before-dragonsword-promotion|--before-hwr2-promotion|--before-tq2-route-unification]" >&2
             exit 64
             ;;
     esac
@@ -36,6 +40,7 @@ PROMOTION_BASELINES=0
 $BEFORE_DD2_PROMOTION && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
 $BEFORE_DRAGONSWORD_PROMOTION && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
 $BEFORE_HWR2_PROMOTION && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
+$BEFORE_TQ2_ROUTE_UNIFICATION && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
 if (( PROMOTION_BASELINES > 1 )); then
     echo "ERROR: las verificaciones históricas de promoción son mutuamente excluyentes." >&2
     exit 64
@@ -88,7 +93,15 @@ verify_bottle_hash()
 }
 
 # Lanzador y módulos propios que protegen Steam, DXMT, entrada y routing por juego.
-verify_hash 539fee086fed6aebda5984c0e928c3b4632499d8129250b5f37188c10ac7409b "Contents/MacOS/regression-engine"
+if $BEFORE_TQ2_ROUTE_UNIFICATION; then
+    verify_hash 5d8f999827ae6cf8ccdf292e8bed4c388ca5120ac4778a305f0890d9a41cdbbc \
+        "Contents/MacOS/regression-engine"
+else
+    verify_hash fd4e3e7ca59926b7977c63d9400dfb44a156f0aeb96b222ee3eba2c57fab3e4e \
+        "Contents/MacOS/regression-engine"
+fi
+verify_hash 6942782b7baf0049bb56aba2b9a4e00a107984b1b0198f2307fb63e87ce3103c \
+    "Contents/SharedSupport/bin/install-apple-gptk-component"
 if $BEFORE_DD2_PROMOTION; then
     verify_hash 2cd0f030fd0b92bbf17308021d23b2a2fede6ab02d528c44c03753dfcb049c97 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
 elif $BEFORE_DRAGONSWORD_PROMOTION; then
@@ -96,7 +109,7 @@ elif $BEFORE_DRAGONSWORD_PROMOTION; then
 elif $BEFORE_HWR2_PROMOTION; then
     verify_hash 2a446467a9faa0885f350d096fb6424c92f62201b733f974150c931e3a535a6a "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
 else
-    verify_hash d580644ea2604f76e16dbb9448255bdadd2543e3bcf2340a20f32202d6e45d45 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+    verify_hash adb97ddb229a7e20b1cac89b88ba81cfd9c9871c801b97dc50a596f0c5e2f113 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
 fi
 
 DRAGONSWORD_PROFILE="$WINE_ROOT/lib/profiles/dragonsword"

@@ -80,6 +80,12 @@ public actor BackendCoordinator {
             guard let normalized = SteamAppID.normalized(appID) else {
                 throw RegressionCoreError.launchFailed("El Steam App ID no es válido")
             }
+            try await ensureSteamClientIsActiveIfRequired(
+                backend: backend,
+                appID: normalized,
+                running: running,
+                installations: installations
+            )
             steamArguments = ["-applaunch", normalized]
         } else {
             steamArguments = []
@@ -99,6 +105,96 @@ public actor BackendCoordinator {
             arguments: command.arguments,
             logDirectoryURL: logDirectoryURL
         )
+    }
+
+    private func ensureSteamClientIsActiveIfRequired(
+        backend: BackendKind,
+        appID: String,
+        running: RunningBackendState,
+        installations: InstallationSnapshot
+    ) async throws {
+        guard backend == .regression,
+              running.activeBackend == nil,
+              GameRuntimeProfileCatalog.profile(
+                  for: appID,
+                  backend: backend
+              )?.requiresActiveSteamClient == true else {
+            return
+        }
+
+        let readinessLogURL = installations.regression.bottleURL
+            .appendingPathComponent("drive_c/Program Files (x86)/Steam/logs/connection_log.txt")
+        let readinessOffset = Self.fileSize(at: readinessLogURL)
+        let steamCommand = try command(
+            backend: backend,
+            installations: installations,
+            steamArguments: []
+        )
+        guard FileManager.default.isExecutableFile(atPath: steamCommand.executableURL.path) else {
+            throw RegressionCoreError.launcherMissing(steamCommand.executableURL)
+        }
+        _ = try await processLauncher.launch(
+            backend: backend,
+            executableURL: steamCommand.executableURL,
+            arguments: steamCommand.arguments,
+            logDirectoryURL: logDirectoryURL
+        )
+
+        var observedSteamProcess = false
+        for _ in 0..<180 {
+            let current = await inspector.runningBackends()
+            if current.hasConflict {
+                throw RegressionCoreError.backendConflict
+            }
+            if current.activeBackend == backend {
+                observedSteamProcess = true
+                if readinessOffset == nil || Self.steamClientBecameReady(
+                    logURL: readinessLogURL,
+                    afterOffset: readinessOffset ?? 0
+                ) {
+                    return
+                }
+            }
+            try await Task.sleep(for: .milliseconds(500))
+        }
+        if observedSteamProcess {
+            throw RegressionCoreError.launchFailed(
+                "Steam se inició, pero no completó su conexión antes de lanzar el App ID \(appID)"
+            )
+        }
+        throw RegressionCoreError.launchFailed(
+            "Steam no quedó disponible para la receta aislada del App ID \(appID)"
+        )
+    }
+
+    private static func fileSize(at url: URL) -> UInt64? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attributes[.size] as? NSNumber else {
+            return nil
+        }
+        return size.uint64Value
+    }
+
+    private static func steamClientBecameReady(
+        logURL: URL,
+        afterOffset: UInt64
+    ) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: logURL) else {
+            return false
+        }
+        defer { try? handle.close() }
+
+        do {
+            let currentSize = try handle.seekToEnd()
+            try handle.seek(toOffset: min(afterOffset, currentSize))
+            let data = try handle.readToEnd() ?? Data()
+            let appendedLog = String(decoding: data, as: UTF8.self)
+            return appendedLog.contains(
+                "RecvMsgClientLogOnResponse() : processing complete"
+            )
+        } catch {
+            return false
+        }
     }
 
     public func requestShutdown(

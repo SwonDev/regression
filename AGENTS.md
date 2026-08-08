@@ -231,6 +231,18 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
     Además: otro proyecto (Switch2Bridge) instaló el 2026-08-04 un shim de
     `libSDL2-2.0.0.dylib` dentro del bundle; el usuario decidió conservarlo y el bundle se
     refirmó con él. No "limpiarlo" sin consultar.
+31. **Titan Quest II usa una receta compilada de doble punto de entrada.** El App ID `1154030`
+    inicia Steam y envía `Steam.exe -applaunch 1154030`, la misma ruta que el botón «Jugar».
+    Steam recibe todavía
+    `ImagePathName=TQ2.exe` desde wineserver, por lo que `env.c` redirige únicamente el sufijo
+    completo `\\steamapps\\common\\Titan Quest II\\TQ2.exe` antes de mapear PE. El Shipping
+    exacto activa GPTK 4.0b2 desde el componente local verificado y fuerza la ruta D3DMetal
+    completa solo en ese proceso. No convertirlo en override global, bypass genérico de VC++ ni
+    receta aprendida desde SQLite. El payload de Apple nunca se versiona ni redistribuye; el
+    instalador integrado solo verifica, repara y conserva rollback desde el DMG oficial. PIN de
+    `ntdll.so`: `adb97ddb…`. Run perfecto final de 1.8.0:
+    `228467BB-AECE-40EF-8FE5-E739250AA859`, huella exacta `fb45e5ed…`; expediente
+    `docs/games/titan-quest-2.md`.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 
@@ -309,6 +321,7 @@ pruebas; sustituir un PIN global requiere validar toda la matriz correspondiente
 | Grim Dawn | D3DMetal completo por proceso; `d3d9/atidxx64/nvapi64/nvngx=builtin` | Evita mezcla DXVK y parpadeo | Gameplay + opciones + captura 3024×1964 |
 | DragonSword | D3DMetal completo por proceso; ocho módulos builtin fijados | Evita ruta híbrida D3DMetal/DXMT y tirones | Gameplay + pausa + salida + captura 3024×1964 |
 | Heroes of Hammerwatch II | `CX_FWD_COMPAT_GL_CTX=1` solo en `HWR2.exe`; OpenGL CX 26.3 | BGFX omite el bit forward-compatible requerido por macOS | Menú + gameplay + foco + Steam + Grim Dawn |
+| Titan Quest II | bootstrap exacto → Shipping + GPTK 4.0b2 externo solo en `TQ2-Win64-Shipping.exe` | El bootstrap da un falso negativo de VC++ y Steam conserva su imagen en wineserver | Ambos botones + gameplay + opciones + Steam + matriz Wine |
 | RetinaMode | `n` (HKCU\Software\Wine\Mac Driver) | Alinea clicks | Click en tienda |
 | Fuentes | 55 TTFs (corefonts + CJK) en la botella | Sin ellas Steam crashea (assert Win32Font) | Steam arranca |
 | DLLs PE | **SIN strip** | El strip rompe unwind SEH y firma de módulos | Juegos Unity |
@@ -429,6 +442,15 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   el swap. El run `BAAC2B06-3CAD-467A-B1F1-834B76B794AD` cerró con exit=0 y el usuario registró
   el veredicto perfecto desde la app. Catálogo revisión `2026-08-08.1`; expediente y rollback:
   `docs/games/fields-of-mistria.md` y `backups/fields-of-mistria-investigation-20260807-202141/`.
+- **Titan Quest II (Shipping + GPTK 4.0b2, doble entrada)**: el falso negativo de VC++ del
+  bootstrap se evita mediante una receta compilada de coincidencia exacta. Tanto el botón de
+  Regression como «Jugar» dentro de Steam alcanzaron menú, selección 3D y gameplay; la ejecución
+  desde Steam superó movimiento por clic, pausa, opciones y cierre limpio. `lsof` confirmó
+  `TQ2-Win64-Shipping.exe`, el `ntdll.so` propio con PIN `adb97ddb…` y D3DMetal/libd3dshared de
+  GPTK 4.0b2. El run final `228467BB-AECE-40EF-8FE5-E739250AA859` de Regression 1.8.0 terminó
+  con ambos procesos en código `0`, fue confirmado perfecto por el usuario y fijó la huella
+  `fb45e5ed…`. Perfil y componente permanecen aislados; expediente
+  `docs/games/titan-quest-2.md` y rollback `backups/titan-quest-2-*`.
 - **FANTASY LIFE i (I+D EAC, no certificado)**: el host macOS estable y CrossOver fallan con
   código `206` al mapear el módulo Linux. En la VM Linux ARM aislada, Proton 11 x86-64 oficial
   sobre el candidato FEX FS/GS v3 superó el `210` tras autenticar manualmente el cliente oficial:

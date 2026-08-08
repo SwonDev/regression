@@ -26,10 +26,10 @@ y por qué no se redistribuyen. Licencia: LGPL-2.1+ (`LICENSE`).
 
 ## Instalación para usuarios (instalador autodetectante y autodescargable)
 
-Desde la release `v1.7.4` hay un asset instalable para cualquier Mac con Apple Silicon:
+Desde la release `v1.8.0` hay un asset instalable para cualquier Mac con Apple Silicon:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://github.com/SwonDev/regression/releases/download/v1.7.4/install_regression.sh | bash
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/SwonDev/regression/releases/download/v1.8.0/install_regression.sh | bash
 ```
 
 El instalador (`Scripts/install_regression.sh`, auditable antes de ejecutarlo) ejecuta siete
@@ -72,6 +72,13 @@ instalador firma la app en tu Mac; si la descargas a mano con el navegador, bast
 Sin cuenta de desarrollador de Apple (gratuita) el GPTK no puede descargarse
 automáticamente: Apple lo exige. Con CrossOver tampoco hace falta GPTK para el backend
 predeterminado; el motor propio funciona sin él salvo los perfiles D3DMetal.
+
+Los perfiles que requieren una versión concreta de GPTK usan un componente local versionado en
+`~/Library/Application Support/Regression/Components/AppleGPTK`. El instalador integrado verifica
+un manifiesto de hashes y la firma de Apple, repara transaccionalmente desde el DMG oficial
+guardado en caché o en Descargas y conserva rollback. El payload de Apple nunca entra en el bundle,
+el repositorio ni los assets de GitHub; cuando Apple exige autenticación, Regression muestra la
+ruta oficial de descarga en vez de eludirla.
 
 Regression consulta en segundo plano la última release estable de GitHub. Cuando existe una
 versión posterior, el popover muestra **Actualizar y reiniciar**. Antes de ejecutar nada verifica
@@ -260,6 +267,12 @@ backend y nota de evidencia. Nunca se infiere “perfecto” de un cierre normal
   CX 26.3, activado exclusivamente en `HWR2.exe`; menú, gameplay, entrada, opciones y cierre
   confirmados perfectos. Run blindado: `F8E4EA27-2E6B-439C-AC93-BD927035B5B5`. Expediente:
   [`docs/games/heroes-of-hammerwatch-2.md`](docs/games/heroes-of-hammerwatch-2.md).
+- **Titan Quest II** — el bootstrap `TQ2.exe` informa falsamente de que falta VC++ bajo Wine.
+  Regression inicia Steam cuando lo requiere y hace que ambos botones recorran la misma ruta:
+  redirige únicamente la imagen exacta del bootstrap al ejecutable Unreal real y aplica GPTK 4.0
+  beta 2 como conjunto D3DMetal indivisible solo en `TQ2-Win64-Shipping.exe`. Menú, personaje 3D,
+  gameplay, entrada, pausa, opciones y cierre están verificados.
+  Expediente: [`docs/games/titan-quest-2.md`](docs/games/titan-quest-2.md).
 - **Secrets of Grindea** — baseline general sin perfil especial, XNA sobre Wine Mono/FNA;
   render, HUD, entrada, opciones, combate y habilidades confirmados sin trabones. Run blindado:
   `953B6822-AC77-4977-B862-B206D3CE16AE`. OpenGL y la compilación Metal concurrente quedan
@@ -533,6 +546,12 @@ Gotchas de build (todos resueltos, no redescubrir):
     abierto ya implementa `CW Hack 24834`; `HWR2.exe` activa `CX_FWD_COMPAT_GL_CTX=1` sin tocar
     Steam, registro, RetinaMode ni el driver global. Poner esa variable en el entorno general
     está prohibido: la receta vive en su perfil y en el router exacto del ejecutable.
+15. **Titan Quest II = bootstrap y D3DMetal externos como receta compilada.** La ruta de Steam
+    solo coincide con el sufijo completo `steamapps\\common\\Titan Quest II\\TQ2.exe`; el
+    `ImagePathName` recibido del wineserver se sustituye por
+    `TQ2\\Binaries\\Win64\\TQ2-Win64-Shipping.exe` antes de mapear PE. El router externo solo
+    acepta ese ejecutable final y el componente GPTK 4.0b2 verificado por manifiesto. No usar un
+    bypass global de VC++, no ejecutar rutas aprendidas y no mover GPTK 4 al runtime general.
 
 ---
 
@@ -548,7 +567,9 @@ Gotchas de build (todos resueltos, no redescubrir):
   runtime global.
 - **D3DMetal = binarios de Apple del GPTK instalado** (licencia evaluación, uso local).
 - **Routing gráfico por ejecutable en ntdll**: cada perfil se antepone únicamente en su proceso;
-  Grim Dawn, DD2, DragonSword y HWR2 no alteran Steam, Cube World, FFT ni el backend global.
+  Grim Dawn, DD2, DragonSword, HWR2 y Titan Quest II no alteran Steam, Cube World, FFT ni el
+  backend global. Las recetas de bootstrap son compiladas, versionadas y de coincidencia exacta;
+  SQLite no puede aportar comandos ni rutas ejecutables.
 - **Botella fuera de la app**: datos de usuario (login, juegos) separados del artefacto firmado.
 - **PE sin strip**: se conservan `.pdata`, `.xdata`, unwind/SEH y símbolos necesarios de los
   módulos builtin. El asset público elimina únicamente símbolos de depuración Mach-O y material

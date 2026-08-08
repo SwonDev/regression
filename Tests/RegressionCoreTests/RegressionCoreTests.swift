@@ -340,6 +340,41 @@ final class RegressionCoreTests: XCTestCase {
         )
     }
 
+    func testTitanQuest2CompiledProfileIsExactAndRegressionOnly() throws {
+        let profile = try XCTUnwrap(
+            GameRuntimeProfileCatalog.profile(for: "1154030", backend: .regression)
+        )
+
+        XCTAssertEqual(profile.identifier, "titan-quest-2.apple-gptk-4.0b2-steam-shipping")
+        XCTAssertEqual(profile.revision, 9)
+        XCTAssertEqual(profile.executable, "tq2-win64-shipping.exe")
+        XCTAssertTrue(profile.requiresActiveSteamClient)
+        XCTAssertEqual(profile.configurationValues["profile.scope"], "exact-app-process")
+        XCTAssertEqual(profile.configurationValues["profile.graphics.backend"], "d3dmetal")
+        XCTAssertEqual(profile.configurationValues["profile.graphics.route"], "complete")
+        XCTAssertEqual(
+            profile.configurationValues["profile.router.contract"],
+            "compiled-wineserver-startup-image-and-external-d3dmetal-v7"
+        )
+        XCTAssertEqual(profile.configurationValues["profile.launcher"], "steam-bootstrap")
+        XCTAssertEqual(profile.configurationValues["profile.launcher.entrypoints"], "regression,steam")
+        XCTAssertEqual(profile.configurationValues["profile.bootstrap.executable"], "tq2.exe")
+        XCTAssertEqual(profile.configurationValues["profile.bootstrap.action"], "redirect-to-shipping")
+        XCTAssertEqual(profile.configurationValues["profile.component.id"], "apple-gptk")
+        XCTAssertEqual(profile.configurationValues["profile.component.version"], "4.0b2")
+        XCTAssertEqual(profile.configurationValues["profile.component.repair"], "manifest-verified")
+        XCTAssertNil(
+            GameRuntimeProfileCatalog.profile(for: "1154030", backend: .crossOver)
+        )
+
+        let unrelated = try XCTUnwrap(
+            GameRuntimeProfileCatalog.profile(for: "619820", backend: .regression)
+        )
+        XCTAssertFalse(unrelated.requiresActiveSteamClient)
+        XCTAssertNil(unrelated.configurationValues["profile.launcher"])
+        XCTAssertNil(unrelated.configurationValues["profile.router.contract"])
+    }
+
     func testGameConfigurationCollectorCapturesGraphicsWithoutPrivateValues() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("regression-game-config-\(UUID().uuidString)", isDirectory: true)

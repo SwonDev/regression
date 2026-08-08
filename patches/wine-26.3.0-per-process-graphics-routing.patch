@@ -1,6 +1,6 @@
 --- a/dlls/ntdll/unix/loader.c
 +++ b/dlls/ntdll/unix/loader.c
-@@ -382,8 +382,143 @@
+@@ -382,8 +382,353 @@
      dll_paths = new_dll_paths;
      if (path_len > dll_path_maxlen)
          dll_path_maxlen = path_len;
@@ -20,9 +20,174 @@
 +
 +    while (*exe && *name)
 +    {
-+        if (towlower( *exe++ ) != (unsigned char)*name++) return 0;
++        unsigned char expected = (unsigned char)*name++;
++        if (expected >= 'A' && expected <= 'Z') expected += 'a' - 'A';
++        if (towlower( *exe++ ) != expected) return 0;
 +    }
 +    return !*exe && !*name;
++}
++
++static int regression_executable_matches_env( const char *variable )
++{
++    const char *name = getenv( variable );
++
++    if (!name || !name[0] || strlen( name ) >= 128 ||
++        strchr( name, '/' ) || strchr( name, '\\' ) || strchr( name, ':' ))
++        return 0;
++    return regression_executable_is( name );
+ }
+
++static unsigned int regression_route_count( const char *variable )
++{
++    const char *value = getenv( variable );
++    char *end;
++    unsigned long count;
++
++    if (!value || !value[0]) return 0;
++    count = strtoul( value, &end, 10 );
++    if (*end || !count || count > 16) return 0;
++    return count;
++}
++
++static int regression_path_basename_is( const char *path, const char *name )
++{
++    const char *cursor, *basename = path;
++
++    if (!path || !name) return 0;
++    for (cursor = path; *cursor; cursor++)
++        if (*cursor == '/' || *cursor == '\\') basename = cursor + 1;
++    return !strcasecmp( basename, name );
++}
++
++struct regression_builtin_bootstrap_route
++{
++    const char *executable;
++    const char *target_suffix;
++};
++
++/* Steam starts games through wineserver and does not reliably preserve Unix-only
++ * variables for the new loader process. These entries are therefore compiled,
++ * exact-name recipes; they never come from the learning database or registry. */
++static const struct regression_builtin_bootstrap_route regression_builtin_bootstrap_routes[] =
++{
++    {
++        "TQ2.exe",
++        "/drive_c/Program Files (x86)/Steam/steamapps/common/Titan Quest II/"
++        "TQ2/Binaries/Win64/TQ2-Win64-Shipping.exe"
++    },
++};
++
++static const char *regression_builtin_external_d3dmetal_root(void)
++{
++    static char resolved_root[PATH_MAX];
++    char candidate[PATH_MAX];
++    const char *home;
++    int length;
++
++    if (!regression_executable_is( "tq2-win64-shipping.exe" )) return NULL;
++    if (!(home = getenv( "HOME" )) || !home[0]) return NULL;
++    length = snprintf( candidate, sizeof(candidate),
++                       "%s/Library/Application Support/Regression/Components/"
++                       "AppleGPTK/4.0b2/wine", home );
++    if (length < 0 || (size_t)length >= sizeof(candidate)) return NULL;
++    if (!realpath( candidate, resolved_root )) return NULL;
++    return resolved_root;
++}
++
++static const char *regression_external_d3dmetal_root(void)
++{
++    const char *builtin_root, *legacy_root;
++    unsigned int i, count;
++    char executable_variable[80], root_variable[80];
++
++    if (regression_executable_matches_env( "REGRESSION_EXTERNAL_D3DMETAL_EXECUTABLE" ))
++    {
++        legacy_root = getenv( "REGRESSION_EXTERNAL_D3DMETAL_WINE_ROOT" );
++        if (legacy_root && legacy_root[0]) return legacy_root;
++    }
++
++    count = regression_route_count( "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_COUNT" );
++    for (i = 0; i < count; i++)
++    {
++        snprintf( executable_variable, sizeof(executable_variable),
++                  "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_%u_EXECUTABLE", i );
++        if (!regression_executable_matches_env( executable_variable )) continue;
++        snprintf( root_variable, sizeof(root_variable),
++                  "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_%u_WINE_ROOT", i );
++        legacy_root = getenv( root_variable );
++        if (legacy_root && legacy_root[0]) return legacy_root;
++    }
++    if ((builtin_root = regression_builtin_external_d3dmetal_root())) return builtin_root;
++    return NULL;
++}
++
++static void regression_redirect_bootstrap( int argc, char *argv[] )
++{
++    const char *prefix = getenv( "WINEPREFIX" );
++    const char *source, *target;
++    char **executable_arg;
++    char source_variable[80], target_variable[80];
++    char candidate_target[PATH_MAX], resolved_prefix[PATH_MAX], resolved_target[PATH_MAX];
++    size_t prefix_length;
++    unsigned int i, count;
++
++    if (argc <= 0 || !prefix || !prefix[0] ||
++        getenv( "REGRESSION_BOOTSTRAP_REDIRECTED" )) return;
++    executable_arg = argc > 1 ? &argv[1] : &argv[0];
++    if (!realpath( prefix, resolved_prefix )) return;
++    prefix_length = strlen( resolved_prefix );
++    count = regression_route_count( "REGRESSION_BOOTSTRAP_REDIRECT_COUNT" );
++
++    for (i = 0; i < count; i++)
++    {
++        snprintf( source_variable, sizeof(source_variable),
++                  "REGRESSION_BOOTSTRAP_REDIRECT_%u_EXECUTABLE", i );
++        snprintf( target_variable, sizeof(target_variable),
++                  "REGRESSION_BOOTSTRAP_REDIRECT_%u_TARGET", i );
++        source = getenv( source_variable );
++        target = getenv( target_variable );
++        if (!source || !source[0] || strlen( source ) >= 128 ||
++            strchr( source, '/' ) || strchr( source, '\\') || strchr( source, ':' ) ||
++            !target || !target[0] ||
++            !regression_path_basename_is( *executable_arg, source ) ||
++            !realpath( target, resolved_target )) continue;
++
++        if (strlen( resolved_target ) < prefix_length + 9 ||
++            strncmp( resolved_target, resolved_prefix, prefix_length ) ||
++            strncmp( resolved_target + prefix_length, "/drive_c/", 9 )) continue;
++        *executable_arg = strdup( resolved_target );
++        if (!*executable_arg) return;
++        setenv( "REGRESSION_BOOTSTRAP_REDIRECTED", "1", 1 );
++        fprintf( stderr, "Regression: redirected exact bootstrap %s to %s.\n",
++                 source, resolved_target );
++        return;
++    }
++
++    for (i = 0; i < ARRAY_SIZE( regression_builtin_bootstrap_routes ); i++)
++    {
++        const struct regression_builtin_bootstrap_route *route =
++            &regression_builtin_bootstrap_routes[i];
++        int target_length;
++
++        target_length = snprintf( candidate_target, sizeof(candidate_target), "%s%s",
++                                  resolved_prefix, route->target_suffix );
++        if (!regression_path_basename_is( *executable_arg, route->executable ) || target_length < 0 ||
++            (size_t)target_length >= sizeof(candidate_target) ||
++            access( candidate_target, R_OK )) continue;
++
++        /* The Steam library is deliberately shared with the canonical
++         * CrossOver bottle through a steamapps symlink.  realpath() would
++         * therefore escape the Regression prefix even though this logical
++         * path is a fixed, compiled suffix below drive_c.  Keep environment
++         * routes on the strict realpath boundary above; compiled routes are
++         * safe to execute through their generated in-prefix path. */
++        *executable_arg = strdup( candidate_target );
++        if (!*executable_arg) return;
++        setenv( "REGRESSION_BOOTSTRAP_REDIRECTED", "1", 1 );
++        fprintf( stderr, "Regression: redirected compiled bootstrap %s to %s.\n",
++                 route->executable, candidate_target );
++        return;
++    }
 +}
 +
 +extern void add_load_order_override( const WCHAR *entry );
@@ -38,18 +203,19 @@
 +    entry[i++] = 'b';
 +    entry[i] = 0;
 +    add_load_order_override( entry );
- }
--
++}
 +
 +static void regression_set_graphics_backend(void)
 +{
 +    const char *backend = getenv( "REGRESSION_GRAPHICS_BACKEND" );
 +    const char *root = getenv( "REGRESSION_WINE_ROOT" );
++    const char *external_d3dmetal_wine_root = regression_external_d3dmetal_root();
 +    int is_cubeworld = regression_executable_is( "cubeworld.exe" );
 +    int is_grim_dawn = regression_executable_is( "grim dawn.exe" );
 +    int is_dragons_dogma_2 = regression_executable_is( "dd2.exe" );
 +    int is_dragonsword = regression_executable_is( "dsclient-win64-shipping.exe" );
 +    int is_heroes_hammerwatch_2 = regression_executable_is( "hwr2.exe" );
++    int is_external_d3dmetal = external_d3dmetal_wine_root != NULL;
 +    const char *suffix;
 +    char *path;
 +
@@ -60,11 +226,37 @@
 +        else if (is_dragons_dogma_2) backend = "dragons-dogma-2";
 +        else if (is_dragonsword) backend = "dragonsword";
 +        else if (is_heroes_hammerwatch_2) backend = "heroes-hammerwatch-2";
++        else if (is_external_d3dmetal) backend = "external-d3dmetal";
 +        else if (regression_executable_is( "fft_enhanced.exe" )) backend = "d3dmetal";
 +        else return;
 +    }
 +
-+    if (!strcasecmp( backend, "dxvk" )) suffix = "/lib/dxvk";
++    if (!strcasecmp( backend, "external-d3dmetal" ) && is_external_d3dmetal)
++    {
++        char *component_path;
++
++        if (!external_d3dmetal_wine_root || !external_d3dmetal_wine_root[0])
++        {
++            WARN( "external D3DMetal profile requires a verified Wine root\n" );
++            return;
++        }
++        path = strdup( external_d3dmetal_wine_root );
++        if (!path) return;
++        if (asprintf( &component_path, "%s/../external/libd3dshared.dylib", path ) >= 0)
++        {
++            if (!access( component_path, R_OK ))
++                setenv( "CX_APPLEGPTK_LIBD3DSHARED_PATH", component_path, 1 );
++            free( component_path );
++        }
++        if (asprintf( &component_path,
++                      "%s/../external/D3DMetal.framework/Versions/A/D3DMetal", path ) >= 0)
++        {
++            if (!access( component_path, R_OK | X_OK ))
++                setenv( "D3DMETAL_FRAMEWORK_PATH", component_path, 1 );
++            free( component_path );
++        }
++    }
++    else if (!strcasecmp( backend, "dxvk" )) suffix = "/lib/dxvk";
 +    else if (!strcasecmp( backend, "grim-dawn" )) suffix = "/lib/profiles/grim-dawn";
 +    else if (!strcasecmp( backend, "dragons-dogma-2" )) suffix = "/lib/profiles/dragons-dogma-2";
 +    else if (!strcasecmp( backend, "dragonsword" )) suffix = "/lib/profiles/dragonsword";
@@ -76,13 +268,16 @@
 +        return;
 +    }
 +
-+    if (root && root[0])
++    if (strcasecmp( backend, "external-d3dmetal" ))
 +    {
-+        if (asprintf( &path, "%s%s", root, suffix ) < 0) return;
-+    }
-+    else
-+    {
-+        if (asprintf( &path, "%s/../..%s", ntdll_dir, suffix + 4 ) < 0) return;
++        if (root && root[0])
++        {
++            if (asprintf( &path, "%s%s", root, suffix ) < 0) return;
++        }
++        else
++        {
++            if (asprintf( &path, "%s/../..%s", ntdll_dir, suffix + 4 ) < 0) return;
++        }
 +    }
 +    if (access( path, R_OK | X_OK ))
 +    {
@@ -98,10 +293,11 @@
 +    if (is_cubeworld && !strcasecmp( backend, "dxvk" ))
 +        /* CrossOver 26.3 emits discrete resource indexes for this DXVK path. */
 +        setenv( "MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "0", 1 );
-+    if ((is_grim_dawn || is_dragons_dogma_2 || is_dragonsword) &&
++    if ((is_grim_dawn || is_dragons_dogma_2 || is_dragonsword || is_external_d3dmetal) &&
 +        (!strcasecmp( backend, "grim-dawn" ) ||
 +         !strcasecmp( backend, "dragons-dogma-2" ) ||
 +         !strcasecmp( backend, "dragonsword" ) ||
++         !strcasecmp( backend, "external-d3dmetal" ) ||
 +         !strcasecmp( backend, "d3dmetal" )))
 +    {
 +        /* Match CrossOver's explicit D3DMetal mode for these processes only. */
@@ -129,6 +325,19 @@
 +            regression_force_builtin_load_order( "nvapi64" );
 +            regression_force_builtin_load_order( "nvngx" );
 +        }
++        if (is_external_d3dmetal)
++        {
++            /* External GPTK modules are builtin Wine modules.  The launcher
++             * supplies an exact executable and a manifest-verified component;
++             * keep that complete D3DMetal route indivisible for this process. */
++            setenv( "WINED3DMETAL", "1", 1 );
++            regression_force_builtin_load_order( "d3d10" );
++            regression_force_builtin_load_order( "d3d11" );
++            regression_force_builtin_load_order( "d3d12" );
++            regression_force_builtin_load_order( "dxgi" );
++            regression_force_builtin_load_order( "nvapi64" );
++            regression_force_builtin_load_order( "nvngx" );
++        }
 +        if (is_grim_dawn)
 +        {
 +            /* The bottle's global d3d9/AMD/NVIDIA overrides belong to other
@@ -145,12 +354,18 @@
  static void set_dll_path(void)
  {
      char *p, *path = getenv( "WINEDLLPATH" );
-@@ -2258,6 +2393,8 @@
+@@ -2258,6 +2603,7 @@
          }
      }
--
-+
+
 +    regression_set_graphics_backend();
-+
+
      server_init_process_done();
  }
+@@ -2613,6 +2959,7 @@
+  */
+ DECLSPEC_EXPORT void __wine_main( int argc, char *argv[] )
+ {
++    regression_redirect_bootstrap( argc, argv );
+     main_argc = argc;
+     main_argv = argv;

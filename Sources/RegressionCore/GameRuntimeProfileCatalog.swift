@@ -10,6 +10,7 @@ public struct CompiledGameRuntimeProfile: Equatable, Sendable {
     public let identifier: String
     public let revision: Int
     public let executable: String
+    public let requiresActiveSteamClient: Bool
     public let configurationValues: [String: String]
 
     public init(
@@ -17,18 +18,20 @@ public struct CompiledGameRuntimeProfile: Equatable, Sendable {
         identifier: String,
         revision: Int,
         executable: String,
+        requiresActiveSteamClient: Bool = false,
         configurationValues: [String: String]
     ) {
         self.appID = appID
         self.identifier = identifier
         self.revision = revision
         self.executable = executable
+        self.requiresActiveSteamClient = requiresActiveSteamClient
         self.configurationValues = configurationValues
     }
 }
 
 public enum GameRuntimeProfileCatalog {
-    public static let revision = "2026-07-29.1"
+    public static let revision = "2026-08-08.9"
 
     public static let all: [CompiledGameRuntimeProfile] = [
         CompiledGameRuntimeProfile(
@@ -44,6 +47,31 @@ public enum GameRuntimeProfileCatalog {
                 "profile.runtime-root": "lib/profiles/heroes-hammerwatch-2",
                 "profile.graphics.api": "opengl",
                 "profile.opengl.forward-compatible": "1"
+            ]
+        ),
+        CompiledGameRuntimeProfile(
+            appID: "1154030",
+            identifier: "titan-quest-2.apple-gptk-4.0b2-steam-shipping",
+            revision: 9,
+            executable: "tq2-win64-shipping.exe",
+            requiresActiveSteamClient: true,
+            configurationValues: [
+                "profile.id": "titan-quest-2.apple-gptk-4.0b2-steam-shipping",
+                "profile.revision": "7",
+                "profile.scope": "exact-app-process",
+                "profile.executable": "tq2-win64-shipping.exe",
+                "profile.runtime-root": "components/apple-gptk/4.0b2",
+                "profile.graphics.api": "d3d12",
+                "profile.graphics.backend": "d3dmetal",
+                "profile.graphics.route": "complete",
+                "profile.router.contract": "compiled-wineserver-startup-image-and-external-d3dmetal-v7",
+                "profile.launcher": "steam-bootstrap",
+                "profile.launcher.entrypoints": "regression,steam",
+                "profile.bootstrap.executable": "tq2.exe",
+                "profile.bootstrap.action": "redirect-to-shipping",
+                "profile.component.id": "apple-gptk",
+                "profile.component.version": "4.0b2",
+                "profile.component.repair": "manifest-verified"
             ]
         )
     ]

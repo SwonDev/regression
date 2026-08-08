@@ -41,9 +41,9 @@ make -C "$BUILD_DIR" -j"$JOBS" \
     dlls/winemac.drv/winemac.so \
     dlls/winemac.drv/x86_64-windows/winemac.drv
 
-verify_hash d580644ea2604f76e16dbb9448255bdadd2543e3bcf2340a20f32202d6e45d45 \
+verify_hash adb97ddb229a7e20b1cac89b88ba81cfd9c9871c801b97dc50a596f0c5e2f113 \
     "$BUILD_DIR/dlls/ntdll/ntdll.so"
-verify_hash 34d373a22fd224fec6e32d1bf7f31c647c518345752dc6bc632883c8c9aefc42 \
+verify_hash 9efbe99b5ac093036d5819604a391a06af8ba1e337eeed55a2033c1c4dd6af70 \
     "$BUILD_DIR/dlls/winemac.drv/winemac.so"
 verify_hash 2ee679fa891fa336b2dd3623a1945f47c1c5834853e66eff342ba356c12d8c32 \
     "$BUILD_DIR/dlls/winemac.drv/x86_64-windows/winemac.drv"

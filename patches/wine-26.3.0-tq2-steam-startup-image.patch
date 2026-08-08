@@ -1,0 +1,113 @@
+--- a/dlls/ntdll/unix/env.c
++++ b/dlls/ntdll/unix/env.c
+@@ -27,6 +27,7 @@
+ #include <locale.h>
+ #include <langinfo.h>
+ #include <fcntl.h>
++#include <limits.h>
+ #include <stdarg.h>
+ #include <sys/types.h>
+ #include <sys/ioctl.h>
+@@ -2000,13 +2000,59 @@
+ 
+ 
+ /*************************************************************************
++ *              regression_tq2_shipping_image
++ *
++ * Steam-created Wine processes receive their image path from wineserver,
++ * independently of the Unix argv seen by the child loader.  Redirect only the
++ * exact Titan Quest II bootstrap to its real Unreal executable.  The fixed
++ * suffix keeps this recipe isolated from every other executable and title.
++ */
++static WCHAR *regression_tq2_shipping_image( const WCHAR *image, UINT image_len,
++                                             UINT *redirected_len )
++{
++    static const char required_suffix[] =
++        "\\steamapps\\common\\Titan Quest II\\TQ2.exe";
++    static const char bootstrap_tail[] = "\\TQ2.exe";
++    static const char shipping_tail[] =
++        "\\TQ2\\Binaries\\Win64\\TQ2-Win64-Shipping.exe";
++    size_t image_chars = image_len / sizeof(WCHAR);
++    size_t required_chars = sizeof(required_suffix) - 1;
++    size_t bootstrap_chars = sizeof(bootstrap_tail) - 1;
++    size_t shipping_chars = sizeof(shipping_tail) - 1;
++    size_t prefix_chars, target_chars, i;
++    WCHAR *target;
++
++    if (image_len % sizeof(WCHAR) || image_chars < required_chars) return NULL;
++    for (i = 0; i < required_chars; i++)
++    {
++        WCHAR actual = ntdll_towupper( image[image_chars - required_chars + i] );
++        WCHAR expected = ntdll_towupper( (unsigned char)required_suffix[i] );
++        if (actual != expected) return NULL;
++    }
++
++    prefix_chars = image_chars - bootstrap_chars;
++    target_chars = prefix_chars + shipping_chars;
++    if (target_chars > (USHRT_MAX / sizeof(WCHAR)) - 1) return NULL;
++    if (!(target = malloc( (target_chars + 1) * sizeof(WCHAR) ))) return NULL;
++
++    memcpy( target, image, prefix_chars * sizeof(WCHAR) );
++    for (i = 0; i < shipping_chars; i++)
++        target[prefix_chars + i] = (unsigned char)shipping_tail[i];
++    target[target_chars] = 0;
++    *redirected_len = target_chars * sizeof(WCHAR);
++    return target;
++}
++
++
++/*************************************************************************
+  *		init_startup_info
+  */
+ void init_startup_info(void)
+ {
+     WCHAR *src, *dst, *env;
++    WCHAR *redirected_image = NULL;
+     void *module = NULL;
+-    unsigned int status;
++    unsigned int status, redirected_image_len = 0;
+     SIZE_T size, info_size, env_size, env_pos;
+     RTL_USER_PROCESS_PARAMETERS *params = NULL;
+     struct startup_info_data *info;
+@@ -2032,6 +2078,11 @@
+     }
+     SERVER_END_REQ;
+     assert( !status );
++
++    src = (WCHAR *)(info + 1);
++    src = (WCHAR *)((char *)src + info->curdir_len + info->dllpath_len);
++    redirected_image = regression_tq2_shipping_image( src, info->imagepath_len,
++                                                       &redirected_image_len );
+ 
+     env = malloc( env_size * sizeof(WCHAR) );
+     memcpy( env, (char *)info + info_size, env_size * sizeof(WCHAR) );
+@@ -2043,7 +2094,7 @@
+     size = (sizeof(*params)
+             + MAX_PATH * sizeof(WCHAR)  /* curdir */
+             + info->dllpath_len + sizeof(WCHAR)
+-            + info->imagepath_len + sizeof(WCHAR)
++            + (redirected_image ? redirected_image_len : info->imagepath_len) + sizeof(WCHAR)
+             + info->cmdline_len + sizeof(WCHAR)
+             + info->title_len + sizeof(WCHAR)
+             + info->desktop_len + sizeof(WCHAR)
+@@ -2084,7 +2135,19 @@
+     dst = params->CurrentDirectory.DosPath.Buffer + MAX_PATH;
+ 
+     if (info->dllpath_len) copy_unicode_string( &src, &dst, &params->DllPath, info->dllpath_len );
+-    copy_dos_path_string( &src, &dst, &params->ImagePathName, &nt_name, info->imagepath_len );
++    if (redirected_image)
++    {
++        WCHAR *redirected_src = redirected_image;
++
++        src = (WCHAR *)((char *)src + info->imagepath_len);
++        copy_dos_path_string( &redirected_src, &dst, &params->ImagePathName,
++                              &nt_name, redirected_image_len );
++        MESSAGE( "Regression: redirected exact Steam startup image for Titan Quest II.\n" );
++        free( redirected_image );
++    }
++    else
++        copy_dos_path_string( &src, &dst, &params->ImagePathName, &nt_name,
++                              info->imagepath_len );
+     copy_unicode_string( &src, &dst, &params->CommandLine, info->cmdline_len );
+     copy_unicode_string( &src, &dst, &params->WindowTitle, info->title_len );
+     copy_unicode_string( &src, &dst, &params->Desktop, info->desktop_len );

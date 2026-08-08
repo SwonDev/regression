@@ -42,6 +42,86 @@ final class BackendCoordinatorTests: XCTestCase {
         XCTAssertEqual(commands.first?.arguments, ["-applaunch", "219990"])
     }
 
+    func testTitanQuest2StartsSteamBeforeItsUnifiedAppLaunchRoute() async throws {
+        let inspector = StubProcessInspector(states: [
+            RunningBackendState(),
+            RunningBackendState(regressionPIDs: [20]),
+        ])
+        let launcher = StubProcessLauncher()
+        let coordinator = coordinator(inspector: inspector, launcher: launcher)
+
+        _ = try await coordinator.launchSteam(
+            backend: .regression,
+            installations: installations(),
+            appID: "1154030"
+        )
+
+        let commands = await launcher.commands()
+        XCTAssertEqual(commands.count, 2)
+        XCTAssertEqual(commands[0].arguments, [])
+        XCTAssertEqual(commands[1].arguments, ["-applaunch", "1154030"])
+    }
+
+    func testTitanQuest2WaitsForSteamReadinessBeforeLaunchingGame() async throws {
+        let temporaryRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-steam-readiness-\(UUID().uuidString)")
+        let connectionLog = temporaryRoot
+            .appendingPathComponent("drive_c/Program Files (x86)/Steam/logs/connection_log.txt")
+        try FileManager.default.createDirectory(
+            at: connectionLog.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("previous session\n".utf8).write(to: connectionLog)
+        defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+
+        let inspector = StubProcessInspector(states: [
+            RunningBackendState(),
+            RunningBackendState(regressionPIDs: [20]),
+        ])
+        let launcher = StubProcessLauncher()
+        let coordinator = coordinator(inspector: inspector, launcher: launcher)
+        let snapshot = installations(regressionBottleURL: temporaryRoot)
+        let launchTask = Task {
+            try await coordinator.launchSteam(
+                backend: .regression,
+                installations: snapshot,
+                appID: "1154030"
+            )
+        }
+
+        try await Task.sleep(for: .milliseconds(100))
+        let commandsBeforeReadiness = await launcher.commands()
+        XCTAssertEqual(commandsBeforeReadiness.count, 1)
+
+        let handle = try FileHandle(forWritingTo: connectionLog)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(
+            "[Logged On] RecvMsgClientLogOnResponse() : processing complete\n".utf8
+        ))
+        try handle.close()
+
+        _ = try await launchTask.value
+        let commands = await launcher.commands()
+        XCTAssertEqual(commands.count, 2)
+        XCTAssertEqual(commands[1].arguments, ["-applaunch", "1154030"])
+    }
+
+    func testUnrelatedGameDoesNotInheritTitanQuest2SteamPrelaunch() async throws {
+        let inspector = StubProcessInspector(states: [RunningBackendState()])
+        let launcher = StubProcessLauncher()
+        let coordinator = coordinator(inspector: inspector, launcher: launcher)
+
+        _ = try await coordinator.launchSteam(
+            backend: .regression,
+            installations: installations(),
+            appID: "219990"
+        )
+
+        let commands = await launcher.commands()
+        XCTAssertEqual(commands.count, 1)
+        XCTAssertEqual(commands[0].arguments, ["-applaunch", "219990"])
+    }
+
     func testShutdownUsesOfficialCommandAndWaitsUntilBackendDisappears() async throws {
         let runner = StubProcessRunner(result: ProcessResult(
             exitCode: 0,
@@ -110,7 +190,8 @@ final class BackendCoordinatorTests: XCTestCase {
     }
 
     private func installations(
-        crossOverHealth: InstallationHealth = .ready
+        crossOverHealth: InstallationHealth = .ready,
+        regressionBottleURL: URL = URL(fileURLWithPath: "/tmp/RegressionBottle")
     ) -> InstallationSnapshot {
         let crossOver = CrossOverInstallation(
             applicationURL: URL(fileURLWithPath: "/Applications/CrossOver.app"),
@@ -127,8 +208,8 @@ final class BackendCoordinatorTests: XCTestCase {
         )
         let regression = RegressionInstallation(
             applicationURL: URL(fileURLWithPath: "/tmp/Regression.app"),
-            bottleURL: URL(fileURLWithPath: "/tmp/RegressionBottle"),
-            steamExecutableURL: URL(fileURLWithPath: "/tmp/RegressionBottle/Steam.exe"),
+            bottleURL: regressionBottleURL,
+            steamExecutableURL: regressionBottleURL.appendingPathComponent("Steam.exe"),
             engineLauncherURL: URL(fileURLWithPath: "/usr/bin/true"),
             health: .ready,
             healthDetail: "ok"
