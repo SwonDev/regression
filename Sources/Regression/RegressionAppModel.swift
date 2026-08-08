@@ -73,7 +73,7 @@ final class RegressionAppModel {
     var updateStatus: CrossOverUpdateStatus?
     var regressionReleaseStatus: RegressionReleaseUpdateStatus = .checking
     var failure: UserFacingFailure?
-    var statusDetail = "Buscando CrossOver y las botellas de Steam…"
+    var statusDetail = "Preparando el motor y la biblioteca de Steam…"
     var autoLaunchEnabled: Bool
 
     @ObservationIgnored private let processRunner: ProcessRunner
@@ -113,9 +113,9 @@ final class RegressionAppModel {
 
     init() {
         let defaults = UserDefaults.standard
-        selectedBackend = BackendKind(
-            rawValue: defaults.string(forKey: "selectedBackend") ?? ""
-        ) ?? .crossOver
+        selectedBackend = BackendKind.launchSelection(
+            storedRawValue: defaults.string(forKey: "selectedBackend")
+        )
         if defaults.object(forKey: "autoLaunchEnabled") == nil {
             defaults.set(true, forKey: "autoLaunchEnabled")
         }
@@ -317,6 +317,15 @@ final class RegressionAppModel {
             appURL = nil
         }
         installations = await discovery.discover(regressionApplicationURL: appURL)
+        let availableBackend = BackendKind.availableSelection(
+            preferred: selectedBackend,
+            crossOverAvailable: installations?.crossOver != nil
+        )
+        if availableBackend != selectedBackend {
+            selectedBackend = availableBackend
+            UserDefaults.standard.set(availableBackend.rawValue, forKey: "selectedBackend")
+            logger.notice("El comparador guardado no está disponible; se seleccionó Regression")
+        }
         await refreshGames()
         await refreshSharedLibraryAssessment()
     }
@@ -362,7 +371,9 @@ final class RegressionAppModel {
             return
         }
         operation = .preparing("Iniciando Steam con \(selectedBackend.displayName)")
-        statusDetail = "CrossOver puede actualizar la botella automáticamente antes de abrir Steam."
+        statusDetail = selectedBackend == .regression
+            ? "Regression está verificando el runtime y la botella antes de abrir Steam."
+            : "El motor de comparación puede actualizar su botella antes de abrir Steam."
         do {
             let launch = try await coordinator.launchSteam(
                 backend: selectedBackend,

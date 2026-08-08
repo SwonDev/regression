@@ -254,6 +254,18 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
     verifica hashes/firmas y repara un enlace versionado fuera del bundle. Observación perfecta:
     `31104A67-1DE6-4C6D-BE5D-797A60648769`, huella `f6c27341…`; expediente
     `docs/games/forsaken-isle.md`.
+33. **La release pública recompila el arranque de Wine para su ruta canónica.** El bundle de
+    desarrollo lleva un `--prefix` absoluto hacia el checkout y no se puede convertir en
+    descargable sustituyendo texto ni copiándolo sin más. `build/build-public-wine-runtime.sh`
+    recompila `loader/wine`, `server/wineserver` y `dlls/ntdll/ntdll.so` para
+    `/Applications/Regression.app/Contents/SharedSupport/wine-root`; conserva las recetas
+    compiladas de Titan Quest II y Windows Media y rechaza cualquier prefijo local. Después,
+    `build/verify-release-asset.sh` extrae el tar real y verifica hashes, firmas, VC++/UCRT en
+    ambas arquitecturas, medios, dependencias Mach-O, enlaces y ausencia de GPTK o copias de
+    laboratorio. El tar debe conservar xattrs para no perder las firmas de scripts. Una
+    instalación nueva elige Regression; el comparador opcional se conserva para desarrollo,
+    pero nunca es requisito del release. No publicar ni instalar una versión que no supere este
+    verificador sobre el mismo asset que se subirá a GitHub.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 

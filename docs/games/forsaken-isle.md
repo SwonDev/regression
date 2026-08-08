@@ -114,8 +114,8 @@ no descarga código en tiempo de juego, no modifica la botella y no duplica los 
 | Entrada y gameplay | generación de mundo y sesión prolongada confirmadas por el usuario |
 | Certificación visible | `regression-forsaken-perfect-row.png`, SHA-256 `c54da00f…`; la app canónica muestra App ID `347940` y `Verificado perfecto: Regression` |
 | Autorreparación | enlace del componente retirado en A/B y recreado por el instalador con manifiesto válido |
-| Asset público en staging | `Regression-1.8.0-macos-arm64.tar.zst`, SHA-256 `3fce1b11…`; 559 MiB, firma válida, manifiesto completo y plugins con `@rpath` autocontenido; no publicado |
-| Swift | 96 pruebas, 0 fallos; incluye perfil exacto/no heredado y launch idempotente |
+| Asset público final | `Regression-1.8.1-macos-arm64.tar.zst`, SHA-256 `ba2b9a860398e4041de3d1d1c92f06dc3625c9687969e5eb062c7cdace670d45`; 564 MiB, prefijo `/Applications` correcto, firmas válidas, manifiesto completo y plugins con `@rpath` autocontenido |
+| Swift | 101 pruebas, 0 fallos y 1 diagnóstico local omitido como estaba previsto; incluye perfil exacto/no heredado, launch idempotente, motor propio por defecto y fallback cuando el comparador no está disponible |
 | Estado protegido | `ntdll.so`, launcher, instalador y manifiesto fijados por SHA-256; botella y perfiles anteriores se verifican sin cambios |
 
 ## Tres iconos de Steam observados durante el laboratorio

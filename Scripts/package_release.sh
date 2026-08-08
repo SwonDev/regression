@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${REGRESSION_RELEASE_VERSION:-1.8.0}"
+VERSION="${REGRESSION_RELEASE_VERSION:-1.8.1}"
 APP="$ROOT/Regression.app"
 APP_NAME="Regression.app"
 OUTPUT_DIR="${REGRESSION_RELEASE_OUTPUT_DIR:-$ROOT/build/release-$VERSION}"
@@ -13,6 +13,8 @@ SOURCE_HAN_ASSET="01_SourceHanSans.ttc.zip"
 SOURCE_HAN_SHA256="a024cf1759494847cd47aae4379bcb3dc530017c709f3f503ee0ed918dd92952"
 SWITCH2BRIDGE_COMMIT="ff2e1a1d99c8529a8f693fa4ab7cf82583cd3d7d"
 SWITCH2BRIDGE_SHA256="f38269217d271db25f4d8eaa34274b8a68ec85711d89277798251709d91b82b0"
+PUBLIC_WINE_BUILD="${REGRESSION_PUBLIC_WINE_BUILD:-$ROOT/build/wine64-dist}"
+PUBLIC_WINE_PREFIX="/Applications/Regression.app/Contents/SharedSupport/wine-root"
 WORK_DIR=""
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -58,6 +60,30 @@ mkdir -m 700 "$STAGE"
 ditto "$APP" "$STAGE/Regression.app"
 PUBLIC_APP="$STAGE/Regression.app"
 WINE_ROOT="$PUBLIC_APP/Contents/SharedSupport/wine-root"
+
+# Wine incorpora el prefijo de instalación en sus binarios de arranque. La app canónica de
+# desarrollo apunta al checkout, mientras que el asset público vive siempre en /Applications.
+# Reconstruir y sustituir solo estas tres piezas conserva los módulos PE y los perfiles ya
+# validados, pero garantiza que una descarga limpia resuelva su propio runtime.
+"$ROOT/build/build-public-wine-runtime.sh"
+cp "$PUBLIC_WINE_BUILD/loader/wine" "$WINE_ROOT/bin/wine"
+cp "$PUBLIC_WINE_BUILD/server/wineserver" "$WINE_ROOT/bin/wineserver"
+cp "$PUBLIC_WINE_BUILD/dlls/ntdll/ntdll.so" \
+    "$WINE_ROOT/lib/wine/x86_64-unix/ntdll.so"
+cleanup_path "$WINE_ROOT/lib/wine/x86_64-unix/ntdll.so.before-cubeworld-routing.bak"
+cleanup_path "$WINE_ROOT/lib/wine/x86_64-unix/ntdll.so.before-fft-routing.bak"
+
+for required in \
+    "$PUBLIC_WINE_PREFIX/bin" \
+    "$PUBLIC_WINE_PREFIX/lib/wine" \
+    "$PUBLIC_WINE_PREFIX/share/wine" \
+    REGRESSION_BOOTSTRAP_REDIRECT_COUNT \
+    REGRESSION_WINDOWS_MEDIA_PROFILE
+do
+    strings -a "$WINE_ROOT/lib/wine/x86_64-unix/ntdll.so" \
+        | grep -F "$required" >/dev/null \
+        || fail "El ntdll público no contiene el contrato requerido: $required"
+done
 
 # Apple exige licencia individual para GPTK. El asset conserva solo directorios vacíos para que
 # la instalación local pueda reconstruir los perfiles sin que el bundle contenga sus binarios.
@@ -273,9 +299,16 @@ sanitize_literal() {
 sanitize_literal "$ROOT" "/opt/regression/src"
 sanitize_literal "$HOME" "/Users/regression"
 
-# La portabilidad y el strip cambian los bytes del payload después del
-# manifiesto de desarrollo. Regenerarlo dentro del asset público mantiene la
-# autorreparación exacta sin aceptar archivos ajenos al bundle firmado.
+# install_name_tool, strip y el saneado invalidan firmas previas. Las librerías de
+# SharedSupport no son código anidado estándar para codesign --deep, de modo que se firman
+# explícitamente antes de sellar sus manifiestos y los bundles que las contienen.
+while IFS= read -r -d '' candidate; do
+    file "$candidate" | grep -q 'Mach-O' || continue
+    codesign --force --sign - "$candidate" >/dev/null
+done < <(find "$PUBLIC_APP" -type f -print0)
+
+# La portabilidad, el strip y la firma cambian los bytes del payload después del manifiesto de
+# desarrollo. Regenerarlo ahora mantiene la autorreparación exacta sin aceptar archivos ajenos.
 WINDOWS_MEDIA_PUBLIC="$PUBLIC_APP/Contents/SharedSupport/components/windows-media/1"
 if [[ -d "$WINDOWS_MEDIA_PUBLIC" ]]; then
     (
@@ -286,12 +319,25 @@ if [[ -d "$WINDOWS_MEDIA_PUBLIC" ]]; then
     )
 fi
 
-# La firma pública es ad hoc y no filtra el correo del certificado de desarrollo. El instalador
-# vuelve a firmar con la identidad del Mac de destino y verifica las cuatro capacidades.
+# Sella primero cualquier app anidada y finalmente Regression. La firma pública es ad hoc y no
+# filtra el correo del certificado de desarrollo. El instalador vuelve a firmar con la identidad
+# del Mac de destino y verifica las cuatro capacidades.
+while IFS= read -r nested_app; do
+    codesign --force --sign - "$nested_app" >/dev/null
+done < <(find "$PUBLIC_APP" -mindepth 1 -type d -name '*.app' | awk '{ print length, $0 }' \
+    | sort -rn | cut -d' ' -f2-)
+# regression-engine es un script ejecutable y macOS guarda su firma en atributos extendidos.
+# Se refirma ad hoc para no filtrar el certificado del autor; el tar pax público conserva esos
+# atributos explícitamente y el instalador los restaura antes de verificar el bundle.
+codesign --force --sign - "$PUBLIC_APP/Contents/MacOS/regression-engine" >/dev/null
 codesign --remove-signature "$PUBLIC_APP" 2>/dev/null || true
-codesign --force --deep --entitlements "$ROOT/assets/native/Regression.entitlements" \
+codesign --force --entitlements "$ROOT/assets/native/Regression.entitlements" \
     --sign - "$PUBLIC_APP"
 codesign --verify --deep --strict "$PUBLIC_APP"
+while IFS= read -r -d '' candidate; do
+    file "$candidate" | grep -q 'Mach-O' || continue
+    codesign --verify --strict "$candidate" >/dev/null
+done < <(find "$PUBLIC_APP" -type f -print0)
 
 if rg -a -l '/Users/adrianpereradelgado|aperdel\.esi@gmail\.com' "$PUBLIC_APP" >/dev/null; then
     rg -a -l '/Users/adrianpereradelgado|aperdel\.esi@gmail\.com' "$PUBLIC_APP" | head -20 >&2
@@ -314,7 +360,7 @@ OUTPUT="$OUTPUT_DIR/$ASSET_NAME"
 CHECKSUM="$OUTPUT.sha256"
 cleanup_path "$OUTPUT"
 cleanup_path "$CHECKSUM"
-COPYFILE_DISABLE=1 tar -C "$STAGE" -caf "$OUTPUT" "$APP_NAME"
+COPYFILE_DISABLE=1 tar --xattrs --no-mac-metadata -C "$STAGE" -caf "$OUTPUT" "$APP_NAME"
 SHA256="$(shasum -a 256 "$OUTPUT" | awk '{print $1}')"
 printf '%s  %s\n' "$SHA256" "$ASSET_NAME" > "$CHECKSUM"
 
@@ -322,6 +368,8 @@ tar -tf "$OUTPUT" | awk 'index($0, "../") || substr($0, 1, 1) == "/" { bad=1 } E
     || fail "El tar contiene rutas inseguras."
 [[ "$(shasum -a 256 "$OUTPUT" | awk '{print $1}')" == "$SHA256" ]] \
     || fail "El asset no supera su verificación final."
+
+"$ROOT/build/verify-release-asset.sh" "$OUTPUT" "$CHECKSUM" "$VERSION"
 
 printf 'Asset: %s\nSHA-256: %s\nTamaño: %s\n' \
     "$OUTPUT" "$SHA256" "$(du -h "$OUTPUT" | cut -f1)"

@@ -4,7 +4,7 @@
 # y reutiliza D3DMetal solo desde una instalación local que el usuario ya haya licenciado.
 set -Eeuo pipefail
 
-VERSION="1.8.0"
+VERSION="1.8.1"
 REPO="SwonDev/regression"
 ASSET_NAME="Regression-${VERSION}-macos-arm64.tar.zst"
 APP_NAME="Regression.app"
@@ -37,12 +37,12 @@ usage() {
 
 Uso:
   bash install_regression.sh [--yes] [--launch]
-  bash install_regression.sh --prefix /ruta [--yes] [--launch]
   bash install_regression.sh --check
+  bash install_regression.sh --verify-release
 
 Opciones:
   --check          Diagnostica el Mac sin modificarlo.
-  --prefix DIR     Instala Regression.app dentro de DIR.
+  --verify-release Descarga, extrae y audita el release sin instalarlo.
   --yes, -y        No solicita confirmación.
   --launch         Abre Regression al completar la instalación.
   --wait-for-pid N Espera al cierre del proceso N antes de reemplazar la app.
@@ -52,6 +52,7 @@ EOF
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --check) MODE="check" ;;
+        --verify-release) MODE="verify-release" ;;
         --prefix)
             [[ $# -ge 2 ]] || { echo "Falta el directorio de --prefix" >&2; exit 2; }
             INSTALL_PREFIX="$2"
@@ -159,7 +160,82 @@ validate_install_prefix() {
         fail "El directorio de instalación es demasiado amplio."
         exit 2
     }
+    [[ "$INSTALL_PREFIX" == "/Applications" ]] || {
+        fail "El runtime público está compilado para /Applications/Regression.app."
+        say "      Usa la ubicación canónica para conservar Wine, sus reparaciones y los perfiles."
+        exit 2
+    }
     DESTINATION="$INSTALL_PREFIX/$APP_NAME"
+}
+
+verify_staged_release() {
+    local app="$1"
+    local wine_root="$app/Contents/SharedSupport/wine-root"
+    local ntdll="$wine_root/lib/wine/x86_64-unix/ntdll.so"
+    local media="$app/Contents/SharedSupport/components/windows-media/1"
+    local binary architecture runtime required
+
+    for binary in \
+        "$app/Contents/MacOS/Regression" \
+        "$app/Contents/MacOS/regression-engine" \
+        "$app/Contents/SharedSupport/bin/regressionctl" \
+        "$app/Contents/SharedSupport/bin/install-windows-media-component" \
+        "$wine_root/bin/wine" \
+        "$wine_root/bin/wineserver" \
+        "$ntdll"
+    do
+        [[ -x "$binary" ]] || { fail "Falta un ejecutable requerido: $binary"; return 1; }
+    done
+
+    for required in \
+        /Applications/Regression.app/Contents/SharedSupport/wine-root/bin \
+        /Applications/Regression.app/Contents/SharedSupport/wine-root/lib/wine \
+        /Applications/Regression.app/Contents/SharedSupport/wine-root/share/wine \
+        REGRESSION_BOOTSTRAP_REDIRECT_COUNT \
+        REGRESSION_WINDOWS_MEDIA_PROFILE
+    do
+        /usr/bin/strings -a "$ntdll" | /usr/bin/grep -F "$required" >/dev/null || {
+            fail "El runtime descargado no contiene el contrato requerido: $required"
+            return 1
+        }
+    done
+
+    for architecture in x86_64-windows i386-windows; do
+        for runtime in vcruntime140.dll msvcp140.dll ucrtbase.dll; do
+            [[ -f "$wine_root/lib/wine/$architecture/$runtime" ]] || {
+                fail "Falta $runtime para $architecture"
+                return 1
+            }
+        done
+    done
+    [[ -f "$wine_root/lib/wine/x86_64-windows/vcruntime140_1.dll" ]] || {
+        fail "Falta vcruntime140_1.dll para x64"
+        return 1
+    }
+
+    [[ -f "$media/gstreamer-1.0/libgstasf.dylib" \
+        && -f "$media/gstreamer-1.0/libgstlibav.dylib" \
+        && -f "$media/manifest.sha256" ]] || {
+        fail "El componente Windows Media está incompleto."
+        return 1
+    }
+    (cd "$media" && /usr/bin/shasum -a 256 -c manifest.sha256 >/dev/null) || {
+        fail "El componente Windows Media no supera su manifiesto."
+        return 1
+    }
+    /usr/bin/codesign --verify --strict "$media/gstreamer-1.0/libgstasf.dylib" \
+        >/dev/null 2>&1 || { fail "libgstasf no conserva una firma válida."; return 1; }
+    /usr/bin/codesign --verify --strict "$media/gstreamer-1.0/libgstlibav.dylib" \
+        >/dev/null 2>&1 || { fail "libgstlibav no conserva una firma válida."; return 1; }
+
+    if /usr/bin/find "$wine_root/lib/apple_gptk" -type f | /usr/bin/grep -q .; then
+        fail "El release contiene binarios de Apple que no pueden redistribuirse."
+        return 1
+    fi
+    /usr/bin/codesign --verify --deep --strict "$app" >/dev/null 2>&1 || {
+        fail "El bundle descargado no conserva una firma íntegra."
+        return 1
+    }
 }
 
 validate_install_prefix
@@ -203,12 +279,6 @@ fi
     ERRORS=$((ERRORS + 1))
 }
 
-if [[ -d "/Applications/CrossOver.app" ]]; then
-    ok "CrossOver detectado como backend opcional"
-else
-    say "  [--] CrossOver no está instalado; el motor propio seguirá disponible."
-fi
-
 if [[ "$MODE" == "check" ]]; then
     [[ $ERRORS -eq 0 ]] || exit 1
     ok "El Mac está preparado para Regression $VERSION"
@@ -216,7 +286,7 @@ if [[ "$MODE" == "check" ]]; then
 fi
 [[ $ERRORS -eq 0 ]] || exit 1
 
-if [[ $ASSUME_YES -eq 0 ]]; then
+if [[ $ASSUME_YES -eq 0 && "$MODE" == "install" ]]; then
     printf 'Se instalará %s en %s. ¿Continuar? [s/N] ' "$APP_NAME" "$INSTALL_PREFIX"
     read -r answer
     [[ "$answer" =~ ^[sS]$ ]] || { say "Cancelado."; exit 0; }
@@ -264,7 +334,7 @@ while IFS= read -r entry; do
         */../*|*/./*) fail "El asset contiene una ruta no normalizada: $entry"; exit 1 ;;
     esac
 done < <(tar -tf "$TARBALL")
-tar -xf "$TARBALL" -C "$UNPACK_DIR" --no-same-owner
+tar --xattrs --no-mac-metadata -xf "$TARBALL" -C "$UNPACK_DIR" --no-same-owner
 STAGED_APP="$UNPACK_DIR/$APP_NAME"
 [[ -d "$STAGED_APP/Contents/MacOS" && ! -L "$STAGED_APP/Contents" ]] || {
     fail "El asset no contiene un bundle de Regression válido."
@@ -281,6 +351,12 @@ PLIST_VERSION="$(plutil -extract CFBundleShortVersionString raw "$STAGED_APP/Con
     exit 1
 }
 ok "Bundle Regression $PLIST_VERSION preparado fuera de /Applications"
+verify_staged_release "$STAGED_APP"
+ok "Runtime, redistribuibles y autorreparaciones del release verificados"
+if [[ "$MODE" == "verify-release" ]]; then
+    ok "Release $VERSION verificado sin modificar el Mac"
+    exit 0
+fi
 
 step "4/7 Componentes locales con licencia de Apple"
 WINE_ROOT="$STAGED_APP/Contents/SharedSupport/wine-root"

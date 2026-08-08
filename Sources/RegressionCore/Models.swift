@@ -12,6 +12,21 @@ public enum BackendKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .regression: "Regression"
         }
     }
+
+    /// Una instalación nueva siempre arranca con el motor propio. Las preferencias explícitas
+    /// ya guardadas se respetan para no romper los laboratorios de comparación existentes.
+    public static func launchSelection(storedRawValue: String?) -> BackendKind {
+        storedRawValue.flatMap(BackendKind.init(rawValue:)) ?? .regression
+    }
+
+    /// Una preferencia de laboratorio nunca convierte el comparador opcional en requisito.
+    /// Si ya no está disponible, la app vuelve al motor propio en vez de fallar al arrancar.
+    public static func availableSelection(
+        preferred: BackendKind,
+        crossOverAvailable: Bool
+    ) -> BackendKind {
+        preferred == .crossOver && !crossOverAvailable ? .regression : preferred
+    }
 }
 
 public enum SteamAppID {

@@ -1,21 +1,23 @@
 # Regression
 
-Aplicación nativa de barra de menús que abre Steam de Windows en macOS y permite elegir entre
-dos motores aislados:
+Aplicación nativa de barra de menús que abre Steam de Windows en macOS mediante su motor propio
+Windows→macOS, construido y distribuido a partir de componentes open-source. Una instalación
+nueva selecciona **Regression** por defecto y no necesita que el usuario instale, compre ni
+configure otro producto de compatibilidad.
 
-- **CrossOver 26.3**, backend predeterminado temporal, invocado mediante su CLI oficial y la
-  botella licenciada existente del usuario.
-- **Regression**, motor propio Windows→macOS construido desde fuentes open-source, conservado
-  íntegro para perfiles verificados y para sustituir progresivamente a CrossOver.
+El repositorio conserva un backend de comparación opcional para el laboratorio de desarrollo.
+Está aislado, no forma parte de los requisitos del release y solo se usa para contrastar
+comportamientos durante la investigación; una preferencia explícita ya guardada se respeta para
+no romper esos laboratorios.
 
 La aplicación registra localmente cómo se ejecuta cada juego, normaliza las configuraciones y
 compara resultados. No copia credenciales ni binarios propietarios y todavía no aplica de forma
 automática lo aprendido. Un proceso que sale con código 0 no cuenta como compatible: el éxito
 requiere una verificación visual explícita.
 
-**Estrategia de independencia futura**: fijar las versiones exactas y convenciones observables de
-CrossOver, trasladándolas al motor propio solo desde fuentes públicas o mediante reimplementación
-legal. La paridad se consigue con evidencia reproducible, no con cambios globales a ciegas.
+**Independencia de distribución**: el ejecutable público, su runtime, la botella, las reparaciones
+y los perfiles de juego pertenecen a Regression. Las comparaciones de desarrollo nunca autorizan
+copiar binarios propietarios ni crean una dependencia de ejecución.
 
 **Qué contiene este repo**: documentación, scripts de build (`build/*.sh`) y los parches
 propios (`patches/`). **No** contiene las fuentes de CrossOver, los binarios del GPTK de
@@ -26,20 +28,20 @@ y por qué no se redistribuyen. Licencia: LGPL-2.1+ (`LICENSE`).
 
 ## Instalación para usuarios (instalador autodetectante y autodescargable)
 
-Desde la release `v1.8.0` hay un asset instalable para cualquier Mac con Apple Silicon:
+La release `v1.8.1` ofrece un asset instalable para cualquier Mac con Apple Silicon:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://github.com/SwonDev/regression/releases/download/v1.8.0/install_regression.sh | bash
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/SwonDev/regression/releases/download/v1.8.1/install_regression.sh | bash
 ```
 
 El instalador (`Scripts/install_regression.sh`, auditable antes de ejecutarlo) ejecuta siete
 fases verificadas y transaccionales:
 
-1. **Comprueba el Mac**: Apple Silicon, macOS 14+, Rosetta 2 (la instala si falta), firma local
-   y CrossOver como backend opcional con la licencia del usuario.
+1. **Comprueba el Mac**: Apple Silicon, macOS 14+, Rosetta 2 (la instala si falta) y firma local.
 2. **Descarga y verifica** el asset del release mediante SHA-256 antes de extraerlo.
 3. **Extrae de forma segura** una app compilada con el `--prefix` horneado a
-   `/Applications/Regression.app`; rechaza rutas inesperadas o no normalizadas.
+   `/Applications/Regression.app`; rechaza rutas inesperadas o no normalizadas y no permite
+   instalar ese runtime fijo en una ubicación engañosa.
 4. **Conserva componentes locales autorizados**: reutiliza D3DMetal desde la instalación del
    GPTK, Whisky o Mythic del propio usuario. Apple no permite redistribuirlo; si no existe, solo
    los perfiles D3DMetal quedan en espera.
@@ -64,14 +66,19 @@ lado de la shim mediante una ruta `@loader_path`, sin depender de rutas del Mac 
 release. Así los mandos Nintendo Switch 2 Pro siguen disponibles tras una instalación limpia o
 una actualización automática.
 
-Modos: `--check` (solo diagnóstico), `--prefix DIR`, `--yes`, `--launch`, `--help`.
+Modos: `--check` (solo diagnóstico), `--verify-release` (descarga y audita sin instalar),
+`--yes`, `--launch`, `--help`.
+
+El mismo verificador usado al empaquetar vuelve a extraer el `.tar.zst` y exige el prefijo
+público correcto, firmas válidas, Wine x86-64, VC++/UCRT x86 y x64, Windows Media completo,
+dependencias Mach-O autocontenidas, ausencia de copias de laboratorio y ausencia de binarios
+GPTK. El instalador repite las puertas críticas antes de sustituir una instalación existente.
 Cuarentena: los archivos descargados con `curl` no reciben el atributo de cuarentena, y el
 instalador firma la app en tu Mac; si la descargas a mano con el navegador, basta
 `xattr -dr com.apple.quarantine /Applications/Regression.app` una sola vez.
 
-Sin cuenta de desarrollador de Apple (gratuita) el GPTK no puede descargarse
-automáticamente: Apple lo exige. Con CrossOver tampoco hace falta GPTK para el backend
-predeterminado; el motor propio funciona sin él salvo los perfiles D3DMetal.
+Sin cuenta de desarrollador de Apple (gratuita) el GPTK no puede descargarse automáticamente:
+Apple lo exige. El motor propio funciona sin GPTK salvo los perfiles D3DMetal que lo necesiten.
 
 Los perfiles que requieren una versión concreta de GPTK usan un componente local versionado en
 `~/Library/Application Support/Regression/Components/AppleGPTK`. El instalador integrado verifica
