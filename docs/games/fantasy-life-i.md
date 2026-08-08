@@ -8,8 +8,8 @@
 - **Easy Anti-Cheat product ID:** `1c57494d93e24d2091a070296910acec`.
 - **Deployment ID:** `607d68cfa8b24890ba88764cc2879d57`.
 - **Expediente local:** `CD577AEA-7058-4194-9948-8B7806207D6D`.
-- **Estado:** I+D host nativo pausado de forma reproducible en la creación del primer contexto
-  FEX; **no está certificado ni blindado**.
+- **Estado:** I+D host nativo activa y reproducible: un componente oficial Wine64 de Proton 11
+  ya termina sobre FEXCore Darwin; **el juego no está certificado ni blindado**.
 
 El juego sigue fallando en el motor macOS estable de Regression y en CrossOver después de que
 EAC descargue correctamente su módulo. El candidato Linux ARM aislado ya supera ese fallo de
@@ -31,15 +31,18 @@ autenticada, Steam completó EOS, EAC, UEPrereq y DirectX; EAC volvió a descarg
 HTTP `200`, inició Wine module mapping 11.0 y devolvió exactamente `208 Cannot run under Virtual
 Machine`. El ejecutable principal no llegó a aparecer.
 
-Este avance no equivale todavía a «Proton integrado en macOS» ni a compatibilidad funcional del
-juego. Aunque ya existe una ruta gráfica real en la VM, sigue siendo obligatorio superar EAC y
-completar render, entrada, opciones, gameplay, estabilidad y cierre antes de considerar cualquier
-promoción.
+La ruta host nativa ya ejecuta ELF x86-64 reales y completa el `wine64` Unix oficial de Proton 11
+con glibc 2.43, `ntdll.so` y `libgcc_s.so.1`. Este avance no equivale todavía a «Proton integrado
+en macOS» ni a compatibilidad funcional del juego: no se han ejecutado por esa ruta el
+orquestador Proton, Steam, EAC ni `NFL1-Win64-Shipping.exe`. Aunque existe además una ruta gráfica
+real en la VM, sigue siendo obligatorio superar EAC y completar render, entrada, opciones,
+gameplay, estabilidad y cierre antes de considerar cualquier promoción.
 
 El rechazo `208` cierra la VM como solución final, pero abrió una vía distinta y no virtualizada:
 un host macOS arm64 que ejecute el proceso Linux oficial sin modificar Steam, Proton o EAC. Esa
-línea ya compila y carga FEXCore de forma nativa; su frontera exacta y el punto de reanudación se
-documentan más adelante. Ninguna de sus sondas ha cargado todavía un huésped x86-64.
+línea ya compila y carga FEXCore de forma nativa, ejecuta binarios x86-64 de glibc y SteamRT y ha
+cerrado un primer componente oficial de Proton. Su frontera exacta y el punto de reanudación se
+documentan más adelante.
 
 ## Límites inviolables
 
@@ -175,6 +178,9 @@ del propietario y Proton/EAC oficiales, todo dentro del laboratorio aislado.
 | Steam autenticado + FEX v3 + EAC oficial | autenticación | HTTP `200`, mapeo Wine 11; código `208 Cannot run under Virtual Machine` | bloqueo de política externo observado; no eludir |
 | Instalación oficial visible | distribución | EULA aceptado por el usuario; manifiesto oficial `StateFlags=4`, build `21998011`; archivos verificados | instalación completa |
 | App ID oficial + FEX v3 + Proton 11/DXVK 1.10.3 | lanzamiento íntegro desde Steam | prerrequisitos oficiales completos; EAC HTTP `200`, mapeo Wine 11 y código `208`; ejecutable principal ausente | bloqueo de virtualización confirmado; no eludir |
+| FEXCore Darwin + ELF/glibc reales | ABI host no-VM | `/usr/bin/true` y binarios SteamRT x86-64 terminan con código `0` | cargador y ABI mínima reproducidos |
+| Wine64 Unix + ntdll/libgcc, sin `HOME` | entorno huésped | alcanza NSS y termina en acceso huésped nulo, sin syscall pendiente | hipótesis aislada; no parchear señales |
+| Misma huella + `HOME=/home/regression` | una variable de entorno | imprime 10 bytes de versión y termina con `exit_group(0)` | primer componente oficial de Proton completado; no es Proton completo |
 
 La ruta ARM directa quedó cerrada como resultado negativo. La hipótesis investigada
 `69B64100-BEDD-46CE-B931-00BFC1B152ED` prueba Proton x86-64 oficial sobre FEX y está vinculada al
@@ -452,24 +458,30 @@ reemplazar únicamente la dependencia de hipervisor por una ejecución FEX nativ
 
 La fuente usada es el submódulo público FEX incluido por Proton en la revisión exacta
 `a04b0241c2fe3911729842205cd8643981108aad`. El experimento
-`8E6CA24A-9414-4534-8E48-2249CD205DA8` produjo dos hitos reproducibles:
+`8E6CA24A-9414-4534-8E48-2249CD205DA8` avanzó mediante puertas reproducibles, cada una con su
+control:
 
 1. `fex-a04b0241-darwin-core-stage1.patch` permite construir las 163 unidades de FEXCore como
-   `libFEXCore.dylib` Mach-O arm64. La biblioteca carga y descarga mediante `dyld` bajo runtime
-   endurecido, sin invocar APIs FEX ni ejecutar ELF huésped.
-2. El baseline endurecido rechaza la memoria ejecutable RWX de FEX con `errno 13`. El cambio
-   único `fex-a04b0241-darwin-map-jit-stage2.patch` añade `MAP_JIT` solo a asignaciones marcadas
-   como ejecutables. La misma sonda, firmada con `allow-jit`, escribe dos instrucciones arm64,
-   reactiva la protección de escritura y devuelve `42`.
+   `libFEXCore.dylib` Mach-O arm64 y cargar la biblioteca bajo runtime endurecido.
+2. `fex-a04b0241-darwin-map-jit-stage2.patch` añade `MAP_JIT` solo a asignaciones ejecutables. La
+   sonda firmada con `allow-jit` escribe código arm64, cierra la ventana de escritura y devuelve
+   `42`.
+3. Las sondas de contexto, dispatcher y ELF cerraron la creación del contexto, el acceso JIT y
+   el cargador `PT_INTERP`. Un `/usr/bin/true` de Fedora 43 y binarios oficiales de SteamRT
+   ejecutan `ld-linux`/glibc x86-64 y terminan con código `0`.
+4. El RootFS mínimo de Wine64 incorpora, con origen y SHA-256, `wine64` y `ntdll.so` oficiales de
+   Proton 11, glibc 2.43 y `libgcc_s.so.1` oficial de SteamRT. La sonda traduce únicamente el
+   subconjunto Linux observado; los sockets Unix y sus flags se convierten explícitamente y todo
+   `connect` absoluto se resuelve dentro del RootFS privado. Las dos consultas a
+   `/var/run/nscd/socket` devolvieron `ENOENT` confinado, sin alcanzar el host.
+5. Sin `HOME`, Wine completaba NSS y alcanzaba un acceso huésped nulo sin syscall pendiente. No
+   se parcheó la señal. La A/B v19 añadió solo `HOME=/home/regression`: desapareció la frontera
+   nula, Wine escribió 10 bytes de versión y terminó con `exit_group(0)`.
 
-El constructor de contexto es la siguiente frontera. La primera sonda enlazada con las mismas
-cabeceras y biblioteca stage 2 termina con `EXC_BAD_ACCESS / SIGSEGV`, escritura nula, en
-`main+88`, antes de poder emitir el recibo `context_created`. La traza por sí sola no demuestra
-todavía si el fallo está en la construcción de `HostFeatures.CPUMIDRs`, en una definición de ABI
-de `fextl` o dentro de `CreateNewContext`; por tanto, no se modifica FEX hasta instrumentar esas
-tres fronteras por separado. El primer paso al reanudar es compilar la sonda con símbolos y
-marcadores antes/después de `CPUMIDRs.emplace_back`, usando exactamente el árbol y las
-definiciones CMake que produjeron la dylib. Después se probará `CreateNewContext` sin `InitCore`.
+El recibo v19 registra `main_completed=true`, `proton_component_executed=true`, 16 backpatches
+desalineados atendidos y ninguna syscall desconocida. También conserva explícitamente
+`proton_executed=false`, `steam_executed=false` y `eac_executed=false`; «componente oficial de
+Proton» y «Proton completo» no se confunden.
 
 Evidencia privada conservada:
 
@@ -477,30 +489,37 @@ Evidencia privada conservada:
 ~/Library/Application Support/Regression/Research/
   fli-nonvm-host/official-eac-elf-header-v1/
   fli-fexcore-darwin-stage1-repro-v1/
-  fli-fexcore-darwin-stage1-allocator-blocked-v1/
   fli-fexcore-darwin-stage2-repro-v1/
-  fli-fexcore-darwin-stage2-context-crash-v1/context-crash.ips
+  fli-fexcore-process-control-v58/
+  fli-proton11-wine64-rootfs-glibc243-ntdll-v3/
+  fli-fexcore-proton11-wine64-glibc243-ntdll-v19/
 ```
 
-La traza de crash tiene SHA-256
-`37340928533a4ba449bf89e5c3825e6ca94e3c276a81c3f18596483c17eae3b2`.
+El recibo principal `process-probe.json` de v19 tiene SHA-256
+`86aedcbd185897650a88e6b96372854a3ee4a1a312d6f77d8563be01df4fd5ca`; la huella del inventario
+RootFS asociado es `6d43f6b40910fca0ab67b526697db42633a0e63b2c43371b30f2802a59795359`.
+La reproducción stage 2 anterior conserva la huella
+`0aa65bd81fb58528d36d9d5d75f75507d2f485088a2221f82b8ad7ec5d1fb4dd` como historia.
 
-La reproducción stage 2 completa tiene huella de árbol
-`0aa65bd81fb58528d36d9d5d75f75507d2f485088a2221f82b8ad7ec5d1fb4dd`. El baseline bloqueado
-tiene `be5ceffd3ab12ffd9b63e34d312ced7c003d0ae7a03a3082d3cceb1378dc5196` y la primera A/B
-`MAP_JIT` aprobada `72afc54ea0a4acac653dcf64d0ebd7c89b9ab44b45fff663d09b4e82da137a8e`.
-
-Estos resultados no son Proton para macOS ni una ejecución de FANTASY LIFE i. Todavía faltan el
-contexto FEX, dispatcher, ventanas de escritura JIT internas, ABI de proceso Linux, señales,
-syscalls, cargador ELF, Steam/Proton y gráficos. Todas las sondas host actuales declaran
-explícitamente `guest_elf_executed=false`; el motor estable y la botella canónica no se tocaron.
+Estos resultados no son todavía Proton para macOS ni una ejecución de FANTASY LIFE i. La mitad
+PE/Windows oficial de `cmd.exe` y su cierre estático de 15 módulos ya se materializó en un RootFS
+nuevo. La consulta a
+`/opt/proton/files/lib/wine/x86_64-windows/wine64.exe` fue solo una sonda de existencia de Wine,
+no el siguiente binario requerido. La frontera real posterior es `execve(2)` sobre
+`/opt/proton/files/lib/wine/i386-unix/wine-preloader`: un ELF Linux i386 estático. El código
+público de Wine explica la selección: el primer cargador x86-64 cambia de forma deliberada al
+cargador alternativo de 32 bits para conservar prefijos compatibles con WoW64. La siguiente A/B
+debe capturar y clasificar su `argv` exacto antes de diseñar un salto de proceso; no se reenviará
+un `execve` huésped al host ni se añadirá soporte ELF32 a ciegas. Steam, EAC, el juego, las
+credenciales y la botella canónica permanecen fuera del experimento.
 
 ## Conclusión y siguiente vía legítima
 
 La A/B oficial ya se completó y reprodujo `208`. No queda otra variable local legítima que
 cambiar dentro de esa VM: ocultar su naturaleza, parchear el launcher, alterar EAC o falsear sus
 respuestas sería una elusión y queda expresamente fuera del proyecto. La ruta activa es ahora el
-host nativo no virtualizado descrito arriba; permanece en fase de núcleo y no ha alcanzado EAC.
+host nativo no virtualizado descrito arriba. Ya ha cerrado cargador ELF, glibc y un componente
+Wine64 oficial, pero todavía no ha ejecutado el orquestador Proton, Steam ni EAC.
 
 La interpretación coincide con la documentación pública vigente: el
 [soporte oficial de Epic](https://www.epicgames.com/help/c-202300000001639/c-202300000001736/easy-anti-cheat-eac-error-cannot-run-under-virtual-machine-a202300000085408)
@@ -545,6 +564,239 @@ los hashes EAC siguen intactos y el expediente decisivo pasa su índice SHA-256.
 En el checkpoint host nativo del 30 de julio no quedó ninguna compilación ni sonda en ejecución.
 La VM Venus se detuvo mediante `systemctl poweroff` después de verificar: Steam parado, handlers
 x86/x86-64 restaurados a `/usr/bin/FEX`, AppArmor userns en `1`, manifiesto oficial
-`StateFlags=4`, 153 archivos, cero enlaces y los dos hashes EAC sin cambios. Al reanudar no se
-debe arrancar la VM: la siguiente acción pertenece al laboratorio macOS nativo y consiste en
-instrumentar la sonda de contexto en el punto `HostFeatures.CPUMIDRs` antes de modificar FEX.
+`StateFlags=4`, 153 archivos, cero enlaces y los dos hashes EAC sin cambios. La reanudación ya no
+parte de la antigua sonda de contexto: el control v58 y el candidato v19 cerraron Wine64 con
+código `0`. El siguiente experimento pertenece al laboratorio macOS nativo y debe crear un nuevo
+RootFS que añada únicamente la mitad `x86_64-windows` oficial de Wine y su cierre comprobado. No
+se arranca la VM ni se introduce todavía Steam, EAC o el juego.
+
+### Checkpoint host nativo — 31 de julio de 2026, 05:33 WEST
+
+La investigación avanzó hasta ejecutar el `wineserver` x86-64 oficial de Proton 11 sobre el
+ayudante FEXCore macOS ARM separado. El `session_mapping` ya supera, con formas exactas y dentro
+del arena privada, `pwrite64(0x144000)`, `ftruncate(0x144000)` y
+`mmap(MAP_SHARED, 0x144000)`. Después pasan dos `mmap` anónimos de 135168 bytes y `getpid()`
+devuelve el PID real del ayudante creado por `posix_spawn`. El último expediente semánticamente
+válido e íntegro es:
+
+```text
+~/Library/Application Support/Regression/Research/
+  fli-posix-spawn-fex-wineserver-v61e-measure-setpriority-signed/
+```
+
+Ese run localizó la siguiente frontera exacta como syscall x86-64 141:
+`setpriority(PRIO_PROCESS, who=getpid(), nice=-20)`. El tercer argumento llega al handler
+zero-extended y se debe reinterpretar como `int32_t`; su valor confirmado es `-20`. Las A/B
+`v62`, `v62b`, `v62c` y `v62d` quedan expresamente descartadas: durante ellas se identificó por
+error la syscall 141 como `getpriority` (que en realidad es la 140). La semántica incorrecta se
+revirtió antes de cualquier promoción y esos directorios solo conservan historia negativa.
+
+El árbol de trabajo contiene ahora un candidato **todavía no validado** para la forma exacta
+`setpriority(..., -20)`. Invoca la operación real únicamente sobre el PID del propio ayudante y
+traduce el rechazo de privilegios del host a `EACCES` Linux; no simula capacidades. Al reanudar,
+la primera y única acción experimental debe ser una A/B fresca `v63` con
+`--diagnostic-post-session-syscall-limit 7`. Solo si confirma `setpriority_call_count=1`, PID
+coincidente, nice `-20`, rechazo esperado o éxito host real, ausencia de syscall desconocida y
+todos los hashes íntegros, se avanzará al límite 8 para medir el probable restablecimiento a
+nice `0`. No se debe retomar desde ninguno de los runs v62 descartados.
+
+Al pausar no quedó ningún ayudante FEXCore/wineserver efímero. La VM
+`Regression FLI Venus Lab` se detuvo limpiamente mediante la solicitud de apagado de `utmctl` y
+su estado final fue `stopped`. Regression estable, Steam, EAC, las botellas y los perfiles
+blindados no fueron ejecutados ni modificados en esta etapa. Steam, el orquestador Proton, EAC y
+FANTASY LIFE i todavía no han entrado por la ruta macOS nativa; no se declara compatibilidad.
+
+### Checkpoint host nativo — 31 de julio de 2026, frontera v161
+
+El ABI stage 3 ya coincide entre el ayudante y `libFEXCore.dylib`. La A/B v156 cerró el
+`wineserver` oficial de Proton 11 con `exit_group(0)` después de entregar al cliente controlado
+el payload 931 y un descriptor mediante `SCM_RIGHTS`. Sobre esa base, v161 arrancó el mismo
+`wineserver --foreground` en un ayudante FEX separado y compartió únicamente el RootFS y
+`HOME=/home/regression` con `wine-preloader` y `cmd.exe` oficiales.
+
+El servidor publicó correctamente el socket privado
+`/tmp/.wine-501/server-100000e-1f6f348/socket`. El cliente realizó tres `connect`: los dos
+primeros fueron las consultas NSS confinadas y esperadamente ausentes; el tercero dejó de entrar
+por `clone3`/`execve`, pero fue rechazado por el traductor antes de invocar `connect(2)` de macOS
+con `EINVAL`. `connect_rootfs_confined_count=2` demuestra que esa tercera ruta no llegó a
+`ResolveGuestPath`. La siguiente syscall observada fue una forma aún no admitida de
+`prlimit64`; no se debe tocar hasta cerrar primero el `connect`.
+
+Evidencia preservada:
+
+```text
+~/Library/Application Support/Regression/Research/
+  fli-proton11-combined-rootfs-v161-wineserver-prefix-plus-pe/
+  fli-proton11-combined-v161-cmd/
+/private/tmp/regression-fli-v161-wineserver-wrapper.log
+```
+
+Antes de pausar se añadió únicamente telemetría escalar al handler de `connect`: descriptor,
+familia, longitudes, clase y huella de ruta, longitud host, errores host/Linux y motivo exacto.
+No cambia ningún retorno ni traducción. El ayudante recompiló y pasó su fixture x86-64 controlado
+en `/private/tmp/regression-fli-connect-telemetry-control-v162/`. **v162 no se ejecutó**. Al
+reanudar se debe crear un RootFS nuevo desde el baseline v99, añadir el cierre PE exacto de v60 y
+repetir la misma A/B con el servidor en otro ayudante. Solo después de medir si la tercera forma
+es vacía, abstracta o relativa se diseñará una corrección de una variable.
+
+Al cerrar este checkpoint no quedó ningún proceso del laboratorio, `wine-preloader`, FEXCore ni
+`wineserver` oficial de Proton. Tampoco había proceso QEMU/UTM activo. El `wineserver` de
+CrossOver que pudiera pertenecer a la sesión normal del usuario queda expresamente fuera del
+árbol de procesos propio y no se termina. Regression estable, Steam, EAC, botellas y perfiles
+siguen intactos; no se declara que Proton completo, EAC o FANTASY LIFE i se hayan ejecutado en
+macOS.
+
+### Checkpoint host nativo — 1 de agosto de 2026, frontera v270
+
+Las iteraciones v162–v265 cerraron de forma incremental el transporte oficial Wine entre
+cliente y `wineserver` y las omisiones de traducción de memoria baja en el JIT. El candidato
+v265 conserva 52/52 peticiones cliente, 81 respuestas, 29/29 `writev`, 3/3 `create_file` y un
+`wineserver` que termina con código `0`. La traza posterior demostró que la siguiente caída no
+era otra forma IPC: `ntdll.so` necesita dos vistas RW altas y Wine intenta reservar además su
+intervalo superior convencional. El arena host privado de FEXCore solo ofrece aproximadamente
+4,5 GiB y no puede materializar esas direcciones literalmente en macOS.
+
+v270 añade una tabla acotada, desactivada por defecto, que desacopla dirección lógica huésped y
+dirección host. La prueba sintética configuró dos intervalos antes de `InitCore`, escribió y leyó
+`0x100000270` y `0x7ffffff30270` desde páginas host ordinarias y devolvió la suma esperada. Las
+tres puertas anteriores (`execute-one`, bias bajo y página dispersa) siguieron pasando. Después
+se regeneró el parche completo de etapa 3 y se reconstruyó desde la revisión pública exacta
+`a04b0241c2fe3911729842205cd8643981108aad`; pasaron también carga, allocator, contexto,
+compilación, linking, invalidación directa e indirecta, ELF mínimo y bootstrap PT_INTERP.
+
+Evidencia y rollback:
+
+```text
+backups/fli-v270-sparse-high-regions-prechange-20260801-064638/
+~/Library/Application Support/Regression/Research/
+  fli-fexcore-darwin-v270-sparse-high-regions-repro/
+```
+
+El parche de etapa 3 tiene SHA-256
+`81c35111162af5a87841252987dc5048ebfdac281e45e1c908dbf3ed30571ee4`; la biblioteca de la
+reconstrucción canónica tiene SHA-256
+`f6b44f227068dbc9b701e67591c4af8b0fd44cb64f22a5f203a86fd94063c91a`.
+
+La prueba todavía no implementa el ciclo de vida completo de memoria virtual: faltan
+`mprotect`, `munmap` y la traducción inversa de fallos host→huésped para esas regiones. Por eso
+v270 no se ha aplicado aún a Wine y no ha ejecutado el orquestador Proton, Steam, EAC ni el
+juego. La siguiente A/B seguirá siendo sintética y añadirá solo esas semánticas; después se
+creará un RootFS Wine nuevo. Esta frontera no cambia la conclusión de compatibilidad: FANTASY
+LIFE i continúa sin certificar en Regression.
+
+### Checkpoint host nativo — 1 de agosto de 2026, frontera v271
+
+v271 cerró primero el contrato bidireccional que necesita el ciclo de vida posterior. El
+contexto ahora puede traducir huésped→host y host→huésped para el bias bajo, la página dispersa
+y dos regiones altas acotadas. La página redirigida gana sobre el shadow lineal en ambos
+sentidos. La configuración rechaza solapamientos lógicos y host, direcciones no mapeadas y
+punteros de salida nulos; un rechazo no altera el valor de salida.
+
+La nueva puerta recorrió exactamente `0x1e2f70`, `0x7ffe0270`, `0x100000270` y
+`0x7ffffff30270`, recuperó las cuatro direcciones huésped originales y pasó sin crear hilo,
+decodificar x86 ni ejecutar código huésped. Antes de aceptarla se repitieron las cuatro puertas
+v270. Después se regeneró el parche acumulado de etapa 3 y una reconstrucción virgen desde FEX
+público `a04b0241c2fe3911729842205cd8643981108aad` superó toda la matriz.
+
+Evidencia y rollback:
+
+```text
+backups/fli-v271-bidirectional-address-translation-prechange-20260801-071452/
+~/Library/Application Support/Regression/Research/
+  fli-fexcore-darwin-v271-bidirectional-address-translation-repro/
+```
+
+El parche de etapa 3 tiene SHA-256
+`06c2402ad010f736cd88cfc2d4bef50b8642dd278065148f01e2d7f7911d7c03`; la dylib reproducida
+tiene SHA-256 `680b62d7bb657817144958d2aab5800759e89953f7b59239d7caab3c1c8a5fa1`.
+
+Esta API aún describe mapas estáticos. No registra ni retira regiones durante la vida real de
+Wine, no aplica `mprotect`/`munmap` y todavía no convierte un fallo host en un evento huésped.
+La siguiente A/B seguirá siendo sintética y añadirá únicamente registro, protección y limpieza
+sin traducciones obsoletas; después se validará el reporte inverso de fallos. Solo entonces se
+creará un RootFS Wine nuevo. Proton, Steam, EAC y FANTASY LIFE i no se han ejecutado todavía por
+esta ruta y el juego continúa sin certificar en Regression.
+
+### Checkpoint host nativo — 1 de agosto de 2026, frontera v272
+
+v272 cerró el ciclo de vida sintético de esas regiones sin modificar otra vez FEXCore. El JIT de
+v271 ya carga `GuestBase`, `Size` y `HostBase` desde la tabla del contexto en tiempo de ejecución;
+la nueva puerta demuestra ahora esa propiedad en vez de inferirla del código. Compiló una sola
+carga desde `0x100000270`, leyó `0x11223344` desde el backing A, sustituyó la misma región por B
+con el hilo detenido, protegió A y volvió a ejecutar sin llamar a `CompileRIP`. El host code fue
+idéntico antes y después y la segunda lectura devolvió `0x55667788` desde B.
+
+Después vació la tabla, rechazó las traducciones huésped→host y host→huésped obsoletas sin
+modificar las variables de salida, protegió B y desmapeó ambos backings. Una comprobación final
+volvió a rechazar la dirección lógica ya retirada. El primer intento de la sonda quedó como
+negativo de infraestructura: un helper de `LookupCache` requería un símbolo interno no exportado
+por la dylib. Se sustituyó solo esa lectura por la tabla compartida bajo su read lock; los cinco
+gates heredados pasaron antes de aceptar la puerta nueva.
+
+La reconstrucción canónica desde FEX público
+`a04b0241c2fe3911729842205cd8643981108aad` superó toda la matriz, incluida v272. El parche de
+etapa 3 no cambió y conserva SHA-256
+`06c2402ad010f736cd88cfc2d4bef50b8642dd278065148f01e2d7f7911d7c03`: v272 es una nueva
+garantía reproducible del contrato existente, no otro comportamiento añadido a ciegas.
+
+Evidencia y rollback:
+
+```text
+backups/fli-v272-region-lifecycle-prechange-20260801-073825/
+~/Library/Application Support/Regression/Research/
+  fli-fexcore-darwin-v272-region-lifecycle-repro/
+```
+
+La dylib reconstruida tiene SHA-256
+`b4049ce43a7b9d4cdcdde176e8d467ac38066783819658fb18a0dabce1f445d8`; el índice de evidencia,
+`59362e0193e83cdd5db66f68d3da5f0880e969903bbbf08755bdfa8da07fad5a`.
+
+Todavía falta demostrar que un fallo host dentro de una región puede atribuirse de forma segura
+a la dirección huésped correspondiente y entregarse por la ruta de señales sin confundir el
+shadow bajo. La siguiente A/B seguirá siendo sintética y cambiará únicamente esa dimensión. Solo
+si pasa se creará un RootFS Wine nuevo. Proton, Steam, EAC y FANTASY LIFE i no se han ejecutado
+por esta ruta y el juego continúa sin certificar en Regression.
+
+### Checkpoint host nativo — 1 de agosto de 2026, frontera v273
+
+v273 cerró también la atribución inversa controlada sin modificar FEXCore ni el parche de etapa
+3. La sonda registró una región lógica desde `0x100000000`, compiló una única carga desde
+`0x100000270` y, después de compilar, protegió su backing host con `PROT_NONE`. La ejecución
+produjo exactamente un `SIGBUS` de macOS (`signal=10`, `code=1`) con el PC dentro del bloque JIT
+y `si_addr` exactamente en el backing protegido más `0x270`.
+
+El handler local tradujo esa dirección host de vuelta a `0x100000270` mediante la API pública de
+v271 y `RestoreRIPFromHostPC` recuperó exactamente el RIP huésped de la instrucción que falló
+(`GuestRIP + 10`). Para no convertir la prueba en un crash, redirigió únicamente esa señal
+esperada al stub `GuestSignal_SIGSEGV` de FEX. `ExecuteThread` retornó, se restauraron los
+handlers originales, se vació la tabla, se devolvió el backing a lectura/escritura y se comprobó
+que ya no quedaba ninguna traducción residual.
+
+Los seis gates heredados pasaron antes del cambio; después pasaron otra vez junto con la puerta
+nueva. Finalmente se reconstruyó todo desde la revisión pública exacta de FEX
+`a04b0241c2fe3911729842205cd8643981108aad` y volvió a pasar la matriz completa: loader,
+allocator, contexto, init, compilación, ejecución, linking, invalidaciones, ELF x86-64,
+`PT_INTERP`, shadow bajo, página dispersa, regiones altas, traducción bidireccional, ciclo de
+vida y atribución del fallo.
+
+Evidencia y rollback:
+
+```text
+backups/fli-v273-region-fault-attribution-prechange-20260801-075931/
+~/Library/Application Support/Regression/Research/
+  fli-fexcore-darwin-v273-prechange-inherited-gates/
+  fli-fexcore-darwin-v273-region-fault-attribution/
+  fli-fexcore-darwin-v273-region-fault-attribution-rerun-1/
+  fli-fexcore-darwin-v273-region-fault-attribution-repro/
+```
+
+La dylib limpia v273 tiene SHA-256
+`b84a4ea19d612b3877b86c7194314922cd357c4acd08fcc25f292582c4f4cbdf`; el índice del árbol de
+evidencia, `739bc26471d505d8fc07d1607a36474d6dbffe73169de10ada575639f919808e`. El parche de etapa 3
+permanece sin cambios con SHA-256
+`06c2402ad010f736cd88cfc2d4bef50b8642dd278065148f01e2d7f7911d7c03`.
+
+Esta es una prueba reproducible de atribución y recuperación, no una integración estable. La
+siguiente frontera es aplicar el mismo contrato, una sola variable cada vez, a la mitad
+PE/Windows oficial de Wine dentro de un RootFS nuevo. Proton, Steam, EAC y FANTASY LIFE i aún no
+se han ejecutado por esta ruta nativa y el juego continúa sin certificar en Regression.

@@ -1,0 +1,78 @@
+diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -207,6 +207,7 @@ struct _KUSER_SHARED_DATA *user_shared_data = (void *)0x7ffe0000;
+ 
+ #if defined(__APPLE__) && defined(__aarch64__)
+ static BOOL regression_relocate_user_shared_data;
++static BOOL regression_relocate_initial_teb;
+ #endif
+ 
+ /* TEB allocation blocks */
+@@ -4098,6 +4099,14 @@ TEB *virtual_alloc_first_teb(void)
+     regression_relocate_user_shared_data =
+         getenv( "REGRESSION_WINE_RELOCATE_KUSER_SHARED_DATA" ) &&
+         !strcmp( getenv( "REGRESSION_WINE_RELOCATE_KUSER_SHARED_DATA" ), "1" );
++    regression_relocate_initial_teb =
++        getenv( "REGRESSION_WINE_RELOCATE_INITIAL_TEB" ) &&
++        !strcmp( getenv( "REGRESSION_WINE_RELOCATE_INITIAL_TEB" ), "1" );
++    if (regression_relocate_initial_teb && !regression_relocate_user_shared_data)
++    {
++        ERR( "wine: initial TEB relocation requires shared user data relocation\n" );
++        exit(1);
++    }
+     if (regression_relocate_user_shared_data) user_shared_data = NULL;
+ #endif
+ 
+@@ -4126,8 +4135,49 @@ TEB *virtual_alloc_first_teb(void)
+     }
+ #endif
+ 
++#if defined(__APPLE__) && defined(__aarch64__)
++    if (regression_relocate_initial_teb)
++    {
++        const ULONG_PTR guest_teb_block = limit_2g - total;
++        char guest_address[32];
++        char host_address[32];
++        char mapping_size[32];
++
++        if (!is_win64)
++        {
++            ERR( "wine: initial TEB relocation requires a 64-bit Windows address space\n" );
++            exit(1);
++        }
++
++        teb_block = NULL;
++        status = NtAllocateVirtualMemory( NtCurrentProcess(), &teb_block, 0, &total,
++                                          MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE );
++        if (status)
++        {
++            ERR( "wine: failed to allocate relocated initial TEB block: %08x\n", status );
++            exit(1);
++        }
++
++        snprintf( guest_address, sizeof(guest_address), "0x%llx",
++                  (unsigned long long)guest_teb_block );
++        snprintf( host_address, sizeof(host_address), "%p", teb_block );
++        snprintf( mapping_size, sizeof(mapping_size), "0x%llx", (unsigned long long)total );
++        if (setenv( "REGRESSION_FEX_INITIAL_TEB_GUEST_BASE", guest_address, 1 ) ||
++            setenv( "REGRESSION_FEX_INITIAL_TEB_HOST_BASE", host_address, 1 ) ||
++            setenv( "REGRESSION_FEX_INITIAL_TEB_SIZE", mapping_size, 1 ))
++        {
++            ERR( "wine: failed to publish the relocated initial TEB mapping\n" );
++            exit(1);
++        }
++        TRACE( "relocated initial TEB block %p -> %p, size %#lx\n",
++               (void *)guest_teb_block, teb_block, (unsigned long)total );
++    }
++    else
++#endif
++    {
+-    NtAllocateVirtualMemory( NtCurrentProcess(), &teb_block, is_win64 ? limit_2g - 1 : 0, &total,
+-                             MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE );
++        NtAllocateVirtualMemory( NtCurrentProcess(), &teb_block, is_win64 ? limit_2g - 1 : 0, &total,
++                                 MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE );
++    }
+     teb_block_pos = 30;
+     ptr = (char *)teb_block + 30 * block_size;
+     data_size = 2 * block_size;

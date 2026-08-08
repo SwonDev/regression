@@ -280,7 +280,7 @@ index fd6947f..7174632 100644
  }
  void* valloc(size_t size) {
    return ::valloc(size);
-@@ -203,7 +214,11 @@ void free(void* ptr) {
+@@ -203,8 +214,21 @@ void free(void* ptr) {
    return ::free(ptr);
  }
  size_t malloc_usable_size(void* ptr) {
@@ -291,7 +291,17 @@ index fd6947f..7174632 100644
 +#endif
  }
  void* aligned_alloc(size_t a, size_t s) {
++#ifdef __APPLE__
++  // posix_memalign on Darwin rejects alignments smaller than a pointer even
++  // though fextl legitimately requests alignof(uint32_t). Normalize only the
++  // host allocator contract; the requested object alignment is preserved.
++  const size_t Alignment = a < alignof(void*) ? alignof(void*) : a;
++  void* ptr {};
++  return ::posix_memalign(&ptr, Alignment, s) == 0 ? ptr : nullptr;
++#else
    return ::aligned_alloc(a, s);
++#endif
+ }
 diff --git a/FEXCore/Source/Utils/Profiler.cpp b/FEXCore/Source/Utils/Profiler.cpp
 index 67fe0ca..84ff0fd 100644
 --- a/FEXCore/Source/Utils/Profiler.cpp

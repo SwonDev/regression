@@ -1,8 +1,44 @@
 --- a/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
 +++ b/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
-@@ -117,11 +117,26 @@
+@@ -8,6 +8,7 @@
+ #include <stdlib.h>
+ #ifdef __APPLE__
+ #include <malloc/malloc.h>
++#include <pthread.h>
+ #else
+ #include <malloc.h>
+ #endif
+@@ -114,14 +115,54 @@
+ FEX_DEFAULT_VISIBILITY extern MUNMAP_Hook munmap;
+ FEX_DEFAULT_VISIBILITY extern void VirtualName(const char* Name, void* Ptr, size_t Size);
+
++#ifdef __APPLE__
++class JITWriteScope final {
++public:
++  JITWriteScope() noexcept
++    : Supported {pthread_jit_write_protect_supported_np() != 0} {
++    if (Supported && WriteDepth++ == 0) {
++      pthread_jit_write_protect_np(0);
++    }
++  }
++
++  ~JITWriteScope() {
++    if (Supported && --WriteDepth == 0) {
++      pthread_jit_write_protect_np(1);
++    }
++  }
++
++  JITWriteScope(const JITWriteScope&) = delete;
++  JITWriteScope& operator=(const JITWriteScope&) = delete;
++
++private:
++  inline static thread_local uint32_t WriteDepth {};
++  bool Supported {};
++};
++#endif
++
  // All commit parameters are ignored here, they are unnecessary as Linux supports overcommit
- 
+
  inline void* VirtualAlloc(size_t Size, bool Execute = false, bool Commit = true) {
 -  return FEXCore::Allocator::mmap(nullptr, Size, PROT_READ | PROT_WRITE | (Execute ? PROT_EXEC : 0), MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 +  int Flags = MAP_PRIVATE | MAP_ANONYMOUS;
@@ -29,3 +65,67 @@
  }
  
  inline void VirtualFree(void* Ptr, size_t Size) {
+--- a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
++++ b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
+@@ -13,6 +13,7 @@
+ #include <FEXCore/Core/X86Enums.h>
+ #include <FEXCore/Debug/InternalThreadState.h>
+ #include <FEXCore/HLE/SyscallHandler.h>
++#include <FEXCore/Utils/AllocatorHooks.h>
+ #include <FEXCore/Utils/Event.h>
+ #include <FEXCore/Utils/LogManager.h>
+ #include <FEXCore/Utils/MathUtils.h>
+@@ -39,6 +40,9 @@
+ Dispatcher::Dispatcher(FEXCore::Context::ContextImpl* ctx)
+   : Arm64Emitter(ctx, FEXCore::Allocator::VirtualAlloc(MAX_DISPATCHER_CODE_SIZE, true), MAX_DISPATCHER_CODE_SIZE)
+   , CTX {ctx} {
++#ifdef __APPLE__
++  FEXCore::Allocator::JITWriteScope WriteScope;
++#endif
+   EmitDispatcher();
+
+   FEXCore::Allocator::VirtualName("FEXMem_Misc", reinterpret_cast<void*>(GetBufferBase()), MAX_DISPATCHER_CODE_SIZE);
+--- a/FEXCore/Source/Interface/Core/JIT/JIT.cpp
++++ b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
+@@ -25,6 +25,7 @@
+ #include <FEXCore/Core/X86Enums.h>
+ #include <FEXCore/Debug/InternalThreadState.h>
+ #include <FEXCore/Utils/Allocator.h>
++#include <FEXCore/Utils/AllocatorHooks.h>
+ #include <FEXCore/Utils/CompilerDefs.h>
+ #include <FEXCore/Utils/EnumUtils.h>
+ #include <FEXCore/Utils/LogManager.h>
+@@ -500,4 +501,7 @@ static void DirectBlockDelinker(FEXCore::Context::ExitFunctionLinkData* Record,
+ static void DirectBlockDelinker(FEXCore::Context::ExitFunctionLinkData* Record, bool Call) {
++#ifdef __APPLE__
++  FEXCore::Allocator::JITWriteScope WriteScope;
++#endif
+   uintptr_t JumpThunkStartAddress = reinterpret_cast<uintptr_t>(Record) - 0x10;
+   uintptr_t CallerAddress = JumpThunkStartAddress + Record->CallerOffset;
+   auto BranchOffset = JumpThunkStartAddress / 4 - CallerAddress / 4;
+@@ -518,4 +522,7 @@ static void IndirectBlockDelinker(FEXCore::Context::ExitFunctionLinkData* Record) {
+ static void IndirectBlockDelinker(FEXCore::Context::ExitFunctionLinkData* Record) {
++#ifdef __APPLE__
++  FEXCore::Allocator::JITWriteScope WriteScope;
++#endif
+   uintptr_t JumpThunkStartAddress = reinterpret_cast<uintptr_t>(Record) - 0x10;
+   uint32_t BranchInst = 0;
+   ARMEmitter::Emitter BranchEmit(reinterpret_cast<uint8_t*>(&BranchInst), 4);
+@@ -531,4 +538,7 @@ uint64_t Arm64JITCore::ExitFunctionLink(FEXCore::Core::CpuStateFrame* Frame, FEX
+ uint64_t Arm64JITCore::ExitFunctionLink(FEXCore::Core::CpuStateFrame* Frame, FEXCore::Context::ExitFunctionLinkData* Record) {
++#ifdef __APPLE__
++  FEXCore::Allocator::JITWriteScope WriteScope;
++#endif
+   auto Thread = Frame->Thread;
+   bool TFSet = Thread->CurrentFrame->State.flags[X86State::RFLAG_TF_RAW_LOC];
+   uintptr_t HostCode {};
+@@ -817,6 +827,9 @@
+
+ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size, bool SingleInst, const FEXCore::IR::IRListView* IR,
+                                                    FEXCore::Core::DebugData* DebugData, bool CheckTF) {
++#ifdef __APPLE__
++  FEXCore::Allocator::JITWriteScope WriteScope;
++#endif
+   FEXCORE_PROFILE_SCOPED("Arm64::CompileCode");
+
+   const auto PrevNumAllocations = Relocations.size();

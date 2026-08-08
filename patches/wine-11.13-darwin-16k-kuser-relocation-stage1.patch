@@ -1,0 +1,56 @@
+diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -203,6 +203,10 @@ static struct file_view *arm64ec_view;
+ 
+ ULONG_PTR user_space_wow_limit = 0;
+ struct _KUSER_SHARED_DATA *user_shared_data = (void *)0x7ffe0000;
+ 
++#if defined(__APPLE__) && defined(__aarch64__)
++static BOOL regression_relocate_user_shared_data;
++#endif
++
+ /* TEB allocation blocks */
+ static void *teb_block;
+@@ -4088,8 +4092,15 @@ TEB *virtual_alloc_first_teb(void)
+     SIZE_T data_size = page_size;
+     SIZE_T block_size = 4 * page_size;
+     SIZE_T total = 32 * block_size;
+     struct thread_data *thread_data;
+ 
++#if defined(__APPLE__) && defined(__aarch64__)
++    regression_relocate_user_shared_data =
++        getenv( "REGRESSION_WINE_RELOCATE_KUSER_SHARED_DATA" ) &&
++        !strcmp( getenv( "REGRESSION_WINE_RELOCATE_KUSER_SHARED_DATA" ), "1" );
++    if (regression_relocate_user_shared_data) user_shared_data = NULL;
++#endif
++
+     /* reserve space for shared user data */
+     status = NtAllocateVirtualMemory( NtCurrentProcess(), (void **)&user_shared_data, 0, &data_size,
+                                       MEM_RESERVE | MEM_COMMIT, PAGE_READONLY );
+@@ -4096,9 +4108,25 @@ TEB *virtual_alloc_first_teb(void)
+     if (status)
+     {
+         ERR( "wine: failed to map the shared user data: %08x\n", status );
+         exit(1);
+     }
+ 
++#if defined(__APPLE__) && defined(__aarch64__)
++    if (regression_relocate_user_shared_data)
++    {
++        char host_address[32];
++
++        snprintf( host_address, sizeof(host_address), "%p", user_shared_data );
++        if (setenv( "REGRESSION_FEX_KUSER_GUEST_PAGE", "0x7ffe0000", 1 ) ||
++            setenv( "REGRESSION_FEX_KUSER_HOST_PAGE", host_address, 1 ))
++        {
++            ERR( "wine: failed to publish the relocated shared user data mapping\n" );
++            exit(1);
++        }
++        TRACE( "relocated shared user data 0x7ffe0000 -> %p\n", user_shared_data );
++    }
++#endif
++
+     NtAllocateVirtualMemory( NtCurrentProcess(), &teb_block, is_win64 ? limit_2g - 1 : 0, &total,
+                              MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE );
+     teb_block_pos = 30;
