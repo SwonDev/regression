@@ -243,6 +243,17 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
     `ntdll.so`: `adb97ddb…`. Run perfecto final de 1.8.0:
     `228467BB-AECE-40EF-8FE5-E739250AA859`, huella exacta `fb45e5ed…`; expediente
     `docs/games/titan-quest-2.md`.
+32. **Forsaken Isle activa Windows Media solo por contenido y por proceso.** El App ID `347940`
+    usa .NET 4.5, MonoGame 3.5.1 y SharpDX 2.6.3; sus siete pistas WMA2/ASF fallaban con
+    `0xC00D36BB` porque el GStreamer general no incluía ASF ni WMA2. El loader examina solo la
+    raíz del juego actual bajo `steamapps/common`, con `lstat`, profundidad 7 y presupuesto 4096,
+    y antepone el componente LGPL `windows-media-gstreamer-1@1` únicamente si encuentra
+    `.wma`, `.wmv` o `.asf`. No definir `GST_PLUGIN_PATH` global, no instalar codecs en la
+    botella y no relocalizar solo una mitad de GStreamer: eso cargó dos instancias y produjo
+    `GstCocoaApplicationDelegate` duplicado y `fatal stalled cross-thread pipe`. El instalador
+    verifica hashes/firmas y repara un enlace versionado fuera del bundle. Observación perfecta:
+    `31104A67-1DE6-4C6D-BE5D-797A60648769`, huella `f6c27341…`; expediente
+    `docs/games/forsaken-isle.md`.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 

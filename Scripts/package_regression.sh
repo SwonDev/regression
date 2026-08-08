@@ -24,6 +24,10 @@ verify_protected_state()
     local arguments=()
     if [[ "$phase" == "before-tq2-route-unification" ]]; then
         arguments+=(--before-tq2-route-unification)
+    elif [[ "$phase" == "before-windows-media-promotion" ]]; then
+        arguments+=(--before-windows-media-promotion)
+    elif [[ "$phase" == "before-windows-media-link-fix" ]]; then
+        arguments+=(--before-windows-media-link-fix)
     fi
     if [[ -d "$bottle" ]]; then
         arguments+=(--include-bottle)
@@ -39,14 +43,26 @@ verify_prepackage_state()
     local source_engine="$ROOT/Scripts/regression-engine.sh"
     local installed_hash
     local source_hash
+    local installed_component_hash
+    local source_component_hash
     installed_hash="$(shasum -a 256 "$installed_engine" | awk '{print $1}')"
     source_hash="$(shasum -a 256 "$source_engine" | awk '{print $1}')"
 
     if [[ "$installed_hash" == "$source_hash" ]]; then
-        verify_protected_state
+        installed_component_hash="$(shasum -a 256 "$APP/Contents/SharedSupport/components/windows-media/1/manifest.sha256" | awk '{print $1}')"
+        source_component_hash="$(shasum -a 256 "$ROOT/build/windows-media-component/1/manifest.sha256" | awk '{print $1}')"
+        if [[ "$installed_component_hash" == "d93847ced54536cbaaf8ed7922537dfb043448e0168184375c552e774fe35199" &&
+              "$source_component_hash" == "ac662661fb3384c6ad100066391cab209f9de60b2e129fb92e07365ee6fe9bb1" ]]; then
+            verify_protected_state before-windows-media-link-fix
+        else
+            verify_protected_state
+        fi
     elif [[ "$installed_hash" == "5d8f999827ae6cf8ccdf292e8bed4c388ca5120ac4778a305f0890d9a41cdbbc" &&
             "$source_hash" == "fd4e3e7ca59926b7977c63d9400dfb44a156f0aeb96b222ee3eba2c57fab3e4e" ]]; then
         verify_protected_state before-tq2-route-unification
+    elif [[ "$installed_hash" == "fd4e3e7ca59926b7977c63d9400dfb44a156f0aeb96b222ee3eba2c57fab3e4e" &&
+            "$source_hash" == "5d99cae95a60c84b8bc9759736ed9e9bec1dafe9b9af8a8190f26c232781ec60" ]]; then
+        verify_protected_state before-windows-media-promotion
     else
         echo "ERROR: el lanzador instalado no es el baseline anterior ni el candidato canónico." >&2
         exit 1
@@ -162,13 +178,21 @@ umask 077
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 backup_compatibility_database
 NATIVE_BACKUP="$BACKUP_ROOT/regression-native-before-${VERSION}-${BUILD_NUMBER}-${TIMESTAMP}.tar.gz"
-tar -czf "$NATIVE_BACKUP" -C "$APP" \
-    Contents/Info.plist \
-    Contents/MacOS/Regression \
-    Contents/MacOS/regression-engine \
-    Contents/Resources \
-    Contents/SharedSupport/bin/regressionctl \
+NATIVE_BACKUP_PATHS=(
+    Contents/Info.plist
+    Contents/MacOS/Regression
+    Contents/MacOS/regression-engine
+    Contents/Resources
+    Contents/SharedSupport/bin/regressionctl
     Contents/_CodeSignature
+)
+if [[ -e "$APP/Contents/SharedSupport/bin/install-windows-media-component" ]]; then
+    NATIVE_BACKUP_PATHS+=(Contents/SharedSupport/bin/install-windows-media-component)
+fi
+if [[ -d "$APP/Contents/SharedSupport/components/windows-media/1" ]]; then
+    NATIVE_BACKUP_PATHS+=(Contents/SharedSupport/components/windows-media/1)
+fi
+tar -czf "$NATIVE_BACKUP" -C "$APP" "${NATIVE_BACKUP_PATHS[@]}"
 tar -tzf "$NATIVE_BACKUP" >/dev/null
 chmod 600 "$NATIVE_BACKUP"
 
@@ -204,6 +228,30 @@ COMPONENT_INSTALLER="$APP/Contents/SharedSupport/bin/install-apple-gptk-componen
 TEMP_COMPONENT_INSTALLER="$APP/Contents/SharedSupport/bin/.install-apple-gptk-component.new"
 install -m 755 "$COMPONENT_INSTALLER_SOURCE" "$TEMP_COMPONENT_INSTALLER"
 mv "$TEMP_COMPONENT_INSTALLER" "$COMPONENT_INSTALLER"
+WINDOWS_MEDIA_BUILD="$ROOT/build/windows-media-component/1"
+WINDOWS_MEDIA_SOURCE="$APP/Contents/SharedSupport/components/windows-media/1"
+WINDOWS_MEDIA_INSTALLER_SOURCE="$ROOT/Scripts/install_windows_media_component.sh"
+WINDOWS_MEDIA_INSTALLER="$APP/Contents/SharedSupport/bin/install-windows-media-component"
+[[ -f "$WINDOWS_MEDIA_BUILD/manifest.sha256" ]] || {
+    echo "ERROR: falta el componente Windows Media; ejecuta build/build-windows-media-component.sh" >&2
+    exit 1
+}
+[[ -x "$WINDOWS_MEDIA_INSTALLER_SOURCE" ]] || {
+    echo "ERROR: falta el instalador autorreparable de Windows Media." >&2
+    exit 1
+}
+mkdir -p "$(dirname "$WINDOWS_MEDIA_SOURCE")"
+rm -rf "$WINDOWS_MEDIA_SOURCE.new"
+ditto "$WINDOWS_MEDIA_BUILD" "$WINDOWS_MEDIA_SOURCE.new"
+(
+    cd "$WINDOWS_MEDIA_SOURCE.new"
+    shasum -a 256 -c manifest.sha256
+)
+rm -rf "$WINDOWS_MEDIA_SOURCE"
+mv "$WINDOWS_MEDIA_SOURCE.new" "$WINDOWS_MEDIA_SOURCE"
+TEMP_WINDOWS_MEDIA_INSTALLER="$APP/Contents/SharedSupport/bin/.install-windows-media-component.new"
+install -m 755 "$WINDOWS_MEDIA_INSTALLER_SOURCE" "$TEMP_WINDOWS_MEDIA_INSTALLER"
+mv "$TEMP_WINDOWS_MEDIA_INSTALLER" "$WINDOWS_MEDIA_INSTALLER"
 
 mkdir -p "$RESOURCES_DIR"
 for state in ready working running error; do

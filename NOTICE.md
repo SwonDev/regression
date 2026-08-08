@@ -16,6 +16,9 @@ el build necesitas obtenerlos tú mismo:
 | mingw-w64 | — | https://www.mingw-w64.org | Zpl/MIT |
 | Source Han Sans | 2.005R | https://github.com/adobe-fonts/source-han-sans | SIL Open Font License 1.1 |
 | Switch2Bridge | commit `ff2e1a1d99c8529a8f693fa4ab7cf82583cd3d7d` | https://github.com/SwonDev/Switch2Bridge | MIT |
+| GStreamer plugins-ugly (ASF) | 1.24.4 | incluido en CrossOver Sources | LGPL-2.1+; módulos GPL desactivados |
+| GStreamer gst-libav | 1.24.4 | incluido en CrossOver Sources | LGPL-2.1+ |
+| FFmpeg | 6.1.6 (`f1e3a2bf…`) | https://github.com/FFmpeg/FFmpeg | LGPL-2.1+; GPL/nonfree desactivados |
 
 Descomprime el tarball de CrossOver como `sources-26.3.0/` en la raíz del proyecto y aplica
 `patches/wine-26.3.0-winemac-cxpresent-consumer.patch`. Clona DXMT en `build/toolchain/dxmt-src`,
@@ -25,6 +28,11 @@ El asset de usuario compila Switch2Bridge desde el commit y archivo oficial fija
 `Scripts/package_release.sh`. Incluye tanto el demonio arm64 como la shim SDL x86_64, su licencia
 MIT y la fuente de la shim. El instalador lo activa solo en macOS 15 o posterior y modifica
 únicamente la botella propia de Regression.
+
+El componente Windows Media del asset se construye mediante
+`build/build-windows-media-component.sh`. Incluye solo el demultiplexor ASF de GStreamer,
+`gst-libav`, las bibliotecas FFmpeg necesarias y sus textos de licencia. Su manifiesto firmado se
+verifica antes de instalar o reparar el enlace local; no incluye codecs propietarios de Microsoft.
 
 ## Binarios con licencia restrictiva (NO redistribuibles)
 

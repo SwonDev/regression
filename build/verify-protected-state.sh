@@ -11,6 +11,8 @@ BEFORE_DD2_PROMOTION=false
 BEFORE_DRAGONSWORD_PROMOTION=false
 BEFORE_HWR2_PROMOTION=false
 BEFORE_TQ2_ROUTE_UNIFICATION=false
+BEFORE_WINDOWS_MEDIA_PROMOTION=false
+BEFORE_WINDOWS_MEDIA_LINK_FIX=false
 
 for argument in "$@"; do
     case "$argument" in
@@ -29,8 +31,14 @@ for argument in "$@"; do
         --before-tq2-route-unification)
             BEFORE_TQ2_ROUTE_UNIFICATION=true
             ;;
+        --before-windows-media-promotion)
+            BEFORE_WINDOWS_MEDIA_PROMOTION=true
+            ;;
+        --before-windows-media-link-fix)
+            BEFORE_WINDOWS_MEDIA_LINK_FIX=true
+            ;;
         *)
-            echo "Uso: $0 [--include-bottle] [--before-dd2-promotion|--before-dragonsword-promotion|--before-hwr2-promotion|--before-tq2-route-unification]" >&2
+            echo "Uso: $0 [--include-bottle] [--before-dd2-promotion|--before-dragonsword-promotion|--before-hwr2-promotion|--before-tq2-route-unification|--before-windows-media-promotion|--before-windows-media-link-fix]" >&2
             exit 64
             ;;
     esac
@@ -41,6 +49,8 @@ $BEFORE_DD2_PROMOTION && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
 $BEFORE_DRAGONSWORD_PROMOTION && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
 $BEFORE_HWR2_PROMOTION && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
 $BEFORE_TQ2_ROUTE_UNIFICATION && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
+$BEFORE_WINDOWS_MEDIA_PROMOTION && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
+$BEFORE_WINDOWS_MEDIA_LINK_FIX && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
 if (( PROMOTION_BASELINES > 1 )); then
     echo "ERROR: las verificaciones históricas de promoción son mutuamente excluyentes." >&2
     exit 64
@@ -96,20 +106,43 @@ verify_bottle_hash()
 if $BEFORE_TQ2_ROUTE_UNIFICATION; then
     verify_hash 5d8f999827ae6cf8ccdf292e8bed4c388ca5120ac4778a305f0890d9a41cdbbc \
         "Contents/MacOS/regression-engine"
-else
+elif $BEFORE_WINDOWS_MEDIA_PROMOTION; then
     verify_hash fd4e3e7ca59926b7977c63d9400dfb44a156f0aeb96b222ee3eba2c57fab3e4e \
+        "Contents/MacOS/regression-engine"
+elif ! $BEFORE_WINDOWS_MEDIA_PROMOTION; then
+    verify_hash 5d99cae95a60c84b8bc9759736ed9e9bec1dafe9b9af8a8190f26c232781ec60 \
         "Contents/MacOS/regression-engine"
 fi
 verify_hash 6942782b7baf0049bb56aba2b9a4e00a107984b1b0198f2307fb63e87ce3103c \
     "Contents/SharedSupport/bin/install-apple-gptk-component"
+if ! $BEFORE_WINDOWS_MEDIA_PROMOTION; then
+    verify_hash c43da8ed5b54d6c663a5455d4296accde8d96f5237384f9322bea548e5c6d00d \
+        "Contents/SharedSupport/bin/install-windows-media-component"
+    if $BEFORE_WINDOWS_MEDIA_LINK_FIX; then
+        verify_hash d93847ced54536cbaaf8ed7922537dfb043448e0168184375c552e774fe35199 \
+            "Contents/SharedSupport/components/windows-media/1/manifest.sha256"
+    else
+        verify_hash ac662661fb3384c6ad100066391cab209f9de60b2e129fb92e07365ee6fe9bb1 \
+            "Contents/SharedSupport/components/windows-media/1/manifest.sha256"
+    fi
+    (
+        cd "$APP/Contents/SharedSupport/components/windows-media/1"
+        shasum -a 256 -c manifest.sha256 >/dev/null
+    ) || {
+        echo "ERROR: el payload protegido Windows Media no supera su manifiesto." >&2
+        exit 1
+    }
+fi
 if $BEFORE_DD2_PROMOTION; then
     verify_hash 2cd0f030fd0b92bbf17308021d23b2a2fede6ab02d528c44c03753dfcb049c97 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
 elif $BEFORE_DRAGONSWORD_PROMOTION; then
     verify_hash 9e37f4a1c4c163909b7bc26b2a38b6408f02e261ddbf079b9608bc884b65f67d "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
 elif $BEFORE_HWR2_PROMOTION; then
     verify_hash 2a446467a9faa0885f350d096fb6424c92f62201b733f974150c931e3a535a6a "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
-else
+elif $BEFORE_WINDOWS_MEDIA_PROMOTION; then
     verify_hash adb97ddb229a7e20b1cac89b88ba81cfd9c9871c801b97dc50a596f0c5e2f113 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+else
+    verify_hash 9e3eb235bbe60a06bd2da4fe0199be8370c1beb02438c9a98a9a0e0d7ff3014c "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
 fi
 
 DRAGONSWORD_PROFILE="$WINE_ROOT/lib/profiles/dragonsword"

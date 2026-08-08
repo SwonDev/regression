@@ -50,7 +50,13 @@ final class RegressionCoreTests: XCTestCase {
             VerifiedGameCatalog.certification(for: "2142790")?.gameName,
             "Fields of Mistria"
         )
-        XCTAssertEqual(VerifiedGameCatalog.revision, "2026-08-08.1")
+        let forsaken = VerifiedGameCatalog.certification(for: "347940")
+        XCTAssertEqual(forsaken?.gameName, "Forsaken Isle")
+        XCTAssertEqual(
+            forsaken?.sourceObservationID,
+            UUID(uuidString: "31104A67-1DE6-4C6D-BE5D-797A60648769")
+        )
+        XCTAssertEqual(VerifiedGameCatalog.revision, "2026-08-08.2")
         XCTAssertNil(VerifiedGameCatalog.certification(for: "999999999"))
     }
 
@@ -373,6 +379,36 @@ final class RegressionCoreTests: XCTestCase {
         XCTAssertFalse(unrelated.requiresActiveSteamClient)
         XCTAssertNil(unrelated.configurationValues["profile.launcher"])
         XCTAssertNil(unrelated.configurationValues["profile.router.contract"])
+    }
+
+    func testForsakenIsleWindowsMediaProfileIsExactAndRegressionOnly() throws {
+        let profile = try XCTUnwrap(
+            GameRuntimeProfileCatalog.profile(for: "347940", backend: .regression)
+        )
+
+        XCTAssertEqual(profile.identifier, "windows-media-gstreamer-autodetect")
+        XCTAssertEqual(profile.revision, 1)
+        XCTAssertEqual(profile.executable, "forsakenisle.exe")
+        XCTAssertFalse(profile.requiresActiveSteamClient)
+        XCTAssertEqual(profile.configurationValues["profile.scope"], "steam-game-content-tree")
+        XCTAssertEqual(profile.configurationValues["profile.media.extensions"], "asf,wma,wmv")
+        XCTAssertEqual(profile.configurationValues["profile.media.backend"], "gstreamer-1.24.4")
+        XCTAssertEqual(profile.configurationValues["profile.media.decoder"], "ffmpeg-6.1.6-lgpl")
+        XCTAssertEqual(
+            profile.configurationValues["profile.router.contract"],
+            "compiled-bounded-content-scan-v1"
+        )
+        XCTAssertEqual(profile.configurationValues["profile.launcher.entrypoints"], "regression,steam")
+        XCTAssertEqual(profile.configurationValues["profile.component.id"], "windows-media-gstreamer")
+        XCTAssertEqual(profile.configurationValues["profile.component.version"], "1")
+        XCTAssertEqual(profile.configurationValues["profile.component.repair"], "signed-manifest-link")
+        XCTAssertNil(GameRuntimeProfileCatalog.profile(for: "347940", backend: .crossOver))
+
+        let unrelated = try XCTUnwrap(
+            GameRuntimeProfileCatalog.profile(for: "619820", backend: .regression)
+        )
+        XCTAssertNil(unrelated.configurationValues["profile.media.decoder"])
+        XCTAssertNil(unrelated.configurationValues["profile.component.id"])
     }
 
     func testGameConfigurationCollectorCapturesGraphicsWithoutPrivateValues() throws {

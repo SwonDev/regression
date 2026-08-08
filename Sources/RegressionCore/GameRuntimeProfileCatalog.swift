@@ -31,9 +31,29 @@ public struct CompiledGameRuntimeProfile: Equatable, Sendable {
 }
 
 public enum GameRuntimeProfileCatalog {
-    public static let revision = "2026-08-08.9"
+    public static let revision = "2026-08-08.10"
 
     public static let all: [CompiledGameRuntimeProfile] = [
+        CompiledGameRuntimeProfile(
+            appID: "347940",
+            identifier: "windows-media-gstreamer-autodetect",
+            revision: 1,
+            executable: "forsakenisle.exe",
+            configurationValues: [
+                "profile.id": "windows-media-gstreamer-autodetect",
+                "profile.revision": "1",
+                "profile.scope": "steam-game-content-tree",
+                "profile.executable": "forsakenisle.exe",
+                "profile.media.extensions": "asf,wma,wmv",
+                "profile.media.backend": "gstreamer-1.24.4",
+                "profile.media.decoder": "ffmpeg-6.1.6-lgpl",
+                "profile.router.contract": "compiled-bounded-content-scan-v1",
+                "profile.launcher.entrypoints": "regression,steam",
+                "profile.component.id": "windows-media-gstreamer",
+                "profile.component.version": "1",
+                "profile.component.repair": "signed-manifest-link"
+            ]
+        ),
         CompiledGameRuntimeProfile(
             appID: "619820",
             identifier: "heroes-hammerwatch-2.opengl-forward-compatible",

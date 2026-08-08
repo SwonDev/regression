@@ -241,6 +241,7 @@ while IFS= read -r -d '' candidate; do
             lib/runtime/*) portable_rpath='@loader_path' ;;
             lib/wine/x86_64-unix/*) portable_rpath='@loader_path/../../runtime' ;;
             lib/profiles/*/x86_64-unix/*) portable_rpath='@loader_path/../../../runtime' ;;
+            */Contents/SharedSupport/components/windows-media/*/gstreamer-1.0/*) portable_rpath='@loader_path/../../../../wine-root/lib/runtime' ;;
             *) portable_rpath='@loader_path' ;;
         esac
         existing_rpaths="$(otool -l "$candidate" | awk '/LC_RPATH/{getline; print $2}')"
@@ -271,6 +272,19 @@ sanitize_literal() {
 }
 sanitize_literal "$ROOT" "/opt/regression/src"
 sanitize_literal "$HOME" "/Users/regression"
+
+# La portabilidad y el strip cambian los bytes del payload después del
+# manifiesto de desarrollo. Regenerarlo dentro del asset público mantiene la
+# autorreparación exacta sin aceptar archivos ajenos al bundle firmado.
+WINDOWS_MEDIA_PUBLIC="$PUBLIC_APP/Contents/SharedSupport/components/windows-media/1"
+if [[ -d "$WINDOWS_MEDIA_PUBLIC" ]]; then
+    (
+        cd "$WINDOWS_MEDIA_PUBLIC"
+        find . -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z \
+            | xargs -0 shasum -a 256 > manifest.sha256
+        shasum -a 256 -c manifest.sha256
+    )
+fi
 
 # La firma pública es ad hoc y no filtra el correo del certificado de desarrollo. El instalador
 # vuelve a firmar con la identidad del Mac de destino y verifica las cuatro capacidades.

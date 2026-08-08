@@ -84,7 +84,15 @@ public actor ProcessRunner: ProcessRunning {
 }
 
 public actor ProcessLauncher: ProcessLaunching {
-    private var ownedProcesses: [Int32: Process] = [:]
+    private struct OwnedLaunch {
+        let process: Process
+        let backend: BackendKind
+        let executablePath: String
+        let arguments: [String]
+        let launch: BackendLaunch
+    }
+
+    private var ownedProcesses: [Int32: OwnedLaunch] = [:]
 
     public init() {}
 
@@ -94,6 +102,16 @@ public actor ProcessLauncher: ProcessLaunching {
         arguments: [String],
         logDirectoryURL: URL
     ) async throws -> BackendLaunch {
+        let executablePath = executableURL.standardizedFileURL.path
+        if let existing = ownedProcesses.values.first(where: {
+            $0.process.isRunning
+                && $0.backend == backend
+                && $0.executablePath == executablePath
+                && $0.arguments == arguments
+        }) {
+            return existing.launch
+        }
+
         try PrivateStorage.ensureDirectory(at: logDirectoryURL)
         try rotateLogs(in: logDirectoryURL, retaining: 20)
 
@@ -118,19 +136,25 @@ public actor ProcessLauncher: ProcessLaunching {
             try? FileManager.default.removeItem(at: logURL)
             throw error
         }
-        ownedProcesses[process.processIdentifier] = process
-
-        return BackendLaunch(
+        let launch = BackendLaunch(
             backend: backend,
             processID: process.processIdentifier,
             command: PrivacySanitizer.normalizedPath(executableURL.path),
             arguments: PrivacySanitizer.safeArguments(arguments),
             logURL: logURL
         )
+        ownedProcesses[process.processIdentifier] = OwnedLaunch(
+            process: process,
+            backend: backend,
+            executablePath: executablePath,
+            arguments: arguments,
+            launch: launch
+        )
+        return launch
     }
 
     public func reapFinishedProcesses() async {
-        ownedProcesses = ownedProcesses.filter { $0.value.isRunning }
+        ownedProcesses = ownedProcesses.filter { $0.value.process.isRunning }
     }
 
     private func rotateLogs(in directoryURL: URL, retaining limit: Int) throws {

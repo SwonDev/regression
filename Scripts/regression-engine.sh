@@ -53,11 +53,22 @@ prepare_titan_quest_2_steam_entrypoint()
     export REGRESSION_EXTERNAL_D3DMETAL_ROUTE_0_WINE_ROOT="$component/wine"
 }
 
+prepare_windows_media_component()
+{
+    local installer="$ROOT/Contents/SharedSupport/bin/install-windows-media-component"
+
+    [[ -x "$installer" ]] || return 0
+    if ! "$installer" --verify-only >/dev/null 2>&1; then
+        "$installer" >/dev/null 2>&1 || return 0
+    fi
+}
+
 # Steam hereda únicamente rutas compiladas y verificadas. Tanto el botón de
 # Regression (`Steam.exe -applaunch 1154030`) como «Jugar» dentro de Steam pasan
 # por el mismo bootstrap. El router de Wine sustituye su imagen de startup por
 # el Shipping exacto y aplica D3DMetal solo en ese proceso. Mantener una única
 # ruta evita diferencias de argv, Steamworks y EOS entre ambos puntos de entrada.
 prepare_titan_quest_2_steam_entrypoint
+prepare_windows_media_component
 
 exec "$W/bin/wine" "$STEAM" "$@"

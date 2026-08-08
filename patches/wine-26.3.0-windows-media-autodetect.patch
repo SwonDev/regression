@@ -1,0 +1,129 @@
+--- a/dlls/ntdll/unix/loader.c
++++ b/dlls/ntdll/unix/loader.c
+@@ -25,6 +25,7 @@
+ #include "config.h"
+ 
+ #include <assert.h>
++#include <dirent.h>
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <stdarg.h>
+@@ -581,6 +582,110 @@
+     entry[i++] = 'b';
+     entry[i] = 0;
+     add_load_order_override( entry );
++}
++
++/* Enable the optional LGPL Windows Media codec component only for Steam games
++ * whose own content tree contains ASF/WMA/WMV assets.  The scan is deliberately
++ * bounded, read-only and does not follow symlinks.  This keeps the extra
++ * GStreamer plugins out of Steam, CEF and every game that does not need them. */
++static int regression_legacy_media_extension( const char *name )
++{
++    const char *extension = strrchr( name, '.' );
++
++    return extension && (!strcasecmp( extension, ".wma" ) ||
++                         !strcasecmp( extension, ".wmv" ) ||
++                         !strcasecmp( extension, ".asf" ));
++}
++
++static int regression_tree_contains_legacy_media( const char *directory,
++                                                  unsigned int depth,
++                                                  unsigned int *budget )
++{
++    struct dirent *entry;
++    DIR *stream;
++    int found = 0;
++
++    if (!depth || !*budget || !(stream = opendir( directory ))) return 0;
++    while (!found && *budget && (entry = readdir( stream )))
++    {
++        struct stat st;
++        char path[PATH_MAX];
++        int length;
++
++        if (!strcmp( entry->d_name, "." ) || !strcmp( entry->d_name, ".." )) continue;
++        --*budget;
++        length = snprintf( path, sizeof(path), "%s/%s", directory, entry->d_name );
++        if (length < 0 || (size_t)length >= sizeof(path) || lstat( path, &st )) continue;
++        if (S_ISREG( st.st_mode ) && regression_legacy_media_extension( entry->d_name ))
++            found = 1;
++        else if (S_ISDIR( st.st_mode ))
++            found = regression_tree_contains_legacy_media( path, depth - 1, budget );
++    }
++    closedir( stream );
++    return found;
++}
++
++static char *regression_steam_game_root( const char *executable )
++{
++    static const char marker[] = "/steamapps/common/";
++    const char *game, *separator;
++    char *root;
++    size_t length;
++
++    if (!(game = strstr( executable, marker ))) return NULL;
++    game += sizeof(marker) - 1;
++    if (!*game || !(separator = strchr( game, '/' )) || separator == game) return NULL;
++    length = separator - executable;
++    if (length >= PATH_MAX || !(root = malloc( length + 1 ))) return NULL;
++    memcpy( root, executable, length );
++    root[length] = 0;
++    return root;
++}
++
++static void regression_set_windows_media_compatibility(void)
++{
++    const char *home, *existing_plugins;
++    char *unix_executable = NULL, *game_root = NULL, *plugin_path = NULL;
++    char component_plugins[PATH_MAX], resolved_plugins[PATH_MAX];
++    char asf_plugin[PATH_MAX], libav_plugin[PATH_MAX];
++    unsigned int budget = 4096;
++    NTSTATUS status;
++    int length;
++
++    status = ntdll_get_unix_file_name( main_wargv[0], &unix_executable, FILE_OPEN );
++    if (status && status != STATUS_NO_SUCH_FILE) goto done;
++    if (!unix_executable || !(game_root = regression_steam_game_root( unix_executable ))) goto done;
++    if (!regression_tree_contains_legacy_media( game_root, 7, &budget )) goto done;
++
++    if (!(home = getenv( "HOME" )) || !home[0]) goto done;
++    length = snprintf( component_plugins, sizeof(component_plugins),
++                       "%s/Library/Application Support/Regression/Components/"
++                       "WindowsMedia/1/gstreamer-1.0", home );
++    if (length < 0 || (size_t)length >= sizeof(component_plugins)) goto done;
++    length = snprintf( asf_plugin, sizeof(asf_plugin), "%s/libgstasf.dylib", component_plugins );
++    if (length < 0 || (size_t)length >= sizeof(asf_plugin) || access( asf_plugin, R_OK )) goto done;
++    length = snprintf( libav_plugin, sizeof(libav_plugin), "%s/libgstlibav.dylib", component_plugins );
++    if (length < 0 || (size_t)length >= sizeof(libav_plugin) || access( libav_plugin, R_OK )) goto done;
++    if (!realpath( component_plugins, resolved_plugins )) goto done;
++
++    existing_plugins = getenv( "GST_PLUGIN_PATH" );
++    if (existing_plugins && existing_plugins[0])
++    {
++        if (asprintf( &plugin_path, "%s:%s", resolved_plugins, existing_plugins ) < 0)
++            plugin_path = NULL;
++    }
++    else plugin_path = strdup( resolved_plugins );
++    if (!plugin_path) goto done;
++
++    setenv( "GST_PLUGIN_PATH", plugin_path, 1 );
++    setenv( "REGRESSION_WINDOWS_MEDIA_PROFILE", "windows-media-gstreamer-1@1", 1 );
++    fprintf( stderr, "Regression: activated isolated Windows Media codecs for %s.\n",
++             unix_executable );
++
++done:
++    free( plugin_path );
++    free( game_root );
++    free( unix_executable );
+ }
+ 
+ static void regression_set_graphics_backend(void)
+@@ -2603,6 +2708,7 @@
+         }
+     }
+ 
++    regression_set_windows_media_compatibility();
+     regression_set_graphics_backend();
+ 
+     server_init_process_done();

@@ -283,6 +283,12 @@ backend y nota de evidencia. Nunca se infiere “perfecto” de un cierre normal
   inicial de la ventana: el parche propio `winemac-gl-surface-resync` re-sincroniza el tamaño
   en el propio swap. Run blindado: `BAAC2B06-3CAD-467A-B1F1-834B76B794AD`. Expediente:
   [`docs/games/fields-of-mistria.md`](docs/games/fields-of-mistria.md).
+- **Forsaken Isle** — .NET 4.5 + MonoGame/SharpDX; el fallo `0xC00D36BB` procedía de siete
+  pistas WMA2/ASF sin demultiplexor/decodificador en Wine GStreamer. Regression detecta esos
+  medios dentro de la raíz acotada del juego y activa solo en su proceso un componente LGPL
+  verificado y autorreparable. Menú, creación de mundo y gameplay prolongado confirmados
+  perfectos. Observación blindada: `31104A67-1DE6-4C6D-BE5D-797A60648769`. Expediente:
+  [`docs/games/forsaken-isle.md`](docs/games/forsaken-isle.md).
 - **D3D9**: DXVK 1.10.3.
 - **Packaging**: app autocontenida (~1,8 GB, PE sin strip — el strip rompía el unwind SEH),
   firmada con identidad de desarrollo estable, runtime endurecido e icono propio.
@@ -375,6 +381,7 @@ Regression.app/
     ├── Resources/Regression.icns # icono (squircle, degradado azul-púrpura + R)
     └── SharedSupport/
         ├── bin/regressionctl     # diagnóstico, perfiles, exportación y conmutación
+        ├── components/windows-media/1/ # ASF/WMA LGPL, firmado y manifestado
         └── wine-root/            # runtime propio autocontenido
             ├── bin/                  # wine, wineserver, ...
             ├── lib/wine/
@@ -419,6 +426,7 @@ clicks desalineados y contenido negro. **No tocar esto sin leer la sección 6.**
 | DXMT | github.com/3Shain/dxmt (**v0.72**) | LGPL-2.1+ | Compilado + parche cross-process propio |
 | LLVM 15.0.7 | llvm-project | Apache | Backend airconv de DXMT |
 | SPIRV-Headers, libffi, pcre2, SDL2, corefonts | repos oficiales / SourceForge | varias | toolchain/botella |
+| GStreamer ASF + gst-libav 1.24.4, FFmpeg 6.1.6 | fuentes oficiales fijadas | LGPL | componente multimedia aislado por contenido |
 | D3DMetal.framework, libd3dshared, PE d3d12* | Game Porting Toolkit instalado localmente | Apple | Binarios locales, uso personal (NO redistribuible) |
 | Fuente CJK (msyh, simsun, SourceHan) | botella Steam de CrossOver del usuario | MS/OFL | Copia local |
 
@@ -469,6 +477,7 @@ bash build/build-wine.sh             # configure --enable-archs=i386,x86_64, CFL
 # 4) Gráficos
 bash build/build-vkd3d-dxvk.sh       # vkd3d libs + DXVK (PE mingw)
 bash build/build-dxmt.sh             # DXMT win64 (PE + winemetal.so)
+bash build/build-windows-media-component.sh # ASF/WMA2 LGPL x86_64, manifiesto y firmas
 # MoltenVK: sources-26.3.0/moltenvk (git init + remote KhronosGroup; SPIRV-Cross rev upstream;
 # stubs en External/SPIRV-Cross/spirv_msl.hpp) → xcodebuild MoltenVKPackaging
 # 5) Botella
@@ -552,6 +561,12 @@ Gotchas de build (todos resueltos, no redescubrir):
     `TQ2\\Binaries\\Win64\\TQ2-Win64-Shipping.exe` antes de mapear PE. El router externo solo
     acepta ese ejecutable final y el componente GPTK 4.0b2 verificado por manifiesto. No usar un
     bypass global de VC++, no ejecutar rutas aprendidas y no mover GPTK 4 al runtime general.
+16. **Windows Media = detección de contenido acotada, nunca entorno global.** El loader solo
+    examina el árbol del juego en ejecución bajo `steamapps/common` y activa ASF/WMA/WMV si el
+    componente `WindowsMedia/1` supera su manifiesto. No instalar codecs en `system32`, no fijar
+    `GST_PLUGIN_PATH` en Steam y no relocalizar únicamente los plugins: `winegstreamer.so` y los
+    plugins deben resolver una sola instancia GStreamer. El asset público relocaliza el conjunto
+    completo y regenera el manifiesto. Ver `docs/games/forsaken-isle.md`.
 
 ---
 
@@ -668,7 +683,8 @@ límites de la prueba están en
    públicas/reimplementación, de forma aislada por juego y sin aplicación automática todavía.
 4. Mantener el diagnóstico de MoltenVK/D3D12 como investigación del motor propio, sin invalidar el
    funcionamiento ya confirmado de FFT por otra ruta.
-5. **Wine Mono 10.4.1** para juegos .NET cuando un título real lo requiera.
+5. Mantener Wine Mono 10.4.1 y el componente Windows Media LGPL como capacidades separadas:
+   CLR por runtime y ASF/WMA/WMV solo por detección acotada de contenido.
 6. Construir y medir un runtime arm64/WoW64 aislado antes de macOS 28; conservar Rosetta como
    baseline mientras sea la ruta verificada y como fallback heredado cuando el sistema lo permita.
 7. Convertir requisitos aprendidos en recomendaciones tipadas y, después, en recetas permitidas
@@ -682,7 +698,8 @@ límites de la prueba están en
 - `patches/` — **los parches propios** (lo único de código Wine/DXMT versionado): consumer
   IOSurface para winemac.drv, presentación cross-process para DXMT v0.72, routing gráfico
   aislado por ejecutable para Wine CX 26.3.0 y re-sincronización de la CGL surface de
-  winemac tras la transición a pantalla completa (`wine-26.3.0-winemac-gl-surface-resync`).
+  winemac tras la transición a pantalla completa (`wine-26.3.0-winemac-gl-surface-resync`) y
+  autodetección acotada de medios ASF/WMA/WMV (`wine-26.3.0-windows-media-autodetect`).
 - `Regression.app/` — LA APP (autocontenida, firmada). **Canónica**: `/Applications/Regression.app`
   es un symlink a ella (el `--prefix` del wine va horneado a esta ruta; no mover sin recompilar).
   *(No versionada: 1,7 GB y contiene binarios del GPTK de Apple no redistribuibles.)*

@@ -67,7 +67,7 @@ public struct VerifiedGameCertification: Codable, Equatable, Identifiable, Senda
 /// motor ni sustituye la telemetría: evita perder el estado blindado al regenerar los datos
 /// locales. Solo se añade una entrada después de validar render, entrada, opciones y gameplay.
 public enum VerifiedGameCatalog {
-    public static let revision = "2026-08-08.1"
+    public static let revision = "2026-08-08.2"
 
     public static let all: [VerifiedGameCertification] = [
         VerifiedGameCertification(
@@ -152,6 +152,18 @@ public enum VerifiedGameCatalog {
                 "9d3e77a78a6501f33b32705937555a833f7fa3966011e02616d3811f592146b9",
             engineFingerprint:
                 "9d3e77a78a6501f33b32705937555a833f7fa3966011e02616d3811f592146b9"
+        ),
+        VerifiedGameCertification(
+            appID: "347940",
+            gameName: "Forsaken Isle",
+            backend: .regression,
+            verifiedAt: "2026-08-08",
+            evidence: "docs/games/forsaken-isle.md",
+            sourceObservationID: UUID(uuidString: "31104A67-1DE6-4C6D-BE5D-797A60648769"),
+            configurationFingerprint:
+                "f6c2734165d679081d1f3e9126126561a19e375ef681bd8dfc84ef6f0788be69",
+            engineFingerprint:
+                "f6c2734165d679081d1f3e9126126561a19e375ef681bd8dfc84ef6f0788be69"
         )
     ]
 
