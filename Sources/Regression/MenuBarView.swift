@@ -604,6 +604,12 @@ struct MenuBarView: View {
                         set: { model.toggleAutoLaunch($0) }
                     ))
 
+                    Divider()
+
+                    regressionUpdateSection
+
+                    Divider()
+
                     if let update = model.updateStatus {
                         HStack {
                             Text("CrossOver \(update.installedVersion)")
@@ -663,6 +669,78 @@ struct MenuBarView: View {
             Button("Salir de Regression") { NSApplication.shared.terminate(nil) }
                 .buttonStyle(.borderless)
                 .keyboardShortcut("q")
+        }
+    }
+
+    @ViewBuilder
+    private var regressionUpdateSection: some View {
+        switch model.regressionReleaseStatus {
+        case .checking:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Buscando actualizaciones de Regression…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case let .upToDate(installedVersion, checkedAt):
+            HStack {
+                Label("Regression \(installedVersion)", systemImage: "checkmark.circle")
+                Spacer()
+                Button("Comprobar") { model.refreshRegressionReleaseStatus() }
+                    .buttonStyle(.borderless)
+            }
+            .font(.caption)
+            Text("Actualizado · comprobado \(checkedAt.formatted(date: .omitted, time: .shortened))")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        case let .available(installedVersion, release):
+            VStack(alignment: .leading, spacing: 6) {
+                Label(
+                    "Regression \(release.version) disponible",
+                    systemImage: "arrow.down.circle.fill"
+                )
+                .font(.callout.weight(.medium))
+                .foregroundStyle(.blue)
+                Text("Instalada: \(installedVersion). La botella, los juegos y el GPTK local se conservan.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Actualizar y reiniciar") {
+                    Task { await model.installAvailableRegressionUpdate() }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(model.operation.isBusy || model.runningState.regressionIsRunning)
+                .help(
+                    model.runningState.regressionIsRunning
+                        ? "Cierra Steam del motor Regression antes de actualizar"
+                        : "Descarga, verifica e instala Regression \(release.version)"
+                )
+            }
+        case let .downloading(version):
+            updateProgress("Descargando el instalador verificado de Regression \(version)…")
+        case let .installing(version):
+            updateProgress("Instalando Regression \(version) y reiniciando…")
+        case let .failed(message):
+            VStack(alignment: .leading, spacing: 5) {
+                Label("No se pudo comprobar o preparar la actualización", systemImage: "exclamationmark.triangle")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.orange)
+                Text(message)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Reintentar") { model.refreshRegressionReleaseStatus() }
+                    .buttonStyle(.borderless)
+            }
+        }
+    }
+
+    private func updateProgress(_ title: String) -> some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 

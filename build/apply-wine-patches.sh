@@ -8,6 +8,7 @@ PATCHES=(
     "$ROOT/patches/wine-26.3.0-winemac-cxpresent-consumer.patch"
     "$ROOT/patches/wine-26.3.0-per-process-graphics-routing.patch"
     "$ROOT/patches/wine-26.3.0-per-process-retina.patch"
+    "$ROOT/patches/wine-26.3.0-winemac-gl-surface-resync.patch"
 )
 
 [[ -d "$WINE_SOURCE" ]] || {

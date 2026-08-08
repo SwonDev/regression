@@ -24,6 +24,67 @@ y por qué no se redistribuyen. Licencia: LGPL-2.1+ (`LICENSE`).
 
 ---
 
+## Instalación para usuarios (instalador autodetectante y autodescargable)
+
+Desde la release `v1.7.4` hay un asset instalable para cualquier Mac con Apple Silicon:
+
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/SwonDev/regression/releases/download/v1.7.4/install_regression.sh | bash
+```
+
+El instalador (`Scripts/install_regression.sh`, auditable antes de ejecutarlo) ejecuta siete
+fases verificadas y transaccionales:
+
+1. **Comprueba el Mac**: Apple Silicon, macOS 14+, Rosetta 2 (la instala si falta), firma local
+   y CrossOver como backend opcional con la licencia del usuario.
+2. **Descarga y verifica** el asset del release mediante SHA-256 antes de extraerlo.
+3. **Extrae de forma segura** una app compilada con el `--prefix` horneado a
+   `/Applications/Regression.app`; rechaza rutas inesperadas o no normalizadas.
+4. **Conserva componentes locales autorizados**: reutiliza D3DMetal desde la instalación del
+   GPTK, Whisky o Mythic del propio usuario. Apple no permite redistribuirlo; si no existe, solo
+   los perfiles D3DMetal quedan en espera.
+5. **Prepara la botella propia** con fuentes libres Source Han Sans, instala Steam en silencio
+   desde el instalador oficial de Valve y activa el bus SDL necesario para Switch2Bridge. Las
+   fuentes Microsoft no se incluyen ni se extraen de CrossOver.
+6. **Firma y valida** la app y sus cuatro capacidades requeridas con una identidad local o firma
+   ad hoc.
+7. **Sustituye con rollback**: conserva la app anterior, mueve el candidato ya verificado y, en
+   macOS 15+, instala y activa el demonio incluido de Switch2Bridge. Cualquier fallo posterior a
+   la sustitución restaura la instalación previa.
+
+### Mandos Nintendo Switch 2
+
+Switch2Bridge es parte de la distribución oficial de Regression. El release compila su demonio
+arm64 y su shim SDL x86_64 desde el repositorio público
+[`SwonDev/Switch2Bridge`](https://github.com/SwonDev/Switch2Bridge), fijado al commit
+`ff2e1a1d99c8529a8f693fa4ab7cf82583cd3d7d`, y conserva su licencia MIT dentro del bundle. En
+macOS 15 o posterior, el instalador coloca el puente en `~/Applications`, registra su LaunchAgent
+y habilita SDL únicamente en la botella propia de Regression. El runtime real de SDL queda al
+lado de la shim mediante una ruta `@loader_path`, sin depender de rutas del Mac que produjo el
+release. Así los mandos Nintendo Switch 2 Pro siguen disponibles tras una instalación limpia o
+una actualización automática.
+
+Modos: `--check` (solo diagnóstico), `--prefix DIR`, `--yes`, `--launch`, `--help`.
+Cuarentena: los archivos descargados con `curl` no reciben el atributo de cuarentena, y el
+instalador firma la app en tu Mac; si la descargas a mano con el navegador, basta
+`xattr -dr com.apple.quarantine /Applications/Regression.app` una sola vez.
+
+Sin cuenta de desarrollador de Apple (gratuita) el GPTK no puede descargarse
+automáticamente: Apple lo exige. Con CrossOver tampoco hace falta GPTK para el backend
+predeterminado; el motor propio funciona sin él salvo los perfiles D3DMetal.
+
+Regression consulta en segundo plano la última release estable de GitHub. Cuando existe una
+versión posterior, el popover muestra **Actualizar y reiniciar**. Antes de ejecutar nada verifica
+el SHA-256 que GitHub publica para `install_regression.sh`; el instalador verifica además el
+SHA-256 del bundle, espera el cierre limpio de Regression y conserva la botella, los juegos, la
+base local y el GPTK previamente autorizado. Los borradores y prereleases nunca se ofrecen.
+
+El bundle público no está notarizado porque el proyecto no dispone todavía de una identidad
+Developer ID Application; el instalador lo firma en el propio Mac. No se afirma una notarización
+que Apple no haya emitido.
+
+---
+
 ## 0. Arquitectura operativa temporal (2026-07-28)
 
 1. `Regression.app` se inicia como `LSUIElement`: aparece en la barra de menús y no en el Dock.
@@ -400,7 +461,7 @@ bash build/build-dxmt.sh             # DXMT win64 (PE + winemetal.so)
 # 5) Botella
 bash build/create-steam-bottle.sh    # prefijo + receta crosstie + corefonts
 # 6) App
-make -C build/wine64 install DESTDIR=stage + strip (ver sección 7) → montar SharedSupport
+make -C build/wine64 install DESTDIR=stage → montar SharedSupport (módulos PE sin strip)
 bash build/build-dd2-profile.sh        # build incremental compatible del router de perfiles
 bash build/build-heroes-hammerwatch-2-profile.sh  # perfil OpenGL reproducible sin UUID
 bash build/install-game-profiles.sh    # fija Grim Dawn/DD2/DragonSword/HWR2, backup y firma
@@ -489,7 +550,9 @@ Gotchas de build (todos resueltos, no redescubrir):
 - **Routing gráfico por ejecutable en ntdll**: cada perfil se antepone únicamente en su proceso;
   Grim Dawn, DD2, DragonSword y HWR2 no alteran Steam, Cube World, FFT ni el backend global.
 - **Botella fuera de la app**: datos de usuario (login, juegos) separados del artefacto firmado.
-- **Strip agresivo** del runtime (mingw-strip PE, strip -x .so): 1,5 GB → 596 MB.
+- **PE sin strip**: se conservan `.pdata`, `.xdata`, unwind/SEH y símbolos necesarios de los
+  módulos builtin. El asset público elimina únicamente símbolos de depuración Mach-O y material
+  de desarrollo que un usuario final no necesita.
 
 ---
 

@@ -3,6 +3,7 @@ import Observation
 import OSLog
 import RegressionCore
 import SwiftUI
+import UserNotifications
 
 enum AppOperation: Equatable {
     case discovering
@@ -70,6 +71,7 @@ final class RegressionAppModel {
     var testReadiness: GameTestPreflightReport?
     var readinessIsRefreshing = false
     var updateStatus: CrossOverUpdateStatus?
+    var regressionReleaseStatus: RegressionReleaseUpdateStatus = .checking
     var failure: UserFacingFailure?
     var statusDetail = "Buscando CrossOver y las botellas de Steam…"
     var autoLaunchEnabled: Bool
@@ -88,15 +90,19 @@ final class RegressionAppModel {
     @ObservationIgnored private let configurationCollector = ConfigurationSnapshotCollector()
     @ObservationIgnored private let processLogReader = ProcessLogReader()
     @ObservationIgnored private let updateChecker = CrossOverUpdateChecker()
+    @ObservationIgnored private let regressionReleaseService = RegressionReleaseUpdateService()
+    @ObservationIgnored private let applicationSupportURL: URL
     @ObservationIgnored private let logger = Logger(
         subsystem: "local.regression.launcher",
         category: "lifecycle"
     )
     @ObservationIgnored private var monitoringTask: Task<Void, Never>?
     @ObservationIgnored private var externalCatalogTask: Task<Void, Never>?
+    @ObservationIgnored private var regressionUpdateTask: Task<Void, Never>?
     @ObservationIgnored private var externalCatalogSyncID: UUID?
     @ObservationIgnored private var didBootstrap = false
     @ObservationIgnored private var periodicRefreshCount = 0
+    @ObservationIgnored private let regressionUpdateCheckCycle = 10_800
     @ObservationIgnored private var profilesByAppID: [String: [CompatibilityProfile]] = [:]
     @ObservationIgnored private var certificationsByAppID = Dictionary(
         grouping: VerifiedGameCatalog.all,
@@ -123,6 +129,7 @@ final class RegressionAppModel {
 
         let applicationSupport = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/Regression", isDirectory: true)
+        applicationSupportURL = applicationSupport
         processRunner = ProcessRunner()
         processLauncher = ProcessLauncher()
         inspector = ProcessInspector(runner: processRunner)
@@ -275,6 +282,7 @@ final class RegressionAppModel {
         Task { [weak self] in
             await self?.refreshUpdateStatus()
         }
+        scheduleRegressionReleaseCheck()
 
         monitoringTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -664,6 +672,9 @@ final class RegressionAppModel {
         externalCatalogSyncID = nil
         catalog?.cancel()
 
+        regressionUpdateTask?.cancel()
+        regressionUpdateTask = nil
+
         // No esperar indefinidamente a tareas de red ya canceladas. Las operaciones SQLite
         // pendientes se serializan en el actor del repositorio antes del cierre; al terminar
         // esta función AppKit finalizará el proceso y no podrá aparecer trabajo nuevo.
@@ -683,6 +694,57 @@ final class RegressionAppModel {
 
     func openPublicCatalog() {
         NSWorkspace.shared.open(CodeWeaversCompatibilityProvider.codeWeaversSource.baseURL)
+    }
+
+    func refreshRegressionReleaseStatus() {
+        scheduleRegressionReleaseCheck(force: true)
+    }
+
+    func installAvailableRegressionUpdate() async {
+        guard case let .available(_, release) = regressionReleaseStatus else { return }
+        guard !runningState.regressionIsRunning else {
+            regressionReleaseStatus = .failed(
+                message: "Cierra Steam del motor Regression antes de actualizar la aplicación."
+            )
+            return
+        }
+
+        regressionReleaseStatus = .downloading(version: release.version)
+        do {
+            let updateDirectory = applicationSupportURL
+                .appendingPathComponent("Updates", isDirectory: true)
+                .appendingPathComponent("v\(release.version)", isDirectory: true)
+            let installerURL = try await regressionReleaseService.downloadInstaller(
+                for: release,
+                to: updateDirectory
+            )
+            let logURL = updateDirectory.appendingPathComponent("install.log")
+            FileManager.default.createFile(atPath: logURL.path, contents: nil)
+            let log = try FileHandle(forWritingTo: logURL)
+
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/bash")
+            process.arguments = [
+                installerURL.path,
+                "--yes",
+                "--launch",
+                "--wait-for-pid",
+                String(ProcessInfo.processInfo.processIdentifier),
+            ]
+            process.standardOutput = log
+            process.standardError = log
+            do {
+                try process.run()
+            } catch {
+                try? log.close()
+                throw error
+            }
+            try? log.close()
+            regressionReleaseStatus = .installing(version: release.version)
+            NSApplication.shared.terminate(nil)
+        } catch {
+            regressionReleaseStatus = .failed(message: error.localizedDescription)
+        }
     }
 
     func openExternalCompatibility(for game: SteamGame) {
@@ -771,6 +833,9 @@ final class RegressionAppModel {
         }
         if telemetryChanged || periodicRefreshCount.isMultiple(of: 15) {
             await refreshStoredData(includeHealth: periodicRefreshCount.isMultiple(of: 900))
+        }
+        if periodicRefreshCount.isMultiple(of: regressionUpdateCheckCycle) {
+            scheduleRegressionReleaseCheck()
         }
     }
 
@@ -1039,6 +1104,72 @@ final class RegressionAppModel {
             return
         }
         updateStatus = await updateChecker.check(crossOver)
+    }
+
+    private func scheduleRegressionReleaseCheck(force: Bool = false) {
+        guard regressionUpdateTask == nil || force else { return }
+        regressionUpdateTask?.cancel()
+        regressionReleaseStatus = .checking
+        regressionUpdateTask = Task { [weak self] in
+            guard let self else { return }
+            let installedVersion = Bundle.main.object(
+                forInfoDictionaryKey: "CFBundleShortVersionString"
+            ) as? String ?? "1.7.4"
+            do {
+                let status = try await regressionReleaseService.check(
+                    installedVersion: installedVersion
+                )
+                guard !Task.isCancelled else { return }
+                regressionReleaseStatus = status
+                if case let .available(_, release) = status {
+                    await notifyAboutAvailableRegressionRelease(release)
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled else { return }
+                regressionReleaseStatus = .failed(message: error.localizedDescription)
+            }
+            regressionUpdateTask = nil
+        }
+    }
+
+    private func notifyAboutAvailableRegressionRelease(_ release: RegressionRelease) async {
+        let defaultsKey = "lastNotifiedRegressionRelease"
+        guard UserDefaults.standard.string(forKey: defaultsKey) != release.version else { return }
+
+        let center = UNUserNotificationCenter.current()
+        let settings = await center.notificationSettings()
+        let authorized: Bool
+        switch settings.authorizationStatus {
+        case .authorized, .provisional:
+            authorized = true
+        case .notDetermined:
+            authorized = (try? await center.requestAuthorization(options: [.alert, .sound])) == true
+        case .denied, .ephemeral:
+            authorized = false
+        @unknown default:
+            authorized = false
+        }
+        guard authorized else { return }
+
+        let content = UNMutableNotificationContent()
+        content.title = "Regression \(release.version) disponible"
+        content.body = "Abre Regression para actualizar sin perder tu botella, juegos ni Switch2Bridge."
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: "regression-release-v\(release.version)",
+            content: content,
+            trigger: nil
+        )
+        do {
+            try await center.add(request)
+            UserDefaults.standard.set(release.version, forKey: defaultsKey)
+        } catch {
+            logger.error(
+                "No se pudo mostrar la notificación de Regression \(release.version): \(error.localizedDescription, privacy: .public)"
+            )
+        }
     }
 
     private func collectTestReadiness(

@@ -14,10 +14,17 @@ el build necesitas obtenerlos tú mismo:
 | MoltenVK (build CX) | 1.2.10 | incluido en CrossOver Sources | Apache-2.0 |
 | LLVM | 15 | https://llvm.org | Apache-2.0 + LLVM exceptions |
 | mingw-w64 | — | https://www.mingw-w64.org | Zpl/MIT |
+| Source Han Sans | 2.005R | https://github.com/adobe-fonts/source-han-sans | SIL Open Font License 1.1 |
+| Switch2Bridge | commit `ff2e1a1d99c8529a8f693fa4ab7cf82583cd3d7d` | https://github.com/SwonDev/Switch2Bridge | MIT |
 
 Descomprime el tarball de CrossOver como `sources-26.3.0/` en la raíz del proyecto y aplica
 `patches/wine-26.3.0-winemac-cxpresent-consumer.patch`. Clona DXMT en `build/toolchain/dxmt-src`,
 checkout `v0.72` y aplica `patches/dxmt-v0.72-cross-process-present.patch`.
+
+El asset de usuario compila Switch2Bridge desde el commit y archivo oficial fijados por
+`Scripts/package_release.sh`. Incluye tanto el demonio arm64 como la shim SDL x86_64, su licencia
+MIT y la fuente de la shim. El instalador lo activa solo en macOS 15 o posterior y modifica
+únicamente la botella propia de Regression.
 
 ## Binarios con licencia restrictiva (NO redistribuibles)
 
@@ -25,8 +32,14 @@ checkout `v0.72` y aplica `patches/dxmt-v0.72-cross-process-present.patch`.
   evaluación de Apple, solo uso local. Descargar de https://developer.apple.com/games/
   (cuenta de desarrollador). Se copian a
   `Regression.app/Contents/SharedSupport/wine-root/lib/apple_gptk/` durante el empaquetado.
+  El asset instalable del release **no los incluye**: `Scripts/install_regression.sh` los
+  detecta en el Mac del usuario (GPTK, Whisky o Mythic) y los copia localmente.
 - **Steam** (Valve): `SteamSetup.exe` de https://store.steampowered.com/about/ — el usuario lo
   instala en su propia botella.
+- **Fuentes Microsoft** (`msyh.ttc`, `simsun.ttc` y corefonts): no se incluyen en el asset
+  público. Las copias que existan en una botella privada del usuario permanecen locales y el
+  instalador nunca las extrae de CrossOver. El asset usa únicamente Source Han Sans desde su
+  distribución oficial bajo SIL Open Font License y las fuentes integradas legalmente en Wine.
 
 ## Qué más falta para reproducir (generado localmente, no versionado)
 
