@@ -67,7 +67,7 @@ public struct VerifiedGameCertification: Codable, Equatable, Identifiable, Senda
 /// motor ni sustituye la telemetría: evita perder el estado blindado al regenerar los datos
 /// locales. Solo se añade una entrada después de validar render, entrada, opciones y gameplay.
 public enum VerifiedGameCatalog {
-    public static let revision = "2026-07-29.5"
+    public static let revision = "2026-08-08.1"
 
     public static let all: [VerifiedGameCertification] = [
         VerifiedGameCertification(
@@ -128,6 +128,30 @@ public enum VerifiedGameCatalog {
                 "af59b82a9e8102995ccbf5a9c93e1e9e6c62afe3213bea8a0bbe2ff7726236f1",
             engineFingerprint:
                 "af59b82a9e8102995ccbf5a9c93e1e9e6c62afe3213bea8a0bbe2ff7726236f1"
+        ),
+        VerifiedGameCertification(
+            appID: "269770",
+            gameName: "Secrets of Grindea",
+            backend: .regression,
+            verifiedAt: "2026-08-02",
+            evidence: "docs/games/secrets-of-grindea.md",
+            sourceRunID: UUID(uuidString: "953B6822-AC77-4977-B862-B206D3CE16AE"),
+            configurationFingerprint:
+                "8bf2d0909a1d0ed0500a900183492136eb54a4396f72ad15a28940a0dfd3c61f",
+            engineFingerprint:
+                "2dca5d61f65d10ac63fa3876c4af0c62f078b7f6f884c208d9590db8f746b820"
+        ),
+        VerifiedGameCertification(
+            appID: "2142790",
+            gameName: "Fields of Mistria",
+            backend: .regression,
+            verifiedAt: "2026-08-07",
+            evidence: "docs/games/fields-of-mistria.md",
+            sourceRunID: UUID(uuidString: "BAAC2B06-3CAD-467A-B1F1-834B76B794AD"),
+            configurationFingerprint:
+                "9d3e77a78a6501f33b32705937555a833f7fa3966011e02616d3811f592146b9",
+            engineFingerprint:
+                "9d3e77a78a6501f33b32705937555a833f7fa3966011e02616d3811f592146b9"
         )
     ]
 

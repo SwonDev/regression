@@ -1,0 +1,45 @@
+--- a/dlls/winemac.drv/opengl.c
++++ b/dlls/winemac.drv/opengl.c
+@@ -71,6 +71,7 @@
+     macdrv_view             read_view;
+     CGLPBufferObj           read_pbuffer;
+     int                     swap_interval;
++    RECT                    draw_rect; /* Regression: last client rect synced to the CGL surface */
+ };
+ 
+ struct gl_drawable
+@@ -2021,6 +2022,26 @@
+ 
+     if (!context) return;
+     if (flags & GL_FLUSH_INTERVAL) set_swap_interval(context, base->interval);
++
++    /* Regression: win32u hands GL_FLUSH_UPDATED to us only once per resize, and
++     * that token can be lost — a fullscreen transition is several SetWindowPos
++     * calls while the render thread keeps swapping, and the plain assignment
++     * "flags = GL_FLUSH_INTERVAL" in opengl_drawable_flush() wipes it as well.
++     * The CGL surface then stays pinned to the initial backing size (1x1) and
++     * gets stretched across the whole window.  Re-sync whenever the live client
++     * rect has actually changed so the next present uses the real size. */
++    if (context->draw_view && context->draw_hwnd == base->client->hwnd)
++    {
++        RECT rect;
++
++        NtUserGetClientRect(context->draw_hwnd, &rect, NtUserGetDpiForWindow(context->draw_hwnd));
++        if (!EqualRect(&rect, &context->draw_rect))
++        {
++            context->draw_rect = rect;
++            flags |= GL_FLUSH_UPDATED;
++        }
++    }
++
+     if (flags & GL_FLUSH_UPDATED) make_context_current(context, context->read_view == client->cocoa_view);
+ }
+ 
+@@ -2290,6 +2311,7 @@
+         struct macdrv_client_surface *client = impl_from_client_surface(draw->base.client);
+         context->draw_hwnd = draw->base.client->hwnd;
+         context->draw_view = client->cocoa_view;
++        NtUserGetClientRect(context->draw_hwnd, &context->draw_rect, NtUserGetDpiForWindow(context->draw_hwnd));
+     }
+     else
+     {

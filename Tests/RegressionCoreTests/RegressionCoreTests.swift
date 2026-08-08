@@ -42,7 +42,15 @@ final class RegressionCoreTests: XCTestCase {
             VerifiedGameCatalog.certification(for: "619820")?.gameName,
             "Heroes of Hammerwatch II"
         )
-        XCTAssertEqual(VerifiedGameCatalog.revision, "2026-07-29.5")
+        XCTAssertEqual(
+            VerifiedGameCatalog.certification(for: "269770")?.gameName,
+            "Secrets of Grindea"
+        )
+        XCTAssertEqual(
+            VerifiedGameCatalog.certification(for: "2142790")?.gameName,
+            "Fields of Mistria"
+        )
+        XCTAssertEqual(VerifiedGameCatalog.revision, "2026-08-08.1")
         XCTAssertNil(VerifiedGameCatalog.certification(for: "999999999"))
     }
 

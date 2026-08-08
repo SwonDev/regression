@@ -125,7 +125,7 @@ else
 fi
 verify_hash 44b1379db1b9e3472d1746830eddd88718dbbc761de2e406d45b8be198593ef3 "Contents/SharedSupport/wine-root/lib/wine/x86_64-windows/ntdll.dll"
 verify_hash 3d2b085b1dce4db5615a2a95d96860b644e1bfd4c907d0a68d177d02bd2010e8 "Contents/SharedSupport/wine-root/lib/wine/i386-windows/ntdll.dll"
-verify_hash 50fda6d287a23324c39c75c7c887ae3ae0bf4e175c61bae4a92229053b5c65f2 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/winemac.so"
+verify_hash 4723d219a704ce6fe5a42bfe3340840083582c38f3436e0e614a205c0214f382 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/winemac.so"
 verify_hash da91ec701a18e97c0c3cd943d383ef996092c11d74983876fd44c90b03d5e5b1 "Contents/SharedSupport/wine-root/lib/wine/x86_64-windows/winemac.drv"
 verify_hash aaf38489b18bfeb967b7e6298510b46973ed79f516441b7fd74c95a3cf6b15ec "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/winemetal.so"
 verify_hash 87ed91e86f1f4620f5229b7a0d4f1f8c5436a56088e8d4692201fe0c7d5b0deb "Contents/SharedSupport/wine-root/lib/wine/x86_64-windows/d3d10core.dll"
