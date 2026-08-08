@@ -1,6 +1,6 @@
 ---
 name: Regression Native Utility
-description: Contrato visual del lanzador macOS de barra de menús para Steam mediante CrossOver o el motor propio de Regression.
+description: Contrato visual del lanzador macOS de barra de menús para ejecutar Steam de Windows con el motor propio de Regression y un comparador opcional de desarrollo.
 colors:
   primary: "#5E5CE6"
   secondary: "#0A84FF"
@@ -78,9 +78,11 @@ components:
 
 ## Overview
 
-Regression es una utilidad nativa de macOS que vive en la barra de menús. Su panel debe sentirse como una extensión discreta del sistema, no como un gestor de botellas ni como una réplica visual de CrossOver. La jerarquía prioriza el estado operativo, la acción principal para abrir Steam y la selección consciente del motor.
+Regression es una utilidad nativa de macOS que vive en la barra de menús. Su panel debe sentirse como una extensión discreta del sistema, no como un gestor de botellas ni como una réplica visual de otro producto. La jerarquía prioriza el estado operativo, la acción principal para abrir Steam y la selección consciente del motor.
 
-El panel usa controles SwiftUI y materiales de macOS. No se crean imitaciones personalizadas de Liquid Glass, barras de título ni ventanas flotantes superpuestas. La interfaz general de CrossOver solo se abre como acción de reparación, licencia o actualización. La identidad propia se concentra en la R de la barra de menús, con una variante estática y nítida para cada estado real de la aplicación.
+El panel usa controles SwiftUI y materiales de macOS. No se crean imitaciones personalizadas de Liquid Glass, barras de título ni ventanas flotantes superpuestas. La identidad propia se concentra en la R de la barra de menús, con una variante estática y nítida para cada estado real de la aplicación.
+
+La expresión pública de la marca —GitHub, documentación y releases— reutiliza la R oficial, fondos grafito, índigo como color primario, azul para acciones y verde solo para compatibilidad certificada. La voz es directa, técnica y demostrable: explica primero el resultado, reduce jerga en la portada y enlaza la evidencia profunda en vez de acumularla en el mensaje principal.
 
 ## Colors
 
@@ -125,7 +127,7 @@ Los controles conservan su forma nativa. Los contenedores auxiliares usan radios
 - **Selector de motor:** selector nativo que explica que cambiar de motor cerrará primero el Steam activo.
 - **Juegos:** campo nativo de búsqueda por nombre o App ID y filas compactas reveladas en lotes de 24, con nombre, App ID y botón de reproducción; no muestran datos privados de la cuenta. La certificación local verde y la referencia pública azul/gris son líneas independientes y siempre etiquetadas.
 - **Historial:** resumen de ejecuciones, perfiles y motores locales, blindados revelados en lotes de 8, comparación pública opcional y exportación bajo demanda. La sincronización muestra progreso y conserva el último dato válido si falla la red. La sección distingue candidatos tecnológicos de casos y pruebas reales de I+D; los contadores nunca presentan uno como si fuese el otro.
-- **Errores:** mensaje comprensible, causa técnica desplegable y una acción concreta como “Abrir CrossOver” o “Usar motor de Regression”.
+- **Errores:** mensaje comprensible, causa técnica desplegable y una acción concreta como “Reparar componente”, “Abrir diagnóstico” o “Usar motor de Regression”.
 
 ## Do's and Don'ts
 
@@ -136,7 +138,7 @@ Los controles conservan su forma nativa. Los contenedores auxiliares usan radios
 - Mantener una sola instancia de Steam activa.
 - Explicar cualquier cambio de botella, biblioteca o licencia antes de ejecutarlo.
 - Usar etiquetas, ayuda contextual y accesibilidad para todos los controles.
-- Conservar el motor propio visible como alternativa, sin activarlo silenciosamente.
+- Presentar Regression como motor predeterminado en instalaciones nuevas y conservar cualquier comparador como herramienta opcional de desarrollo.
 - Explicar qué dato público se consulta y permitir desactivar o actualizar la referencia.
 - Mantener buscables las bibliotecas grandes sin sacrificar la respuesta inmediata del popover.
 
@@ -145,7 +147,7 @@ Los controles conservan su forma nativa. Los contenedores auxiliares usan radios
 - No mostrar la aplicación en el Dock durante el uso normal.
 - No reproducir, interpolar ni fundir fotogramas en la barra de menús.
 - No animar información decorativa dentro del panel.
-- No abrir la interfaz general de CrossOver salvo reparación, actualización o licencia.
+- No convertir un comparador de desarrollo en requisito, protagonista de marca ni promesa del producto público.
 - No crear ni instalar otra botella o copia de Steam automáticamente.
 - No almacenar credenciales, identificadores de cuenta ni registros sin filtrar.
 - No iniciar simultáneamente Steam de CrossOver y Steam de Regression.

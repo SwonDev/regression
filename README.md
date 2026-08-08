@@ -1,736 +1,246 @@
-# Regression
+<p align="center">
+  <img src="assets/icon/oficial/regression-squircle.png" width="132" alt="Icono de Regression">
+</p>
 
-Aplicación nativa de barra de menús que abre Steam de Windows en macOS mediante su motor propio
-Windows→macOS, construido y distribuido a partir de componentes open-source. Una instalación
-nueva selecciona **Regression** por defecto y no necesita que el usuario instale, compre ni
-configure otro producto de compatibilidad.
+<h1 align="center">Regression</h1>
 
-El repositorio conserva un backend de comparación opcional para el laboratorio de desarrollo.
-Está aislado, no forma parte de los requisitos del release y solo se usa para contrastar
-comportamientos durante la investigación; una preferencia explícita ya guardada se respeta para
-no romper esos laboratorios.
+<p align="center">
+  <strong>Juegos de Windows en macOS, con perfiles aislados, reparación automática y evidencia real.</strong>
+</p>
 
-La aplicación registra localmente cómo se ejecuta cada juego, normaliza las configuraciones y
-compara resultados. No copia credenciales ni binarios propietarios y todavía no aplica de forma
-automática lo aprendido. Un proceso que sale con código 0 no cuenta como compatible: el éxito
-requiere una verificación visual explícita.
+<p align="center">
+  <a href="https://github.com/SwonDev/regression/releases/latest">
+    <img src="https://img.shields.io/github/v/release/SwonDev/regression?style=for-the-badge&label=release&color=5E5CE6" alt="Última release">
+  </a>
+  <img src="https://img.shields.io/badge/macOS-14%2B-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="macOS 14 o posterior">
+  <img src="https://img.shields.io/badge/Apple%20Silicon-required-1C1C1E?style=for-the-badge&logo=apple&logoColor=white" alt="Apple Silicon">
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/license-LGPL--2.1%2B-30D158?style=for-the-badge" alt="Licencia LGPL 2.1 o posterior">
+  </a>
+</p>
 
-**Independencia de distribución**: el ejecutable público, su runtime, la botella, las reparaciones
-y los perfiles de juego pertenecen a Regression. Las comparaciones de desarrollo nunca autorizan
-copiar binarios propietarios ni crean una dependencia de ejecución.
-
-**Qué contiene este repo**: documentación, scripts de build (`build/*.sh`) y los parches
-propios (`patches/`). **No** contiene las fuentes de CrossOver, los binarios del GPTK de
-Apple, la app compilada ni la botella — ver `NOTICE.md` para saber cómo obtener cada pieza
-y por qué no se redistribuyen. Licencia: LGPL-2.1+ (`LICENSE`).
-
----
-
-## Instalación para usuarios (instalador autodetectante y autodescargable)
-
-La release `v1.8.1` ofrece un asset instalable para cualquier Mac con Apple Silicon:
-
-```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://github.com/SwonDev/regression/releases/download/v1.8.1/install_regression.sh | bash
-```
-
-El instalador (`Scripts/install_regression.sh`, auditable antes de ejecutarlo) ejecuta siete
-fases verificadas y transaccionales:
-
-1. **Comprueba el Mac**: Apple Silicon, macOS 14+, Rosetta 2 (la instala si falta) y firma local.
-2. **Descarga y verifica** el asset del release mediante SHA-256 antes de extraerlo.
-3. **Extrae de forma segura** una app compilada con el `--prefix` horneado a
-   `/Applications/Regression.app`; rechaza rutas inesperadas o no normalizadas y no permite
-   instalar ese runtime fijo en una ubicación engañosa.
-4. **Conserva componentes locales autorizados**: reutiliza D3DMetal desde la instalación del
-   GPTK, Whisky o Mythic del propio usuario. Apple no permite redistribuirlo; si no existe, solo
-   los perfiles D3DMetal quedan en espera.
-5. **Prepara la botella propia** con fuentes libres Source Han Sans, instala Steam en silencio
-   desde el instalador oficial de Valve y activa el bus SDL necesario para Switch2Bridge. Las
-   fuentes Microsoft no se incluyen ni se extraen de CrossOver.
-6. **Firma y valida** la app y sus cuatro capacidades requeridas con una identidad local o firma
-   ad hoc.
-7. **Sustituye con rollback**: conserva la app anterior, mueve el candidato ya verificado y, en
-   macOS 15+, instala y activa el demonio incluido de Switch2Bridge. Cualquier fallo posterior a
-   la sustitución restaura la instalación previa.
-
-### Mandos Nintendo Switch 2
-
-Switch2Bridge es parte de la distribución oficial de Regression. El release compila su demonio
-arm64 y su shim SDL x86_64 desde el repositorio público
-[`SwonDev/Switch2Bridge`](https://github.com/SwonDev/Switch2Bridge), fijado al commit
-`ff2e1a1d99c8529a8f693fa4ab7cf82583cd3d7d`, y conserva su licencia MIT dentro del bundle. En
-macOS 15 o posterior, el instalador coloca el puente en `~/Applications`, registra su LaunchAgent
-y habilita SDL únicamente en la botella propia de Regression. El runtime real de SDL queda al
-lado de la shim mediante una ruta `@loader_path`, sin depender de rutas del Mac que produjo el
-release. Así los mandos Nintendo Switch 2 Pro siguen disponibles tras una instalación limpia o
-una actualización automática.
-
-Modos: `--check` (solo diagnóstico), `--verify-release` (descarga y audita sin instalar),
-`--yes`, `--launch`, `--help`.
-
-El mismo verificador usado al empaquetar vuelve a extraer el `.tar.zst` y exige el prefijo
-público correcto, firmas válidas, Wine x86-64, VC++/UCRT x86 y x64, Windows Media completo,
-dependencias Mach-O autocontenidas, ausencia de copias de laboratorio y ausencia de binarios
-GPTK. El instalador repite las puertas críticas antes de sustituir una instalación existente.
-Cuarentena: los archivos descargados con `curl` no reciben el atributo de cuarentena, y el
-instalador firma la app en tu Mac; si la descargas a mano con el navegador, basta
-`xattr -dr com.apple.quarantine /Applications/Regression.app` una sola vez.
-
-Sin cuenta de desarrollador de Apple (gratuita) el GPTK no puede descargarse automáticamente:
-Apple lo exige. El motor propio funciona sin GPTK salvo los perfiles D3DMetal que lo necesiten.
-
-Los perfiles que requieren una versión concreta de GPTK usan un componente local versionado en
-`~/Library/Application Support/Regression/Components/AppleGPTK`. El instalador integrado verifica
-un manifiesto de hashes y la firma de Apple, repara transaccionalmente desde el DMG oficial
-guardado en caché o en Descargas y conserva rollback. El payload de Apple nunca entra en el bundle,
-el repositorio ni los assets de GitHub; cuando Apple exige autenticación, Regression muestra la
-ruta oficial de descarga en vez de eludirla.
-
-Regression consulta en segundo plano la última release estable de GitHub. Cuando existe una
-versión posterior, el popover muestra **Actualizar y reiniciar**. Antes de ejecutar nada verifica
-el SHA-256 que GitHub publica para `install_regression.sh`; el instalador verifica además el
-SHA-256 del bundle, espera el cierre limpio de Regression y conserva la botella, los juegos, la
-base local y el GPTK previamente autorizado. Los borradores y prereleases nunca se ofrecen.
-
-El bundle público no está notarizado porque el proyecto no dispone todavía de una identidad
-Developer ID Application; el instalador lo firma en el propio Mac. No se afirma una notarización
-que Apple no haya emitido.
+<p align="center">
+  <a href="https://github.com/SwonDev/regression/releases/latest"><strong>Descargar</strong></a>
+  ·
+  <a href="#compatibilidad-certificada"><strong>Compatibilidad</strong></a>
+  ·
+  <a href="docs/README.md"><strong>Documentación</strong></a>
+  ·
+  <a href="#desarrollo"><strong>Desarrollo</strong></a>
+</p>
 
 ---
 
-## 0. Arquitectura operativa temporal (2026-07-28)
+Regression es una aplicación nativa de barra de menús que ejecuta Steam para Windows mediante
+su propio motor de compatibilidad. Detecta el juego, prepara únicamente lo que necesita y mantiene
+cada corrección aislada para no alterar los títulos que ya funcionan.
 
-1. `Regression.app` se inicia como `LSUIElement`: aparece en la barra de menús y no en el Dock.
-2. Detecta CrossOver, su versión, la botella que contiene Steam, el estado de la botella y el
-   backend gráfico predeterminado declarado por su runtime.
-3. Abre Steam mediante
-   `CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine --bottle <nombre> --cx-app ...`.
-   La interfaz general de CrossOver solo se abre para instalación, actualización, reparación o
-   licencia.
-4. El selector cambia entre CrossOver y Regression cerrando primero el Steam activo; nunca deben
-   coexistir dos procesos que escriban en la biblioteca. Como Wine desacopla `Steam.exe`, el
-   backend activo se atribuye por el runtime que el cliente real mantiene abierto; no por un
-   wineserver residual ni por una ruta que `ps` puede ocultar.
-5. La carpeta `steamapps` del motor propio enlaza a la biblioteca canónica de CrossOver. Los
-   juegos se instalan una sola vez; credenciales, registro y datos externos a `steamapps` siguen
-   separados de forma segura. El escáner resuelve ese enlace antes de leer los manifests para que
-   ambos backends enumeren exactamente los mismos títulos.
-6. SQLite v12 guarda ejecuciones lógicas, todos sus procesos, configuraciones, huellas de
-   DLL/runtime, variables permitidas,
-   resolución/configuración gráfica detectable, deltas y verificaciones. Además normaliza la
-   identidad de cada motor para comparar resultados del mismo Wine/DXMT/DXVK/D3DMetal sin
-   confundirlos con opciones propias del juego. Los perfiles se pueden consultar y exportar como
-   JSON, pero no se aplican automáticamente. Cada blindado local enlaza la ejecución u observación,
-   la configuración y el motor exactos que lo justifican; corregir el último veredicto perfecto
-   desactiva la certificación sin borrar su historia.
-7. Una validación visual perfecta se registra sobre la ejecución concreta. La lista muestra
-   entonces `Verificado perfecto: Regression` en verde; los intentos fallidos se conservan para
-   investigación, pero no degradan el mejor perfil ya confirmado. La app exige una segunda
-   confirmación explícita antes de guardar un veredicto perfecto para evitar certificaciones
-   accidentales. El blindado manual persiste tras reiniciar, conserva la ejecución, configuración
-   y motor exactos, y se incluye en la exportación histórica.
-8. La referencia pública opcional de CodeWeavers se consulta en segundo plano, con caché y
-   cadencia persistente, y se mantiene separada de los veredictos locales: nunca certifica ni
-   reconfigura Regression.
-9. La base, sus exportaciones, los recibos y los logs técnicos se guardan con permisos exclusivos
-   del usuario (`0700` para directorios y `0600` para archivos). El lanzador conserva como máximo
-   20 logs propios y no registra credenciales ni argumentos no permitidos.
-10. El inventario tecnológico distingue el baseline funcional de los candidatos de rendimiento.
-    Una versión nueva de Wine, GPTK/D3DMetal, DXMT, DXVK, MoltenVK o vkd3d nunca sustituye un PIN
-    por sí sola: primero debe aislarse por juego, disponer de rollback, superar la matriz completa
-    y demostrar su mejora. La app todavía observa y recomienda; no aplica cambios automáticamente.
-11. El popover usa una jerarquía de layout determinista dentro de un único `ScrollView`. Las
-    listas no anidan contenedores perezosos —evitan así los ciclos de geometría ya reproducidos—,
-    pero tampoco materializan una biblioteca completa: los juegos son buscables y se revelan en
-    lotes de 24; los blindados, en lotes de 8. La prueba de empaquetado incluye estrés de los
-    grupos, accesibilidad, CPU en reposo y cierre/reapertura.
-12. La E/S costosa de la app nativa se aísla del actor principal: detección, manifests, hashes de
-    componentes/configuración y lectura acotada de logs se ejecutan en actores dedicados. Los
-    Steam App ID se validan una sola vez como enteros ASCII de 32 bits y los nombres procedentes
-    de manifests no pueden escapar de sus raíces ni mediante `..` ni mediante enlaces simbólicos.
-13. Los nombres públicos descubiertos en los manifests tienen precedencia sobre cualquier
-    placeholder temprano de telemetría. `Steam App <ID>` solo se usa mientras el título es
-    realmente desconocido y nunca puede degradar el nombre histórico; cada escaneo reconcilia
-    automáticamente las filas antiguas.
-14. El esquema v12 distingue candidatos tecnológicos de experimentos reales. Todo I+D puede
-    persistir síntoma, referencia CrossOver, hipótesis, prueba de una variable, run exacto,
-    matriz, evidencias y rollback; SQLite impide cerrar el expediente si falta una puerta.
-15. Antes de lanzar un juego desde su panel, Regression ejecuta un preflight de solo lectura:
-    comprueba base,
-    motor, aislamiento de Steam/Wine, instalación, servicios huérfanos, marcadores DXMT, espacio,
-    logs y biblioteca. Un bloqueo inequívoco detiene la solicitud; los avisos se conservan. Cada
-    ejecución iniciada enlaza una instantánea saneada y verificada por SHA-256, sin PID, rutas
-    personales ni comandos completos. Si el usuario pulsa «Jugar» dentro del cliente completo de
-    Steam, el mismo diagnóstico se toma al observar su primer proceso y queda marcado como
-    `processStartBoundary`; nunca se presenta como una captura previa exacta.
-16. La telemetría agrupa launcher, ejecutable principal y helpers admitidos de un mismo App ID en
-    una sola sesión verificable. Cada PID conserva inicio, cierre, código y ejecutable en
-    `run_processes`; la sesión solo termina cuando finaliza el último proceso tras una breve
-    ventana de unión. Así una pulsación del usuario no infla perfiles ni estadísticas.
+Una instalación nueva selecciona **Regression** por defecto. No requiere comprar, instalar ni
+configurar otro producto de compatibilidad.
 
-Rutas principales:
+> [!IMPORTANT]
+> Regression está en desarrollo activo y es un proyecto personal y educativo. La compatibilidad
+> se certifica juego a juego mediante render, entrada, opciones y gameplay reales; un proceso que
+> termina correctamente no se marca como compatible por sí solo.
 
-- Base: `~/Library/Application Support/Regression/Compatibility/compatibility.sqlite`
-- Backups automáticos de migración: `~/Library/Application Support/Regression/Compatibility/Backups/`
-- Backups de la unificación: `~/Library/Application Support/Regression/Backups/SharedLibrary/`
-- CLI de mantenimiento: `Regression.app/Contents/SharedSupport/bin/regressionctl`
-- Motor propio preservado: `Regression.app/Contents/MacOS/regression-engine`
-
-Consulta local (sin modificar perfiles automáticamente):
+## Instalación
 
 ```bash
-Regression.app/Contents/SharedSupport/bin/regressionctl status
-Regression.app/Contents/SharedSupport/bin/regressionctl preflight
-Regression.app/Contents/SharedSupport/bin/regressionctl preflight 219990 --backend regression
-Regression.app/Contents/SharedSupport/bin/regressionctl runs
-Regression.app/Contents/SharedSupport/bin/regressionctl processes [RUN_ID]
-Regression.app/Contents/SharedSupport/bin/regressionctl profiles
-Regression.app/Contents/SharedSupport/bin/regressionctl engines
-Regression.app/Contents/SharedSupport/bin/regressionctl certifications
-Regression.app/Contents/SharedSupport/bin/regressionctl technologies
-Regression.app/Contents/SharedSupport/bin/regressionctl candidates
-Regression.app/Contents/SharedSupport/bin/regressionctl optimization
-Regression.app/Contents/SharedSupport/bin/regressionctl requirements
-Regression.app/Contents/SharedSupport/bin/regressionctl repair-receipts
-Regression.app/Contents/SharedSupport/bin/regressionctl research
-Regression.app/Contents/SharedSupport/bin/regressionctl research-protocol
-Regression.app/Contents/SharedSupport/bin/regressionctl catalog
-Regression.app/Contents/SharedSupport/bin/regressionctl comparisons
-Regression.app/Contents/SharedSupport/bin/regressionctl observations
-Regression.app/Contents/SharedSupport/bin/regressionctl export /tmp/regression-compatibilidad.json
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://github.com/SwonDev/regression/releases/latest/download/install_regression.sh | bash
 ```
 
-Prueba de estabilidad del popover instalado (requiere que Regression esté abierta y permiso de
-Accesibilidad para la terminal que la ejecuta; no toca Steam ni juegos):
+El instalador es auditable, transaccional y conserva rollback. Antes de sustituir una instalación
+comprueba la firma, el SHA-256 y el contenido del runtime descargado.
 
-```bash
-tools/diagnostics/stress-native-popover.sh
+**Requisitos**
+
+- Mac con Apple Silicon.
+- macOS 14 o posterior.
+- Rosetta 2; el instalador la prepara si falta.
+- Cuenta gratuita de Apple Developer solo para los perfiles que necesiten GPTK/D3DMetal.
+
+<details>
+<summary><strong>Qué prepara automáticamente</strong></summary>
+
+| Capa | Comportamiento |
+|---|---|
+| Runtime | Wine, DXMT, DXVK, MoltenVK, VC++/UCRT x86 y x64 |
+| Steam | Instalación oficial de Valve y botella propia recuperable |
+| Medios | Windows Media WMA/WMV/ASF cuando el contenido del juego lo exige |
+| Entrada | SDL y Switch2Bridge para mandos compatibles |
+| Fuentes | Source Han Sans y recursos redistribuibles permitidos |
+| Apple GPTK | Verificación y reparación desde una copia autorizada del usuario; nunca se redistribuye |
+
+Modos disponibles: `--check`, `--verify-release`, `--yes`, `--launch` y `--help`.
+
+</details>
+
+## Diseñado para reparar sin romper
+
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <h3>🧭 Autodetección</h3>
+      Identifica ejecutable, motor, contenido multimedia y requisitos antes de lanzar.
+    </td>
+    <td width="33%" valign="top">
+      <h3>🛠️ Autorreparación</h3>
+      Verifica manifiestos y reconstruye componentes permitidos de forma transaccional.
+    </td>
+    <td width="33%" valign="top">
+      <h3>🧩 Aislamiento</h3>
+      Las recetas se activan por juego y proceso. No se convierten en variables globales.
+    </td>
+  </tr>
+  <tr>
+    <td width="33%" valign="top">
+      <h3>✅ Evidencia real</h3>
+      Render, entrada, opciones y gameplay deben confirmarse visualmente.
+    </td>
+    <td width="33%" valign="top">
+      <h3>↩️ Rollback</h3>
+      Los cambios protegidos generan backup y se revierten si falla una puerta.
+    </td>
+    <td width="33%" valign="top">
+      <h3>🔒 Privacidad local</h3>
+      Perfiles, logs saneados y verificaciones permanecen en el Mac del usuario.
+    </td>
+  </tr>
+</table>
+
+## Una utilidad nativa de macOS
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/menubar/previews/all-states-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="assets/menubar/previews/all-states-light.png">
+    <img src="assets/menubar/previews/all-states-dark.png" width="460" alt="Estados visuales de Regression en la barra de menús">
+  </picture>
+</p>
+
+Regression vive en la barra de menús, no en el Dock. La R comunica cuatro estados legibles:
+preparado, trabajando, Steam activo y error. El popover reúne motor, biblioteca, juegos,
+certificaciones, aprendizaje local y mantenimiento sin convertir la experiencia en un gestor
+de botellas.
+
+## Compatibilidad certificada
+
+La siguiente lista procede del catálogo local versionado y de ejecuciones perfectas confirmadas.
+Los expedientes públicos explican causa, receta, evidencia y regla de no regresión.
+
+| Juego | Estado | Expediente |
+|---|---|---|
+| Cube World | Verificado perfecto | Catálogo integrado |
+| FINAL FANTASY TACTICS — The Ivalice Chronicles | Verificado perfecto | Catálogo integrado |
+| Grim Dawn | Verificado perfecto | [Ver expediente](docs/games/grim-dawn.md) |
+| Clair Obscur: Expedition 33 | Verificado perfecto | [Ver expediente](docs/games/clair-obscur-expedition-33.md) |
+| DragonSword: Awakening | Verificado perfecto | [Ver expediente](docs/games/dragonsword-awakening.md) |
+| Hell Clock | Verificado perfecto | [Ver expediente](docs/games/hell-clock.md) |
+| Heroes of Hammerwatch II | Verificado perfecto | [Ver expediente](docs/games/heroes-of-hammerwatch-2.md) |
+| Secrets of Grindea | Verificado perfecto | [Ver expediente](docs/games/secrets-of-grindea.md) |
+| Fields of Mistria | Verificado perfecto | [Ver expediente](docs/games/fields-of-mistria.md) |
+| Titan Quest II | Verificado perfecto | [Ver expediente](docs/games/titan-quest-2.md) |
+| Forsaken Isle | Verificado perfecto | [Ver expediente](docs/games/forsaken-isle.md) |
+
+También forman parte de la matriz de regresión Steam/CEF, Moonlighter 2, Palworld y la ruta D3D9.
+
+**Validados con incidencia conocida**
+
+- [Dragon's Dogma 2](docs/games/dragons-dogma-2.md): letterbox 16:9 compartido por la referencia.
+- [Rotwood](docs/games/rotwood.md): superficie 1512×870 dentro de la pantalla disponible.
+
+**Investigación abierta**
+
+- [FANTASY LIFE i](docs/games/fantasy-life-i.md): bloqueado por la política oficial de EAC en
+  entornos virtualizados; no se elude ni se presenta como compatible.
+
+## Cómo funciona
+
+```mermaid
+flowchart LR
+    A["Juego de Steam"] --> B["Preflight de solo lectura"]
+    B --> C["Router por ejecutable y contenido"]
+    C --> D["Runtime general protegido"]
+    C --> E["Perfil aislado"]
+    C --> F["Componente autorreparable"]
+    D --> G["Ejecución observada"]
+    E --> G
+    F --> G
+    G --> H["Verificación visual"]
+    H --> I["Perfil blindado"]
 ```
 
-Controles de calidad de la capa nativa (no lanzan juegos):
+El runtime general permanece fijado. Una corrección solo se promociona cuando supera la matriz
+del juego objetivo, Steam y los perfiles afectados. Las recetas se compilan y versionan; la base
+de aprendizaje nunca ejecuta comandos almacenados.
+
+## Componentes
+
+| Área | Implementación |
+|---|---|
+| Aplicación | Swift 6, SwiftUI, Observation y AppKit donde macOS lo requiere |
+| Compatibilidad | Wine x86-64 sobre Rosetta 2 |
+| D3D11 | DXMT v0.72 con parche cross-process protegido |
+| D3D9 | DXVK 1.10.3 |
+| D3D12 | Perfil D3DMetal autorizado por juego cuando corresponde |
+| Presentación | winemac, MoltenVK y perfiles OpenGL aislados |
+| Datos | SQLite local con huellas de configuración, motor y evidencia |
+| Distribución | Runtime recompilado para la ruta pública y asset verificado tras extraer |
+
+## Documentación
+
+| Quiero… | Documento |
+|---|---|
+| Entender el proyecto | [Índice de documentación](docs/README.md) |
+| Conocer el protocolo de compatibilidad | [Investigación reproducible](docs/compatibility-research.md) |
+| Revisar arquitectura, datos y privacidad | [Plataforma de compatibilidad](docs/compatibility-platform.md) |
+| Entender autorreparación y evolución de runtimes | [Evolución tecnológica](docs/runtime-evolution.md) |
+| Preparar una prueba segura | [Preflight y evidencia](docs/game-test-readiness.md) |
+| Revisar la app nativa | [Auditoría nativa](docs/native-app-audit.md) |
+| Consultar un juego | [Expedientes de juegos](docs/README.md#expedientes-de-juegos) |
+
+Las reglas operativas para agentes y mantenedores viven en [`AGENTS.md`](AGENTS.md). El contrato
+visual está en [`DESIGN.md`](DESIGN.md).
+
+## Desarrollo
 
 ```bash
+# Validación Swift
 swift test
 swift build -c release
+
+# Estado protegido y botella
 bash build/verify-protected-state.sh --include-bottle
+
+# Empaquetado nativo
 bash Scripts/package_regression.sh
 codesign --verify --deep --strict Regression.app
+
+# Verificación del asset que recibiría un Mac limpio
+bash build/verify-release-asset.sh ASSET CHECKSUM VERSION
 ```
 
-`verify-protected-state.sh` detiene el proceso si cambia un PIN del runtime, los perfiles aislados
-de Grim Dawn/Dragon's Dogma 2, la pareja DXMT de la botella o la firma. El empaquetador crea
-primero un backup pequeño
-de la capa nativa y una copia APFS temporal del bundle completo; si falla, restaura el bundle
-anterior. La auditoría de arquitectura, privacidad, accesibilidad y errores está en
-[`docs/native-app-audit.md`](docs/native-app-audit.md). El contrato completo del esquema,
-certificaciones, motores y referencia pública vive en
-[`docs/compatibility-platform.md`](docs/compatibility-platform.md).
-La política de versiones modernas, rendimiento, autorreparación futura y transición fuera de
-Rosetta vive en [`docs/runtime-evolution.md`](docs/runtime-evolution.md).
-La preparación automática y sus límites están especificados en
-[`docs/game-test-readiness.md`](docs/game-test-readiness.md).
+La app canónica vive en `Regression.app/` y `/Applications/Regression.app` apunta a ella durante
+el desarrollo. El Wine público se recompila para
+`/Applications/Regression.app/Contents/SharedSupport/wine-root`; mover el bundle sin recompilar
+rompe sus rutas horneadas.
 
-El empaquetado usa `Scripts/sign_regression.sh`: selecciona una identidad Apple Development local
-sin guardar datos del certificado en el repositorio, firma con runtime endurecido y capacidades
-públicas equivalentes al host de CrossOver, y comprueba que el requisito designado sea estable
-entre builds. Si no existe certificado, el fallback ad hoc se anuncia explícitamente porque
-macOS puede volver a solicitar permisos tras cada compilación. Las descripciones de micrófono,
-cámara y carpetas protegidas solo provocan solicitudes cuando un juego usa realmente el recurso.
+## Licencia y límites
 
-Cerrar una validación perfecta desde terminal —la app ofrece la misma acción en “Ejecuciones
-recientes”—:
+El código propio se distribuye bajo [LGPL-2.1 o posterior](LICENSE). Las atribuciones y límites
+de redistribución están documentados en [NOTICE.md](NOTICE.md).
 
-```bash
-Regression.app/Contents/SharedSupport/bin/regressionctl runs
-Regression.app/Contents/SharedSupport/bin/regressionctl verify <RUN_ID> perfect \
-  --note "Render, entrada, opciones y gameplay confirmados visualmente"
-```
-
-Para una validación histórica anterior a la telemetría se usa `observe APP_ID perfect` con nombre,
-backend y nota de evidencia. Nunca se infiere “perfecto” de un cierre normal.
+- No se publican credenciales, botellas, saves ni datos locales.
+- No se copian binarios propietarios de productos de comparación.
+- GPTK/D3DMetal pertenece a Apple y solo se usa desde una instalación autorizada del usuario.
+- Regression no está afiliado con Valve, Apple, CodeWeavers ni los estudios de los juegos.
 
 ---
 
-## 1. Estado del motor propio blindado
-
-### Funciona (todo verificado con capturas)
-- **Steam completo**: tienda, login, biblioteca, navegación, clicks precisos (CEF/Chromium).
-- **Moonlighter 2** (Unity IL2CPP) — menú y carga correctos.
-- **Palworld COMPLETO**: personaje + mundo + HUD (DXMT v0.72 + `-dx11`).
-- **Grim Dawn** (D3D11) — perfil aislado D3DMetal, 3024×1964 Retina, gameplay, clics y
-  opciones gráficas confirmados sin parpadeo; **Romestead** (Unity) in-game.
-- **Clair Obscur: Expedition 33** — baseline propio sin perfil especial, título, carga,
-  combate, HUD, partículas, entrada HID, pausa y opciones confirmados a 3024×1964 Retina.
-- **DragonSword : Awakening** — D3DMetal completo por proceso, gameplay Retina 3024×1964,
-  entrada, pausa, opciones y salida limpia confirmados sin tirones; perfil y router protegidos.
-  Expediente: [`docs/games/dragonsword-awakening.md`](docs/games/dragonsword-awakening.md).
-- **Hell Clock** — baseline general sin perfil especial, gameplay Retina 3024×1964, cursor y
-  clicks precisos, pausa, opciones gráficas modificables y persistentes, restauración exacta de
-  la configuración y cierre limpio. Run blindado:
-  `2F2DE49D-DE01-4A7F-B2D2-39195EA5D68B`. Expediente:
-  [`docs/games/hell-clock.md`](docs/games/hell-clock.md).
-- **Heroes of Hammerwatch II** — OpenGL 3.2 mediante el hook forward-compatible público de Wine
-  CX 26.3, activado exclusivamente en `HWR2.exe`; menú, gameplay, entrada, opciones y cierre
-  confirmados perfectos. Run blindado: `F8E4EA27-2E6B-439C-AC93-BD927035B5B5`. Expediente:
-  [`docs/games/heroes-of-hammerwatch-2.md`](docs/games/heroes-of-hammerwatch-2.md).
-- **Titan Quest II** — el bootstrap `TQ2.exe` informa falsamente de que falta VC++ bajo Wine.
-  Regression inicia Steam cuando lo requiere y hace que ambos botones recorran la misma ruta:
-  redirige únicamente la imagen exacta del bootstrap al ejecutable Unreal real y aplica GPTK 4.0
-  beta 2 como conjunto D3DMetal indivisible solo en `TQ2-Win64-Shipping.exe`. Menú, personaje 3D,
-  gameplay, entrada, pausa, opciones y cierre están verificados.
-  Expediente: [`docs/games/titan-quest-2.md`](docs/games/titan-quest-2.md).
-- **Secrets of Grindea** — baseline general sin perfil especial, XNA sobre Wine Mono/FNA;
-  render, HUD, entrada, opciones, combate y habilidades confirmados sin trabones. Run blindado:
-  `953B6822-AC77-4977-B862-B206D3CE16AE`. OpenGL y la compilación Metal concurrente quedan
-  descartados. Expediente:
-  [`docs/games/secrets-of-grindea.md`](docs/games/secrets-of-grindea.md).
-- **Fields of Mistria** — baseline general sin perfil; runner propio del estudio (Rust + SDL3,
-  OpenGL 4.1). La pantalla verde del arranque era una CGL surface clavada al backing 1×1
-  inicial de la ventana: el parche propio `winemac-gl-surface-resync` re-sincroniza el tamaño
-  en el propio swap. Run blindado: `BAAC2B06-3CAD-467A-B1F1-834B76B794AD`. Expediente:
-  [`docs/games/fields-of-mistria.md`](docs/games/fields-of-mistria.md).
-- **Forsaken Isle** — .NET 4.5 + MonoGame/SharpDX; el fallo `0xC00D36BB` procedía de siete
-  pistas WMA2/ASF sin demultiplexor/decodificador en Wine GStreamer. Regression detecta esos
-  medios dentro de la raíz acotada del juego y activa solo en su proceso un componente LGPL
-  verificado y autorreparable. Menú, creación de mundo y gameplay prolongado confirmados
-  perfectos. Observación blindada: `31104A67-1DE6-4C6D-BE5D-797A60648769`. Expediente:
-  [`docs/games/forsaken-isle.md`](docs/games/forsaken-isle.md).
-- **D3D9**: DXVK 1.10.3.
-- **Packaging**: app autocontenida (~1,8 GB, PE sin strip — el strip rompía el unwind SEH),
-  firmada con identidad de desarrollo estable, runtime endurecido e icono propio.
-  `regression-last-good-20260726.tar.gz` conserva la base general
-  restaurable y `grimdawn-d3dmetal-perfect-20260727-1802/` el perfil posterior verificado.
-
-### En investigación, sin certificación
-
-- **FANTASY LIFE i**: Regression y CrossOver alcanzan el código EAC `206` al intentar mapear el
-  módulo Linux desde un host Mach-O. En el laboratorio Linux ARM aislado, Proton 11 x86-64
-  oficial sobre FEX FS/GS v3 superó primero `206` y, después de autenticar manualmente el cliente
-  Steam Linux oficial, también superó `210`: EAC descargó su módulo, obtuvo HTTP `200`, inició el
-  mapeo Wine 11 y terminó con `208 Cannot run under Virtual Machine`. Todavía no se ha iniciado
-  `NFL1-Win64-Shipping.exe`; no se oculta ni falsea la VM. El laboratorio UTM 5.0.3 presenta
-  Vulkan real mediante Venus sobre el Apple M5 Pro. DXVK 1.10.3 crea y presenta D3D11 sobre esa
-  GPU; DXVK 2.7.1 se descartó por requerir `VK_EXT_depth_clip_enable`, ausente en Venus. La copia
-  ext4 del juego está verificada y Steam ya la puede escribir sin alterar sus hashes. El usuario
-  aceptó personalmente el EULA y Steam completó la instalación oficial (`StateFlags=4`, build
-  `21998011`, 15.203.991.960 bytes). El lanzamiento del App ID desde esa misma biblioteca y sesión
-  autenticada completó EOS, EAC, UEPrereq y DirectX, pero volvió a terminar en `208` antes de
-  `NFL1-Win64-Shipping.exe`. Esto descarta propiedad, EULA, manifiesto, instalación, sesión e IPC
-  como causas pendientes y confirma el bloqueo de virtualización observado. Los descendientes x86
-  usan una selección temporal y reversible de v3 en `binfmt_misc`; al cerrar, ambos handlers
-  volvieron a `/usr/bin/FEX` y AppArmor userns a `1`. No se oculta la VM, no se modifica EAC, no
-  se ha integrado Proton en el backend estable ni se presenta este avance como compatibilidad.
-  La vía no virtualizada ya construye FEXCore público `a04b0241` como Mach-O arm64, ejecuta ELF
-  x86-64 reales con `ld-linux`/glibc y transporta el cliente Wine y el `wineserver` oficiales de
-  Proton 11 dentro de un RootFS privado. v270 demuestra, mediante una prueba x86-64 controlada,
-  que las vistas lógicas altas que `ntdll.so` solicita pueden redirigirse a memoria host ordinaria
-  sin romper el shadow bajo ni las puertas JIT anteriores. v271 añade el contrato host
-  huésped↔host, round-trip exacto y rechazo de solapamientos; la reconstrucción desde la revisión
-  pública exacta superó toda la matriz sin ejecutar código huésped en esa puerta nueva. v272
-  demuestra además que un único bloque JIT observa la sustitución A→B con el hilo detenido,
-  conserva exactamente el mismo host code, deja de acceder al backing A protegido y permite
-  limpiar, proteger y desmapear ambas regiones sin traducciones residuales. v273 provoca además
-  un único `SIGBUS` controlado dentro del JIT, atribuye `si_addr` exactamente a
-  `0x100000270`, recupera el RIP huésped exacto y restaura handlers, mapa y protección. La
-  reconstrucción limpia desde FEX público pasó todas las puertas heredadas y la nueva. La
-  siguiente A/B aplicará ese contrato a la mitad PE/Windows oficial de Wine en un RootFS nuevo.
-  Esto sigue sin ser el orquestador Proton completo: Steam, EAC y el juego aún no se han
-  ejecutado por esta ruta. La VM no es la solución final por el rechazo `208`; el backend
-  estable permanece intacto.
-  Expediente:
-  [`docs/games/fantasy-life-i.md`](docs/games/fantasy-life-i.md).
-
-### Perfil aislado validado con incidencia conocida
-
-- **Dragon's Dogma 2**: D3DMetal + Retina por proceso, 1512×945 lógicos en ventana sin bordes y
-  framebuffer físico de 3024×1890. Gameplay, rendimiento, entrada y opciones persistentes fueron
-  confirmados por el usuario en el run `257CEEDB-8EE7-4D4E-AF6B-589741406C1F`. Queda como
-  `Funciona con incidencias`, no como perfecto, porque el juego conserva letterbox 16:9; CrossOver
-  reproduce la misma franja. La variante de 3024×1890 internos se rechazó por desbordamiento y
-  click desplazado. Expediente:
-  [`docs/games/dragons-dogma-2.md`](docs/games/dragons-dogma-2.md).
-
-### Baseline validado con incidencia de presentación compartida
-
-- **Rotwood**: el baseline general de Regression completó gameplay, entrada, pausa, opciones y
-  cierre con guardado en el run `E9316F8E-A6C3-4DE2-A075-6884A923AE4D`. El usuario confirmó un
-  funcionamiento excelente, pero el juego compone 1512×870 dentro de la pantalla 1512×982 y deja
-  bandas negras arriba y abajo. CrossOver 26.3 reproduce la misma geometría y las mismas bandas,
-  así que no se creó un perfil artificial ni una certificación perfecta. La base local conserva
-  `Funciona con incidencias`. Expediente: [`docs/games/rotwood.md`](docs/games/rotwood.md).
-
-### Las dos claves de la paridad (aprendidas a las malas)
-1. **DXMT = v0.72** (versión exacta de CX; `main` tiene una regresión que hace invisibles los
-   skeletal meshes en Palworld).
-2. **Wine compilado con `--prefix` apuntando a la app**. Con el prefix por defecto
-   (`/usr/local`, inexistente) la resolución de módulos se degradaba: juegos Unity morían al
-   iniciar y el estado dependía del modo (build tree vs instalado). CrossOver hornea su prefix
-   en su app — nosotros igual.
-
-### Pendiente honesto
-1. **Test sintético D3D12 peta** (page fault en D3D12CreateDevice) en nuestro wine; con el de CX
-   va. Nota: D3DMetal funciona en juego real (Palworld corría en D3D12 rindiendo mundo).
-2. **DXVK solo d3d9**; vkd3d sin d3d12.dll en el snapshot.
-3. **MoltenVK con stubs** (3 features del SPIRV-Cross privado de CX): afecta a la ruta
-   Vulkan (DXVK/vkd3d) en algunos juegos.
-
----
-
-## 2. Arquitectura
-
-```
-Regression.app/
-└── Contents/
-    ├── MacOS/Regression          # app SwiftUI de barra de menús
-    ├── MacOS/regression-engine   # launcher propio original: env + exec wine Steam.exe
-    ├── Info.plist                # LSUIElement=true, CFBundleIconFile=Regression
-    ├── Resources/Regression.icns # icono (squircle, degradado azul-púrpura + R)
-    └── SharedSupport/
-        ├── bin/regressionctl     # diagnóstico, perfiles, exportación y conmutación
-        ├── components/windows-media/1/ # ASF/WMA LGPL, firmado y manifestado
-        └── wine-root/            # runtime propio autocontenido
-            ├── bin/                  # wine, wineserver, ...
-            ├── lib/wine/
-            │   ├── i386-windows/     # DLLs PE 32-bit (wow64)
-            │   ├── x86_64-windows/   # DLLs PE 64-bit + DXMT + Apple d3d12 + DXVK d3d9
-            │   └── x86_64-unix/      # .so unix (winemac, winemetal, winevulkan, ...)
-            ├── lib/runtime/           # gnutls, gstreamer, glib, freetype, SDL2, MoltenVK
-            ├── lib/profiles/            # rutas aisladas Grim Dawn/DD2/DragonSword/HWR2
-            └── lib/apple_gptk/        # D3DMetal.framework + libd3dshared.dylib (Apple)
-```
-
-**Botellas (fuera de la app, datos de usuario)**:
-
-- CrossOver: `~/Library/Application Support/CrossOver/Bottles/Steam/` (canónica actual).
-- Regression: `~/Library/Application Support/Regression/Bottles/Steam/` (motor propio; su
-  `steamapps` enlaza a la anterior, pero conserva login/registro/configuración propios).
-
-### Pipeline de presentación CEF (lo más delicado)
-Chromium crea los swapchains desde su **GPU process** para ventanas del **browser process**
-(cross-process). Ni DXMT upstream ni wine soportan eso. Nuestra solución (basada en
-`PapaRascal2020/uncork`):
-
-1. **DXMT producer** (`build/toolchain/dxmt-src`): si el swapchain es cross-process, renderiza a
-   una **IOSurface GLOBAL** (`kIOSurfaceIsGlobal`) creada en `winemetal_unix.c` y publica
-   `id w h root x y` en `C:\windows\temp\dxmt-cxpresent-<hwnd-hijo>.id`.
-2. **winemac consumer** (`sources-26.3.0/wine/dlls/winemac.drv/cocoa_window.m`): timer de 16 ms
-   lee TODOS los `.id`, agrupa por ventana raíz y compone **una subcapa CALayer por hijo**
-   en modo layer-hosting (`layerContentsRedrawPolicy=Never`) en su posición exacta.
-3. Gate: `DXMT_CROSS_PROCESS_PRESENT=1`.
-
-CEF crea un swapchain por hijo (cabecera 92pt, contenido, popups) → sin posiciones por hijo,
-clicks desalineados y contenido negro. **No tocar esto sin leer la sección 6.**
-
----
-
-## 3. Cómo se usa el código de CrossOver (legalmente)
-
-| Componente | Origen | Licencia | Uso |
-|---|---|---|---|
-| Wine 11 (fork CX 26.3.0) | `media.codeweavers.com/pub/crossover/source/crossover-sources-26.3.0.tar.gz` | LGPL | Compilado tal cual + parche winemac (consumer) |
-| gnutls/nettle/gmp, glib, gstreamer, freetype, moltenvk, vkd3d, dxvk | mismo tarball oficial | LGPL/Apache | Compilados x86_64 |
-| DXMT | github.com/3Shain/dxmt (**v0.72**) | LGPL-2.1+ | Compilado + parche cross-process propio |
-| LLVM 15.0.7 | llvm-project | Apache | Backend airconv de DXMT |
-| SPIRV-Headers, libffi, pcre2, SDL2, corefonts | repos oficiales / SourceForge | varias | toolchain/botella |
-| GStreamer ASF + gst-libav 1.24.4, FFmpeg 6.1.6 | fuentes oficiales fijadas | LGPL | componente multimedia aislado por contenido |
-| D3DMetal.framework, libd3dshared, PE d3d12* | Game Porting Toolkit instalado localmente | Apple | Binarios locales, uso personal (NO redistribuible) |
-| Fuente CJK (msyh, simsun, SourceHan) | botella Steam de CrossOver del usuario | MS/OFL | Copia local |
-
-**Lo que NO se usa**: GUI de CrossOver, gestor de botellas, sistema de licencias, su fork privado
-de DXMT ni de SPIRV-Cross (no públicos). CrossOver compila todo **x86_64 bajo Rosetta** (su CI:
-`tools/gitlab/build-mac` → `arch -x86_64 ../configure --enable-win64`). Nosotros igual, pero con
-`--enable-archs=i386,x86_64` (wow64 completo, necesario para SteamSetup.exe PE32).
-
-La comparación de catálogo usa únicamente metadatos públicos normalizados de las fichas web de
-la [Compatibility Database de CodeWeavers](https://www.codeweavers.com/compatibility). No copia
-su base interna ni usa esos datos para aplicar perfiles automáticamente.
-
----
-
-## 4. Cómo investigar el código/comportamiento de CrossOver (método)
-
-Sin ingeniería inversa de lo propietario — todo por inspección de datos legítimos:
-
-1. **Crossties** (`~/Library/Application Support/CrossOver/tie/crossover.tie`, XML 23 MB):
-   receta por app (dependencias, env vars, claves de registro, template). El perfil de Steam es
-   `com.codeweavers.c4.206`. Se parseó para replicar la botella.
-2. **Botella real** (`~/Library/Application Support/CrossOver/Bottles/Steam/`):
-   `cxbottle.conf` (env vars: `WINEMSYNC=1`, appid creador), `user.reg`/`system.reg`
-   (DllOverrides, tweaks Direct3D: `cb_access_map_w=1`), system32 (qué DLLs son de Apple/DXMT).
-3. **Su CI en las fuentes** (`sources-26.3.0/wine/tools/gitlab/build-mac`): flags exactas de build.
-4. **Binarios** (`file`, `otool -L`, `lipo -info`): arquitectura real del producto (todo x86_64).
-5. **CW HACKs en el código**: buscar "CW HACK" en `sources-26.3.0/wine/` (p.ej. 22434 non-native
-   code regions para D3DMetal, 22435 `__wine_unix_call_exported`, 24067 `prepend_dll_path`).
-6. **Comparativa A/B**: ejecutar el mismo binario/botella con su wine y con el nuestro
-   (`CX_ROOT=/Applications/CrossOver.app/Contents/SharedSupport/CrossOver CX_BOTTLE=Steam
-   $CX_ROOT/bin/wine ...`) y difereciar env (`WINEDEBUG=+relay`, `+loaddll`, `+module`).
-7. **Logs del juego/Steam**: `<prefix>/drive_c/Program Files (x86)/Steam/logs/*.txt`.
-
----
-
-## 5. Build (reproducible)
-
-Scripts en `build/` (todos con guards por paso; logs en `build/logs/`):
-
-```bash
-# 1) Toolchain x86_64 (prereqs: brew mingw-w64 meson ninja cmake automake bison flex nasm cabextract)
-bash build/toolchain-a-tls.sh        # gmp → nettle → gnutls → freetype
-bash build/toolchain-b-gstreamer.sh  # libffi → pcre2 → glib → gstreamer
-# SDL2: ver historial (cmake con CMAKE_OSX_ARCHITECTURES=x86_64)
-# 2) LLVM 15 x86_64 (para DXMT/airconv) — ver build/…/dxmt-src/toolchains
-# 3) Wine 11 CX wow64
-bash build/build-wine.sh             # configure --enable-archs=i386,x86_64, CFLAGS -arch x86_64
-# 4) Gráficos
-bash build/build-vkd3d-dxvk.sh       # vkd3d libs + DXVK (PE mingw)
-bash build/build-dxmt.sh             # DXMT win64 (PE + winemetal.so)
-bash build/build-windows-media-component.sh # ASF/WMA2 LGPL x86_64, manifiesto y firmas
-# MoltenVK: sources-26.3.0/moltenvk (git init + remote KhronosGroup; SPIRV-Cross rev upstream;
-# stubs en External/SPIRV-Cross/spirv_msl.hpp) → xcodebuild MoltenVKPackaging
-# 5) Botella
-bash build/create-steam-bottle.sh    # prefijo + receta crosstie + corefonts
-# 6) App
-make -C build/wine64 install DESTDIR=stage → montar SharedSupport (módulos PE sin strip)
-bash build/build-dd2-profile.sh        # build incremental compatible del router de perfiles
-bash build/build-heroes-hammerwatch-2-profile.sh  # perfil OpenGL reproducible sin UUID
-bash build/install-game-profiles.sh    # fija Grim Dawn/DD2/DragonSword/HWR2, backup y firma
-Scripts/sign_regression.sh Regression.app  # refirma sin perder la identidad de permisos
-```
-
-Gotchas de build (todos resueltos, no redescubrir):
-- `arch -x86_64` NO funciona con binarios arm64-only (cmake/meson/pkg-config). Usar
-  `CFLAGS="-arch x86_64"` + `--build/--host=x86_64-apple-darwin`. Los conftest corren bajo Rosetta.
-- `PKG_CONFIG_LIBDIR` (no `PKG_CONFIG_PATH`) o brew cuela libs arm64 (libidn2 rompió gnutls).
-- nettle del tarball CX no trae `configure` → tarball oficial 3.10. gnutls: `--disable-gost` +
-  `NETTLE_LIBS/HOGWEED_LIBS/GMP_LIBS` explícitos (su hooks.m4 no los rellena).
-- glib 2.78: subproject gvdb (gitlab.gnome.org rev 0854af0) + parche `distutils` (python 3.14).
-- gstreamer: `-Dgst-plugins-base:pango=disabled -Dgst-plugins-good:png=disabled
-  -Dgst-plugins-bad:{closedcaption,analyticsoverlay,ttml}=disabled` (cairo/harfbuzz/libpng rotos);
-  libpng wrap parcheado (`fp.h` obsoleto → `__has_include`).
-- DXVK 1.10.3 + mingw14: `-include cstdint` y guards `__MINGW64_VERSION_MAJOR < 12`.
-- mingw y IIDs de d3d12/dxgi: `#define INITGUID` antes de los includes.
-- DXMT: LLVM FUERA del source tree (meson prohíbe rutas absolutas al árbol).
-
----
-
-## 6. Reglas de oro para futuros agentes (NO saltárselas)
-
-> El **protocolo de trabajo completo** (ciclo de cambio, matriz de validación por pieza, tabla
-> de PINs, definición de "hecho") y los **principios inviolables** (nunca romper lo que
-> funciona, separación estricta de backends, CrossOver como referencia y legalidad limpia)
-> están en `AGENTS.md` → secciones "Reglas inviolables" y
-> "Protocolo de trabajo". Leerlos antes de tocar nada; estas reglas son el resumen.
-
-1. **Backup antes de tocar una botella o el bundle.** Copia en `backups/`. No modificar la
-   botella CrossOver canónica durante experimentos; perfiles en variables de proceso o copias.
-2. **Tras CUALQUIER cambio gráfico**: relanzar la app y verificar que la tienda renderiza
-   (screencapture del CGWindowID). Si está negra, revertir inmediatamente.
-3. **NO poner overrides `d3d11/d3d10core/dxgi=native`.** Las DLLs de DXMT son módulos wine
-   (builtin-format) y wine las RECHAZA como "native" → "not found" → tienda negra. DXMT carga
-   desde system32 como builtin sin override. Overrides solo para DLLs PE planas (d3d9=DXVK, ok).
-4. **Limpiar `dxmt-cxpresent-*.id` del temp al arrancar** (el launcher ya lo hace): ficheros
-   stale + reutilización de hwnd = superficies fantasma → pantalla negra.
-5. **No mezclar d3d11/dxgi de Apple (D3DMetal) con DXMT** en el mismo system32: CEF muere.
-   D3D12 (d3d12.dll, d3d12core.dll, nvapi64, nvngx, atidxx64) puede coexistir.
-6. **Clicks imprecisos** → `RetinaMode=n` en `HKCU\Software\Wine\Mac Driver` (ya aplicado).
-7. **Crash Win32Font assert en Steam** → faltan fuentes CJK (copiar las 55 de la botella CX).
-8. **DYLD**: `DYLD_FALLBACK_LIBRARY_PATH` debe incluir runtime + x86_64-unix (winemac.so) +
-   apple_gptk/external (D3DMetal.framework).
-9. **Steam se instala PE32**: hace falta wow64 completo (`--enable-archs=i386,x86_64`).
-10. **Icono oficial** (2026-07-26): creado por el usuario (SVG en `assets/icon/oficial/`),
-    integrado como `Regression.icns` (squircle con máscara separada + DstIn, sips + iconutil).
-11. **Los PIN son una base estable, no un techo de I+D.** Para reparar un juego se permiten,
-    en un perfil aislado, Rosetta, versiones alternativas o más recientes de Wine, toolchains y
-    dependencias abiertas. CrossOver es siempre la referencia de comportamiento. El candidato
-    solo pasa a perfil verificado tras probar render, clicks, cambios gráficos persistentes y
-    gameplay; no puede alterar perfiles blindados ni depender de CrossOver en runtime.
-    “Funciona perfecto” y “mejor opción conocida” son estados diferentes: el segundo exige además
-    mediciones comparables. Ningún dato aprendido puede transformarse en un comando arbitrario;
-    una futura reparación automática solo podrá invocar recetas compiladas, versionadas y con
-    rollback.
-12. **Grim Dawn = perfil D3DMetal completo, nunca mezcla gráfica.** `grim dawn.exe` antepone
-    exclusivamente `lib/profiles/grim-dawn` (enlace interno a `lib/apple_gptk/wine`), declara
-    `CX_ACTIVE_GRAPHICS_BACKEND=d3dmetal` dentro de ese proceso y fuerza a builtin
-    `atidxx64`, `d3d9`, `nvapi64` y `nvngx`. No trasladar esos cambios al registro global:
-    mezclar D3DMetal con el `d3d9` DXVK de la botella produjo negro y parpadeos.
-13. **DragonSword = D3DMetal completo y load-order indivisible.**
-    `DSClient-Win64-Shipping.exe` antepone `lib/profiles/dragonsword` y fuerza como builtin
-    `atidxx64`, `d3d9`, `dcomp`, `d3d11`, `d3d12`, `dxgi`, `nvapi64` y `nvngx`, solo en ese
-    proceso. Seleccionar únicamente el directorio mezcló D3DMetal con DXMT y congeló Unreal en el
-    logo; la receta completa eliminó los tirones y fue confirmada perfecta.
-14. **Heroes of Hammerwatch II = OpenGL forward-compatible por proceso.** El Wine CX 26.3
-    abierto ya implementa `CW Hack 24834`; `HWR2.exe` activa `CX_FWD_COMPAT_GL_CTX=1` sin tocar
-    Steam, registro, RetinaMode ni el driver global. Poner esa variable en el entorno general
-    está prohibido: la receta vive en su perfil y en el router exacto del ejecutable.
-15. **Titan Quest II = bootstrap y D3DMetal externos como receta compilada.** La ruta de Steam
-    solo coincide con el sufijo completo `steamapps\\common\\Titan Quest II\\TQ2.exe`; el
-    `ImagePathName` recibido del wineserver se sustituye por
-    `TQ2\\Binaries\\Win64\\TQ2-Win64-Shipping.exe` antes de mapear PE. El router externo solo
-    acepta ese ejecutable final y el componente GPTK 4.0b2 verificado por manifiesto. No usar un
-    bypass global de VC++, no ejecutar rutas aprendidas y no mover GPTK 4 al runtime general.
-16. **Windows Media = detección de contenido acotada, nunca entorno global.** El loader solo
-    examina el árbol del juego en ejecución bajo `steamapps/common` y activa ASF/WMA/WMV si el
-    componente `WindowsMedia/1` supera su manifiesto. No instalar codecs en `system32`, no fijar
-    `GST_PLUGIN_PATH` en Steam y no relocalizar únicamente los plugins: `winegstreamer.so` y los
-    plugins deben resolver una sola instancia GStreamer. El asset público relocaliza el conjunto
-    completo y regenera el manifiesto. Ver `docs/games/forsaken-isle.md`.
-
----
-
-## 7. Decisiones clave (por qué está así)
-
-- **Baseline actual x86_64 bajo Rosetta** (no wow64 arm64): paridad exacta con el producto CX y
-  menos riesgo para los perfiles ya validados. No es el destino único: Apple limita Rosetta de
-  propósito general después de macOS 27 y la ruta arm64/WoW64 se desarrollará en paralelo, sin
-  sustituir el baseline hasta igualar matriz y rendimiento.
-- **DXMT upstream + parche cross-process propio** en vez de su fork (privado, no publicable).
-- **winemac global parcheado** (consumer IOSurface) — es el único parche que modifica el driver
-  compartido. HWR2 añade, dentro de una copia de perfil, el opt-in OpenGL público que no altera el
-  runtime global.
-- **D3DMetal = binarios de Apple del GPTK instalado** (licencia evaluación, uso local).
-- **Routing gráfico por ejecutable en ntdll**: cada perfil se antepone únicamente en su proceso;
-  Grim Dawn, DD2, DragonSword, HWR2 y Titan Quest II no alteran Steam, Cube World, FFT ni el
-  backend global. Las recetas de bootstrap son compiladas, versionadas y de coincidencia exacta;
-  SQLite no puede aportar comandos ni rutas ejecutables.
-- **Botella fuera de la app**: datos de usuario (login, juegos) separados del artefacto firmado.
-- **PE sin strip**: se conservan `.pdata`, `.xdata`, unwind/SEH y símbolos necesarios de los
-  módulos builtin. El asset público elimina únicamente símbolos de depuración Mach-O y material
-  de desarrollo que un usuario final no necesita.
-
----
-
-## 8. Historial técnico y siguientes pasos
-
-### Grim Dawn blindado (2026-07-27)
-
-El procedimiento general está documentado en
-[`docs/compatibility-research.md`](docs/compatibility-research.md) y el expediente completo de
-pruebas, descartes, hashes, rollback y receta final vive en
-[`docs/games/grim-dawn.md`](docs/games/grim-dawn.md).
-
-La referencia estable de CrossOver 26.3 no era su modo automático: la botella fijada a
-**D3DMetal** cargaba `d3d11.dll`, `dxgi.dll`, `D3DMetal.framework` y `libd3dshared.dylib`, sin
-DXVK para el juego. Regression ya contenía esos recursos locales de Apple byte a byte idénticos,
-pero su perfil anterior mezclaba D3DMetal con `d3d9.dll` de DXVK/MoltenVK; esa combinación causaba
-parpadeos, negro o ausencia de presentación.
-
-La solución final es exclusiva de `grim dawn.exe`: perfil completo Apple GPTK, flags activos de
-D3DMetal y overrides builtin por proceso para neutralizar la ruta DXVK heredada de la botella.
-La prueba canónica alcanzó gameplay a 3024×1964, con clic preciso y opciones persistentes; el
-usuario confirmó ausencia total de parpadeo y la captura Retina se preservó localmente en
-`backups/grimdawn-d3dmetal-perfect-20260727-1802/`. `lsof` confirmó que el proceso cargaba los
-recursos de `Regression.app` y ninguna biblioteca ejecutable de CrossOver. Los archivos del juego
-pueden residir en la biblioteca física compartida; el motor y el perfil no dependen de CrossOver.
-
-### Hallazgos de diagnóstico (2026-07-26, sesión Cube World + FFT)
-
-> Esta sección conserva rutas que fallaron porque siguen siendo útiles para desarrollar el motor
-> propio. No representa el veredicto final de los juegos: después de estas pruebas, el usuario
-> confirmó **FFT perfecto** y **Cube World perfecto** en la versión blindada de Regression.
-
-**Arquitectura gráfica de CrossOver 26.3 (mapeada inspeccionando su instalación)**:
-- `lib/wine/x86_64-windows/`: PEs pequeños wine estándar (d3d11 425 KB, dxgi 218 KB,
-  d3d12 92 KB, wined3d 1,4 MB + libvkd3d-1/libvkd3d-shader-1/libvkd3d-utils-1 dinámicos).
-  Su `x86_64-unix/` tiene solo 34 `.so` (sin wined3d/d3d11/dxgi/d3d12 unix — todo PE-side).
-- `lib/dxmt/`: su fork DXMT (d3d11 4,7 MB, dxgi 1,7 MB + winemetal.so) — NUNCA en system32.
-- `lib64/apple_gptk/`: D3DMetal de Apple (dlls builtin-format + sus .so + libd3dshared).
-- D3D12 en CX = d3d12.dll (92 KB) → libvkd3d-1.dll → winevulkan → **SU MoltenVK** (SPIRV-Cross fork).
-- Botellas CX: system32 con forwarders pequeños, CERO overrides d3d.
-
-**FFT (D3D12) — ruta vkd3d fallida histórica**: nuestro D3D12 muere dentro de
-`vkCreateComputePipelines` (vkd3d → winevulkan → nuestro MoltenVK). El assert real:
-`!status && "vkCreateComputePipelines"` en `winevulkan/loader_thunks.c:3119`, con un
-c0000005 (salto a dirección basura) dentro de la llamada unixlib. Sospechoso principal:
-nuestro build de MoltenVK 1.2.10 con los 3 stubs de SPIRV-Cross (`spirv_msl.hpp`:
-`texture_offset_buffer_index`, `add_texture_buffer_offsets`, `bitwise_not_causes_ice`).
-Reproducible con `build/d3d12test.exe` (fuente en `build/d3d12test.c`).
-Además: la dxgi de DXMT en system32 rompe D3D12 (FFT la cargaba nativa y su check de GPU
-fallaba: "Graphics card is not supported"). Con `WINEDLLOVERRIDES=dxgi=b` (nuestra dxgi
-builtin de wine —reconstruida desde `build/wine64`, ver nota abajo) el juego enumera el adaptador
-("NVIDIA GeForce 8800 GTX", spoof de wined3d GL) y muere en el mismo crash de vkd3d.
-OJO: la dxgi builtin de wine y la de DXMT NO pueden coexistir como builtin — wine valida el
-par PE/expectativa y solo carga la de DXMT de system32 si wine-root también tiene la de DXMT.
-Por eso wine-root lleva la dxgi de DXMT (estado blindado) y D3D12 queda bloqueado por MoltenVK.
-
-**Cube World (D3D11) — estado conocido**: crea dos swapchains (raíz + hija). Tras el trabajo
-posterior, el usuario confirmó que el motor propio blindado renderizó el menú y el gameplay con
-encuadre e interacción perfectos; es el mejor perfil almacenado. CrossOver llegó históricamente a
-renderizarlo con recorte inferior, pero esa configuración exacta no quedó capturada. En la botella
-CrossOver reinstalada actual, tres pruebas visuales (automática, DXVK aislado y D3DMetal aislado)
-produjeron pantalla negra y `Could not initialize Direct3D`; constan como fallidas y no modifican
-el perfil perfecto de Regression.
-
-**Steam Cloud**: el diálogo modal "No se puede sincronizar" BLOQUEA el IPC de Steam
-(`SteamAPI_Init` falla y el juego muere al instante — parecía un bug del motor y era esto).
-Desactivado el cloud para 1128000 y 1004640 en
-`userdata/121123806/config/localconfig.vdf` (`"cloud" { "enabled" "0" }`). Si vuelve a
-pasar con otro juego: mismo arreglo.
-
-### Clair Obscur: Expedition 33 blindado (2026-07-29)
-
-El motor propio baseline, sin perfil ni override por ejecutable, superó título, carga de una
-partida existente, combate real, HUD, geometría, transparencias, partículas, entrada HID, pausa,
-opciones desde gameplay y salida limpia. El usuario confirmó explícitamente el funcionamiento
-perfecto del run canónico `4667F4AA-DE5C-4F7A-A7A5-AAAB29829D3C`; sus dos procesos terminaron
-con código 0 y la app mostró `Verificado perfecto: Regression`.
-
-La certificación fija la huella de motor/configuración
-`8454bf44804d122d587261d7084ddc08db1185e8c6bc703c5701b5669087c0d7` y no introduce ninguna
-dependencia ejecutable de CrossOver. El expediente reproducible, matriz, hashes, rollback y
-límites de la prueba están en
-[`docs/games/clair-obscur-expedition-33.md`](docs/games/clair-obscur-expedition-33.md).
-
-### Cola de trabajo
-
-1. Iniciar sesión una vez en el Steam propio y revalidar el perfil blindado de Cube World desde la
-   biblioteca compartida; no alterar su motor para acomodar la botella CrossOver actual.
-2. Aprender mediante ejecuciones normales de CrossOver qué perfiles usa el resto del catálogo,
-   marcando visualmente render, entrada y opciones antes de considerarlos perfectos.
-3. Comparar configuraciones verificadas y trasladarlas al motor propio solo mediante fuentes
-   públicas/reimplementación, de forma aislada por juego y sin aplicación automática todavía.
-4. Mantener el diagnóstico de MoltenVK/D3D12 como investigación del motor propio, sin invalidar el
-   funcionamiento ya confirmado de FFT por otra ruta.
-5. Mantener Wine Mono 10.4.1 y el componente Windows Media LGPL como capacidades separadas:
-   CLR por runtime y ASF/WMA/WMV solo por detección acotada de contenido.
-6. Construir y medir un runtime arm64/WoW64 aislado antes de macOS 28; conservar Rosetta como
-   baseline mientras sea la ruta verificada y como fallback heredado cuando el sistema lo permita.
-7. Convertir requisitos aprendidos en recomendaciones tipadas y, después, en recetas permitidas
-   con checksum, licencia, backup y rollback. La ejecución automática sigue desactivada hasta que
-   cada gate tenga pruebas y UX de consentimiento.
-
----
-
-## 9. Estructura del repo
-
-- `patches/` — **los parches propios** (lo único de código Wine/DXMT versionado): consumer
-  IOSurface para winemac.drv, presentación cross-process para DXMT v0.72, routing gráfico
-  aislado por ejecutable para Wine CX 26.3.0 y re-sincronización de la CGL surface de
-  winemac tras la transición a pantalla completa (`wine-26.3.0-winemac-gl-surface-resync`) y
-  autodetección acotada de medios ASF/WMA/WMV (`wine-26.3.0-windows-media-autodetect`).
-- `Regression.app/` — LA APP (autocontenida, firmada). **Canónica**: `/Applications/Regression.app`
-  es un symlink a ella (el `--prefix` del wine va horneado a esta ruta; no mover sin recompilar).
-  *(No versionada: 1,7 GB y contiene binarios del GPTK de Apple no redistribuibles.)*
-- `backups/` — backups consolidados y un manifiesto local en `backups/README.md`.
-- `build/` — scripts de build + toolchains + logs + tests D3D (`/tmp/d3d*test.exe`).
-- `sources-26.3.0/` — fuentes oficiales CX 26.3.0 (wine fork parcheado winemac).
-- `toolchain/x86/` — dependencias compiladas (gnutls, gstreamer, etc.).
-- `assets/icon/` — fuentes del icono.
-- `crossover-sources-26.3.0.tar.gz` — tarball original de la versión fijada.
-- `installers/` — SteamSetup.exe oficial.
-
----
-
-## 10. Estado de almacenamiento (2026-07-27, revisión final)
-
-- Árbol del proyecto: **~6,0 GiB** medidos con `du`; incluye ~1,8 GiB de app local y ~1,5 GiB
-  de backups/evidencia privada. El crecimiento respecto a la limpieza inicial corresponde al
-  expediente reproducible de Grim Dawn y a puntos de rollback conservados, no a apps duplicadas.
-- Biblioteca canónica actual: `steamapps` de la botella CrossOver `Steam` (~80 GB en la medición
-  de esta migración). Regression apunta a esos mismos archivos mediante enlace simbólico.
-- La antigua `steamapps` propia (~4 MB) se movió de forma recuperable a
-  `~/Library/Application Support/Regression/Backups/SharedLibrary/`; no se borró ningún juego.
-- Se retiraron `stage/`, `bottles/test/`, las fuentes y el tarball residuales de 26.2.0,
-  siete bundles de respaldo redundantes/fallidos y artefactos de experimentación.
-- Se conservaron la app canónica firmada, las fuentes 26.3.0, el toolchain, el motor y la botella
-  propios blindados, los puntos de recuperación, la evidencia A/B y los backups de partidas. El
-  inventario actualizado y la clasificación recuperación/evidencia están en `backups/README.md`.
+<p align="center">
+  <img src="assets/icon/oficial/regression-icon.svg" width="34" alt="">
+  <br>
+  <strong>Regression</strong><br>
+  <sub>Compatibilidad medible. Reparaciones aisladas. Cero certificaciones por intuición.</sub>
+</p>

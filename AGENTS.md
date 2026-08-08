@@ -266,6 +266,13 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
     instalación nueva elige Regression; el comparador opcional se conserva para desarrollo,
     pero nunca es requisito del release. No publicar ni instalar una versión que no supere este
     verificador sobre el mismo asset que se subirá a GitHub.
+34. **El README raíz es la portada del producto, no el diario de laboratorio.** Debe conservar
+    la R oficial, el branding definido en `DESIGN.md`, instalación mediante `releases/latest`,
+    capacidades, compatibilidad certificada y rutas claras hacia la documentación. Los detalles
+    de arquitectura, matrices A/B, historiales, comandos extensos y expedientes viven en
+    `docs/` y se enlazan desde `docs/README.md`. No volver a fijar una versión en la URL de
+    instalación ni acumular cronologías en la portada; la release y sus badges deben poder
+    avanzar sin que el README quede obsoleto.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 
