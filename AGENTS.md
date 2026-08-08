@@ -201,13 +201,36 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
     temporal de AppArmor userns solo puede vivir dentro de esa VM y debe revertirse al pausar.
     No quedan A/B legítimas dentro de esa VM: solo se reabre si el proveedor cambia su soporte o
     existe una ruta no-VM que conserve intactos los componentes oficiales. El I+D host nativo ya
-    compila FEXCore público `a04b0241` como Mach-O arm64, carga la dylib y verificó mediante A/B
-    que `MAP_JIT` resuelve el bloqueo `errno 13`; todavía no ejecuta ELF huésped. La siguiente
-    frontera es una sonda de `Context`: el primer intento cayó con escritura nula en `main+88`,
-    por lo que se debe separar primero `HostFeatures.CPUMIDRs`, ABI `fextl` y
-    `CreateNewContext`, sin apilar parches. Este avance no es una integración estable, no ha
-    iniciado el ejecutable principal y no permite marcar el juego como compatible; ver
-    `docs/games/fantasy-life-i.md`.
+    compila FEXCore público `a04b0241` como Mach-O arm64, ejecuta ELF x86-64 reales con glibc y
+    transporta el cliente Wine y el `wineserver` oficiales de Proton 11: 52/52 peticiones, 81
+    respuestas, 29/29 `writev`, 3/3 `create_file` y servidor con salida `0`. Los sockets Unix
+    solicitados por glibc se traducen de forma explícita y todo `connect` absoluto queda
+    confinado al RootFS privado, nunca al host. v270 demuestra sintéticamente una tabla acotada
+    para traducir las vistas lógicas altas que `ntdll.so` necesita (`0x100000000` y
+    `0x7ffffff30000`) a páginas host ordinarias, sin romper las puertas JIT anteriores. v271
+    añade consultas huésped↔host reproducibles, da prioridad a la página redirigida y rechaza
+    mapas huésped u host solapados; su sonda no crea hilo ni ejecuta código huésped. v272
+    reutiliza exactamente el mismo bloque JIT tras sustituir el backing A por B con el hilo
+    detenido, verifica que A protegido ya no recibe accesos y limpia/protege/desmapea ambas
+    regiones sin traducciones residuales. v273 provoca exactamente un `SIGBUS` controlado dentro
+    del JIT, traduce `si_addr` a `0x100000270`, recupera el RIP huésped exacto y restaura
+    handlers, mapa y protección; la reconstrucción pública limpia supera toda la matriz. La
+    siguiente frontera aplica ese contrato a la mitad PE/Windows oficial de Wine en un RootFS
+    nuevo. No se ha ejecutado todavía el orquestador Proton, Steam, EAC ni el juego.
+    Este avance no es una integración estable, no ha iniciado el ejecutable principal y no
+    permite marcar el juego como compatible; ver `docs/games/fantasy-life-i.md`.
+30. **Fields of Mistria está blindado sobre el baseline con el winemac parcheado.** El runner
+    propio del estudio (Rust + SDL3) renderiza con OpenGL 4.1; la pantalla verde del arranque
+    era la CGL surface clavada al backing 1×1 inicial porque el token `GL_FLUSH_UPDATED` de
+    win32u es one-shot y puede perderse (incluido el bug upstream `flags = GL_FLUSH_INTERVAL`).
+    El parche `patches/wine-26.3.0-winemac-gl-surface-resync.patch` re-sincroniza el tamaño
+    desde el client rect vivo dentro de `macdrv_surface_flush`; su hash fijado en
+    `build/verify-protected-state.sh` es `4723d219…` y la mitad PE `winemac.drv` conserva el
+    PIN `da91ec70…`. No crear perfil por ejecutable ni mover la lógica a win32u. Run perfecto:
+    `BAAC2B06-3CAD-467A-B1F1-834B76B794AD`; expediente `docs/games/fields-of-mistria.md`.
+    Además: otro proyecto (Switch2Bridge) instaló el 2026-08-04 un shim de
+    `libSDL2-2.0.0.dylib` dentro del bundle; el usuario decidió conservarlo y el bundle se
+    refirmó con él. No "limpiarlo" sin consultar.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 
@@ -392,6 +415,20 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   La reconciliación local fija la huella compilada
   `af59b82a9e8102995ccbf5a9c93e1e9e6c62afe3213bea8a0bbe2ff7726236f1` y conserva el snapshot
   global anterior como historial.
+- **Secrets of Grindea (baseline general perfecto)**: el run
+  `953B6822-AC77-4977-B862-B206D3CE16AE` completó carga, render, HUD, entrada y combate sin los
+  trabones iniciales en habilidades o eventos, y cerró normalmente. No necesita perfil por
+  ejecutable. `FNA3D_FORCE_DRIVER=OpenGL` empeoró carga, congelaciones y HUD; la compilación
+  Metal concurrente provocó page fault en SDL3 de 32 bits. Ambas variables quedan prohibidas
+  para este juego. El HUD transitorio reapareció tras respawn sin cambiar `Config.txt`. Catálogo,
+  evidencia y rollback: `docs/games/secrets-of-grindea.md` y
+  `backups/secrets-of-grindea-baseline-20260802-0544/`.
+- **Fields of Mistria (baseline perfecto con winemac parcheado)**: la pantalla verde del
+  arranque (compartida con CrossOver) era la CGL surface clavada al backing 1×1 de la ventana
+  inicial; el parche propio `wine-26.3.0-winemac-gl-surface-resync` re-sincroniza el tamaño en
+  el swap. El run `BAAC2B06-3CAD-467A-B1F1-834B76B794AD` cerró con exit=0 y el usuario registró
+  el veredicto perfecto desde la app. Catálogo revisión `2026-08-08.1`; expediente y rollback:
+  `docs/games/fields-of-mistria.md` y `backups/fields-of-mistria-investigation-20260807-202141/`.
 - **FANTASY LIFE i (I+D EAC, no certificado)**: el host macOS estable y CrossOver fallan con
   código `206` al mapear el módulo Linux. En la VM Linux ARM aislada, Proton 11 x86-64 oficial
   sobre el candidato FEX FS/GS v3 superó el `210` tras autenticar manualmente el cliente oficial:
@@ -405,9 +442,13 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   como causas pendientes. El runtime está aislado y no sustituye el FEX del sistema; al cerrar,
   ambos handlers volvieron a `/usr/bin/FEX`, AppArmor userns a `1` y no quedaron procesos.
   No ocultar la VM, copiar tokens, desactivar EAC ni presentar este avance como compatibilidad.
-  La vía no-VM ya tiene FEXCore público nativo arm64 cargable y memoria `MAP_JIT` reproducida;
-  está pausada en el `SIGSEGV` de la primera creación de contexto, antes de `InitCore` y sin ELF
-  huésped. La VM quedó apagada y el motor estable no se tocó.
+  La vía no-VM ya ejecuta ELF x86-64 reales sobre FEXCore público nativo arm64. Un RootFS privado
+  con glibc 2.43 completa el `wine64` Unix oficial de Proton 11, `ntdll.so` y `libgcc_s.so.1`,
+  imprime la versión y sale con código `0`. El hogar Linux privado fue la única variable que
+  eliminó la referencia nula posterior a NSS. El recibo conserva explícitamente
+  `proton_executed=false`, `steam_executed=false` y `eac_executed=false`: todavía falta la mitad
+  PE/Windows y el orquestador. La VM dejó de ser candidata final por `208`; el motor estable no se
+  tocó.
   Expediente y rollback:
   `docs/games/fantasy-life-i.md` y
   `/var/lib/regression-fli-arm-lab/official-valve/compatdata-fli-x86-fex-fsselector-v1-from-arm-prereqs-before-eac-launch.tar.zst`.

@@ -199,6 +199,16 @@ backend y nota de evidencia. Nunca se infiere “perfecto” de un cierre normal
   CX 26.3, activado exclusivamente en `HWR2.exe`; menú, gameplay, entrada, opciones y cierre
   confirmados perfectos. Run blindado: `F8E4EA27-2E6B-439C-AC93-BD927035B5B5`. Expediente:
   [`docs/games/heroes-of-hammerwatch-2.md`](docs/games/heroes-of-hammerwatch-2.md).
+- **Secrets of Grindea** — baseline general sin perfil especial, XNA sobre Wine Mono/FNA;
+  render, HUD, entrada, opciones, combate y habilidades confirmados sin trabones. Run blindado:
+  `953B6822-AC77-4977-B862-B206D3CE16AE`. OpenGL y la compilación Metal concurrente quedan
+  descartados. Expediente:
+  [`docs/games/secrets-of-grindea.md`](docs/games/secrets-of-grindea.md).
+- **Fields of Mistria** — baseline general sin perfil; runner propio del estudio (Rust + SDL3,
+  OpenGL 4.1). La pantalla verde del arranque era una CGL surface clavada al backing 1×1
+  inicial de la ventana: el parche propio `winemac-gl-surface-resync` re-sincroniza el tamaño
+  en el propio swap. Run blindado: `BAAC2B06-3CAD-467A-B1F1-834B76B794AD`. Expediente:
+  [`docs/games/fields-of-mistria.md`](docs/games/fields-of-mistria.md).
 - **D3D9**: DXVK 1.10.3.
 - **Packaging**: app autocontenida (~1,8 GB, PE sin strip — el strip rompía el unwind SEH),
   firmada con identidad de desarrollo estable, runtime endurecido e icono propio.
@@ -224,10 +234,23 @@ backend y nota de evidencia. Nunca se infiere “perfecto” de un cierre normal
   usan una selección temporal y reversible de v3 en `binfmt_misc`; al cerrar, ambos handlers
   volvieron a `/usr/bin/FEX` y AppArmor userns a `1`. No se oculta la VM, no se modifica EAC, no
   se ha integrado Proton en el backend estable ni se presenta este avance como compatibilidad.
-  La vía no virtualizada ya construye FEXCore público `a04b0241` como Mach-O arm64, carga la
-  biblioteca bajo runtime endurecido y supera mediante `MAP_JIT` una A/B de memoria ejecutable.
-  Aún no ejecuta ELF huésped: está pausada en el `SIGSEGV` reproducible de la primera sonda de
-  contexto, antes de `InitCore`. La VM quedó apagada y el backend estable permanece intacto.
+  La vía no virtualizada ya construye FEXCore público `a04b0241` como Mach-O arm64, ejecuta ELF
+  x86-64 reales con `ld-linux`/glibc y transporta el cliente Wine y el `wineserver` oficiales de
+  Proton 11 dentro de un RootFS privado. v270 demuestra, mediante una prueba x86-64 controlada,
+  que las vistas lógicas altas que `ntdll.so` solicita pueden redirigirse a memoria host ordinaria
+  sin romper el shadow bajo ni las puertas JIT anteriores. v271 añade el contrato host
+  huésped↔host, round-trip exacto y rechazo de solapamientos; la reconstrucción desde la revisión
+  pública exacta superó toda la matriz sin ejecutar código huésped en esa puerta nueva. v272
+  demuestra además que un único bloque JIT observa la sustitución A→B con el hilo detenido,
+  conserva exactamente el mismo host code, deja de acceder al backing A protegido y permite
+  limpiar, proteger y desmapear ambas regiones sin traducciones residuales. v273 provoca además
+  un único `SIGBUS` controlado dentro del JIT, atribuye `si_addr` exactamente a
+  `0x100000270`, recupera el RIP huésped exacto y restaura handlers, mapa y protección. La
+  reconstrucción limpia desde FEX público pasó todas las puertas heredadas y la nueva. La
+  siguiente A/B aplicará ese contrato a la mitad PE/Windows oficial de Wine en un RootFS nuevo.
+  Esto sigue sin ser el orquestador Proton completo: Steam, EAC y el juego aún no se han
+  ejecutado por esta ruta. La VM no es la solución final por el rechazo `208`; el backend
+  estable permanece intacto.
   Expediente:
   [`docs/games/fantasy-life-i.md`](docs/games/fantasy-life-i.md).
 
@@ -573,8 +596,9 @@ límites de la prueba están en
 ## 9. Estructura del repo
 
 - `patches/` — **los parches propios** (lo único de código Wine/DXMT versionado): consumer
-  IOSurface para winemac.drv, presentación cross-process para DXMT v0.72 y routing gráfico
-  aislado por ejecutable para Wine CX 26.3.0.
+  IOSurface para winemac.drv, presentación cross-process para DXMT v0.72, routing gráfico
+  aislado por ejecutable para Wine CX 26.3.0 y re-sincronización de la CGL surface de
+  winemac tras la transición a pantalla completa (`wine-26.3.0-winemac-gl-surface-resync`).
 - `Regression.app/` — LA APP (autocontenida, firmada). **Canónica**: `/Applications/Regression.app`
   es un symlink a ella (el `--prefix` del wine va horneado a esta ruta; no mover sin recompilar).
   *(No versionada: 1,7 GB y contiene binarios del GPTK de Apple no redistribuibles.)*

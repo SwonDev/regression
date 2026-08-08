@@ -21,6 +21,10 @@ toolchain/
 installers/
 sources-*/
 crossover-sources-*.tar.gz
+Crossover-ARM64/
+
+# Python
+__pycache__/
 
 # Árbol de build (solo se versionan los scripts y el test de diagnóstico)
 build/*
