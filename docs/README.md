@@ -50,6 +50,9 @@ tampoco crea un veredicto perfecto.
 | RuneScape: Dragonwilds | [`dragonwilds.md`](games/dragonwilds.md) |
 | Tinkerlands | [`tinkerlands.md`](games/tinkerlands.md) |
 | Moonlighter 2: The Endless Vault | [`moonlighter-2.md`](games/moonlighter-2.md) |
+| Cross Blitz | [`cross-blitz.md`](games/cross-blitz.md) |
+| Luminary Demo | [`luminary-demo.md`](games/luminary-demo.md) |
+| Borderlands® 4 | [`borderlands-4.md`](games/borderlands-4.md) |
 
 Cube World y FINAL FANTASY TACTICS — The Ivalice Chronicles también están certificados en el
 catálogo integrado; sus primeras evidencias son anteriores al formato actual de expediente.

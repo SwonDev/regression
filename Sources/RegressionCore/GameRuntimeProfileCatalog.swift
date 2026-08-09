@@ -31,9 +31,35 @@ public struct CompiledGameRuntimeProfile: Equatable, Sendable {
 }
 
 public enum GameRuntimeProfileCatalog {
-    public static let revision = "2026-08-08.12"
+    public static let revision = "2026-08-09.15"
 
     public static let all: [CompiledGameRuntimeProfile] = [
+        CompiledGameRuntimeProfile(
+            appID: "1619520",
+            identifier: "unity-intro-media-borderless-stability",
+            revision: 2,
+            executable: "cross blitz.exe",
+            requiresActiveSteamClient: true,
+            configurationValues: [
+                "profile.id": "unity-intro-media-borderless-stability",
+                "profile.revision": "2",
+                "profile.scope": "exact-process",
+                "profile.executable": "cross blitz.exe",
+                "profile.engine.family": "unity-il2cpp",
+                "profile.repair.id": CompiledRepairRecipe.unityIntroWineGStreamerIsolation.rawValue,
+                "profile.repair.detector": "strict-unity-mf-crash-stack-v1",
+                "profile.repair.learning": "typed-executable-recipe-activation-v1",
+                "profile.dll.disabled": "winegstreamer",
+                "profile.dll.policy": "disabled-only-in-matched-process",
+                "profile.media.preserved": "mfplat,mf,mfreadwrite",
+                "profile.repair.secondary.id": CompiledRepairRecipe.unityExclusiveFullscreenBorderless.rawValue,
+                "profile.repair.secondary.detector": "strict-unity-exclusive-revert-v1",
+                "profile.launch.arguments": "-window-mode borderless",
+                "profile.window.scope": "exact-process",
+                "profile.launcher.entrypoints": "regression,steam",
+                "profile.router.contract": "compiled-process-scoped-dll-and-commandline-v3"
+            ]
+        ),
         CompiledGameRuntimeProfile(
             appID: "347940",
             identifier: "windows-media-gstreamer-autodetect",
@@ -67,6 +93,33 @@ public enum GameRuntimeProfileCatalog {
                 "profile.runtime-root": "lib/profiles/heroes-hammerwatch-2",
                 "profile.graphics.api": "opengl",
                 "profile.opengl.forward-compatible": "1"
+            ]
+        ),
+        CompiledGameRuntimeProfile(
+            appID: "1285190",
+            identifier: "borderlands-4.apple-gptk-linux-uname",
+            revision: 1,
+            executable: "borderlands4.exe",
+            requiresActiveSteamClient: true,
+            configurationValues: [
+                "profile.id": "borderlands-4.apple-gptk-linux-uname",
+                "profile.revision": "1",
+                "profile.scope": "exact-app-process",
+                "profile.executable": "borderlands4.exe",
+                "profile.engine.family": "unreal",
+                "profile.graphics.api": "d3d12",
+                "profile.graphics.backend": "d3dmetal",
+                "profile.graphics.route": "complete",
+                "profile.runtime-root": "components/apple-gptk/4.0b2",
+                "profile.abi.translation": "linux-x86_64-uname-sigsys-v1",
+                "profile.abi.detector": "unix-dispatcher-syscall-63-opcode-0f05",
+                "profile.abi.scope": "exact-borderlands4-process-macos-sigsys-only",
+                "profile.component": "apple-gptk",
+                "profile.component.version": "4.0b2",
+                "profile.component.repair": "manifest-verified",
+                "profile.component.distribution": "external-apple-authorized",
+                "profile.launcher.entrypoints": "regression,steam",
+                "profile.router.contract": "compiled-exact-process-d3dmetal-and-linux-abi-v1"
             ]
         ),
         CompiledGameRuntimeProfile(

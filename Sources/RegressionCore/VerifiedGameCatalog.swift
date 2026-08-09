@@ -67,7 +67,7 @@ public struct VerifiedGameCertification: Codable, Equatable, Identifiable, Senda
 /// motor ni sustituye la telemetría: evita perder el estado blindado al regenerar los datos
 /// locales. Solo se añade una entrada después de validar render, entrada, opciones y gameplay.
 public enum VerifiedGameCatalog {
-    public static let revision = "2026-08-09.1"
+    public static let revision = "2026-08-09.4"
 
     public static let all: [VerifiedGameCertification] = [
         VerifiedGameCertification(
@@ -200,6 +200,42 @@ public enum VerifiedGameCatalog {
                 "a6601afa279218f05f11c770759898744ff0dcc0bc9a5527cefb19a1bc2331b9",
             engineFingerprint:
                 "28d3234281bc056e55cb93c13dbb06d50b53771467c154733de930ef70afa5d1"
+        ),
+        VerifiedGameCertification(
+            appID: "1619520",
+            gameName: "Cross Blitz",
+            backend: .regression,
+            verifiedAt: "2026-08-09",
+            evidence: "docs/games/cross-blitz.md",
+            sourceRunID: UUID(uuidString: "8EB67186-3D63-4C29-9535-BFC1BAB0A52B"),
+            configurationFingerprint:
+                "3d3b91f4c16907b92f19ba819ceb208a2f80b494b50eb9531efb37a35f120e4d",
+            engineFingerprint:
+                "fa3cb7e58e5fc638ad9e4d1e20161a3ecf07ba2e1acd05db280f1a3af2d4a3b0"
+        ),
+        VerifiedGameCertification(
+            appID: "4059020",
+            gameName: "Luminary Demo",
+            backend: .regression,
+            verifiedAt: "2026-08-09",
+            evidence: "docs/games/luminary-demo.md",
+            sourceRunID: UUID(uuidString: "EE1C5A66-1AAA-4594-B30D-1E8ECFA5A27B"),
+            configurationFingerprint:
+                "fa3cb7e58e5fc638ad9e4d1e20161a3ecf07ba2e1acd05db280f1a3af2d4a3b0",
+            engineFingerprint:
+                "fa3cb7e58e5fc638ad9e4d1e20161a3ecf07ba2e1acd05db280f1a3af2d4a3b0"
+        ),
+        VerifiedGameCertification(
+            appID: "1285190",
+            gameName: "Borderlands® 4",
+            backend: .regression,
+            verifiedAt: "2026-08-09",
+            evidence: "docs/games/borderlands-4.md",
+            sourceObservationID: UUID(uuidString: "1BDCD9E2-D5F1-4C30-BBDA-43B0E5B3BBCA"),
+            configurationFingerprint:
+                "a2ec1490e641083b69d63e39f5d013a84760ccf50ca4fb8333b2843f191feeec",
+            engineFingerprint:
+                "d7172135a42000c3c4f672663500351f27df9b89bea0d76551dc79be828b95d0"
         )
     ]
 

@@ -156,7 +156,8 @@ final class RegressionAppModel {
         )
         telemetry = TelemetryCoordinator(
             repository: repository,
-            monitor: SteamLogMonitor()
+            monitor: SteamLogMonitor(),
+            artifactCleaner: GameSessionArtifactCleaner(runner: processRunner)
         )
         preflight = GameTestPreflight(
             runner: processRunner,

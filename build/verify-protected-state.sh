@@ -4,7 +4,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP="${REGRESSION_APP_PATH:-$ROOT/Regression.app}"
 WINE_ROOT="$APP/Contents/SharedSupport/wine-root"
-APPLE_ROOT="$WINE_ROOT/lib/apple_gptk"
 DEFAULT_BOTTLE="$HOME/Library/Application Support/Regression/Bottles/Steam"
 INCLUDE_BOTTLE=false
 BEFORE_DD2_PROMOTION=false
@@ -15,6 +14,8 @@ BEFORE_WINDOWS_MEDIA_PROMOTION=false
 BEFORE_WINDOWS_MEDIA_LINK_FIX=false
 BEFORE_THREE_GAMES_PROMOTION=false
 BEFORE_THREE_GAMES_HARDENING=false
+BEFORE_BORDERLANDS4_PROMOTION=false
+BEFORE_BORDERLANDS4_PROCESS_ISOLATION=false
 
 for argument in "$@"; do
     case "$argument" in
@@ -45,8 +46,14 @@ for argument in "$@"; do
         --before-three-games-hardening)
             BEFORE_THREE_GAMES_HARDENING=true
             ;;
+        --before-borderlands4-promotion)
+            BEFORE_BORDERLANDS4_PROMOTION=true
+            ;;
+        --before-borderlands4-process-isolation)
+            BEFORE_BORDERLANDS4_PROCESS_ISOLATION=true
+            ;;
         *)
-            echo "Uso: $0 [--include-bottle] [--before-dd2-promotion|--before-dragonsword-promotion|--before-hwr2-promotion|--before-tq2-route-unification|--before-windows-media-promotion|--before-windows-media-link-fix|--before-three-games-promotion|--before-three-games-hardening]" >&2
+            echo "Uso: $0 [--include-bottle] [--before-dd2-promotion|--before-dragonsword-promotion|--before-hwr2-promotion|--before-tq2-route-unification|--before-windows-media-promotion|--before-windows-media-link-fix|--before-three-games-promotion|--before-three-games-hardening|--before-borderlands4-promotion|--before-borderlands4-process-isolation]" >&2
             exit 64
             ;;
     esac
@@ -61,6 +68,8 @@ $BEFORE_WINDOWS_MEDIA_PROMOTION && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 
 $BEFORE_WINDOWS_MEDIA_LINK_FIX && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
 $BEFORE_THREE_GAMES_PROMOTION && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
 $BEFORE_THREE_GAMES_HARDENING && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
+$BEFORE_BORDERLANDS4_PROMOTION && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
+$BEFORE_BORDERLANDS4_PROCESS_ISOLATION && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
 if (( PROMOTION_BASELINES > 1 )); then
     echo "ERROR: las verificaciones históricas de promoción son mutuamente excluyentes." >&2
     exit 64
@@ -113,7 +122,10 @@ verify_bottle_hash()
 }
 
 # Lanzador y módulos propios que protegen Steam, DXMT, entrada y routing por juego.
-if $BEFORE_TQ2_ROUTE_UNIFICATION; then
+if $BEFORE_BORDERLANDS4_PROMOTION; then
+    verify_hash 5b8398a2703838342c5d5df751cae2da60de8ddeec0aec19774271fa621f91cf \
+        "Contents/MacOS/regression-engine"
+elif $BEFORE_TQ2_ROUTE_UNIFICATION; then
     verify_hash 5d8f999827ae6cf8ccdf292e8bed4c388ca5120ac4778a305f0890d9a41cdbbc \
         "Contents/MacOS/regression-engine"
 elif $BEFORE_WINDOWS_MEDIA_PROMOTION; then
@@ -125,7 +137,7 @@ elif $BEFORE_THREE_GAMES_PROMOTION || $BEFORE_DD2_PROMOTION || \
     verify_hash 5d99cae95a60c84b8bc9759736ed9e9bec1dafe9b9af8a8190f26c232781ec60 \
         "Contents/MacOS/regression-engine"
 else
-    verify_hash 1ca7959ef2da4968cc057386cce3bba507d2ca3b16d535096273947fe1eb66df \
+    verify_hash ccd590e7e5d395757add0b561bf9fa76d54deb56c491706e28004259c0df913e \
         "Contents/MacOS/regression-engine"
 fi
 verify_hash 6942782b7baf0049bb56aba2b9a4e00a107984b1b0198f2307fb63e87ce3103c \
@@ -148,7 +160,11 @@ if ! $BEFORE_WINDOWS_MEDIA_PROMOTION; then
         exit 1
     }
 fi
-if $BEFORE_DD2_PROMOTION; then
+if $BEFORE_BORDERLANDS4_PROCESS_ISOLATION; then
+    verify_hash 788a3fc9e19be0c7b8de7b1ce8ba78ceabcd25075ab1008172c17ce0e5d80346 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+elif $BEFORE_BORDERLANDS4_PROMOTION; then
+    verify_hash 7d8ca564e18a75776acf8a4ea864b8b51f09684de12058c08cdfad1b26aa16b9 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+elif $BEFORE_DD2_PROMOTION; then
     verify_hash 2cd0f030fd0b92bbf17308021d23b2a2fede6ab02d528c44c03753dfcb049c97 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
 elif $BEFORE_DRAGONSWORD_PROMOTION; then
     verify_hash 9e37f4a1c4c163909b7bc26b2a38b6408f02e261ddbf079b9608bc884b65f67d "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
@@ -162,7 +178,7 @@ elif $BEFORE_THREE_GAMES_PROMOTION || $BEFORE_TQ2_ROUTE_UNIFICATION || \
 elif $BEFORE_THREE_GAMES_HARDENING; then
     verify_hash bf4f25e96883150e955f4465a5a15cbd6adaf0f152a8e1239004486dfbf2b81a "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
 else
-    verify_hash 4a1679b1e05d42e2aba768c4cf93e1acf8cd3ef6fed5400f9ef343953cbfd194 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+    verify_hash e3d336ec0691a2025546318cb65f37d868458ed9786fbc10e20a2a7bdd4fcfcc "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
 fi
 
 DRAGONSWORD_PROFILE="$WINE_ROOT/lib/profiles/dragonsword"

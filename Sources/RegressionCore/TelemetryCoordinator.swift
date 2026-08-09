@@ -77,17 +77,20 @@ public actor TelemetryCoordinator {
     private let repository: CompatibilityRepository
     private let monitor: SteamLogMonitor
     private let sessionJoinGrace: TimeInterval
+    private let artifactCleaner: any GameSessionArtifactCleaning
     private var active: [String: ActiveRun] = [:]
     private var pending: [String: PendingRun] = [:]
 
     public init(
         repository: CompatibilityRepository,
         monitor: SteamLogMonitor,
-        sessionJoinGrace: TimeInterval = 3
+        sessionJoinGrace: TimeInterval = 3,
+        artifactCleaner: any GameSessionArtifactCleaning = NoOpGameSessionArtifactCleaner()
     ) {
         self.repository = repository
         self.monitor = monitor
         self.sessionJoinGrace = max(0, sessionJoinGrace)
+        self.artifactCleaner = artifactCleaner
     }
 
     public func beginMonitoring(logURL: URL) async {
@@ -330,6 +333,11 @@ public actor TelemetryCoordinator {
                     afterConfiguration: after,
                     delta: delta
                 )
+                outcome.issues.append(contentsOf: await artifactCleaner.clean(
+                    appID: run.appID,
+                    backend: run.backend,
+                    endedWindowsProcessIDs: Set(run.exitCodes.keys)
+                ))
                 if result == .crashed, run.backend == .regression {
                     do {
                         if let learned = try CompiledCrashRepairLearner.learn(

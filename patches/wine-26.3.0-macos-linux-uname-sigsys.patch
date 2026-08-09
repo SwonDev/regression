@@ -1,0 +1,98 @@
+diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
+--- a/dlls/ntdll/unix/loader.c
++++ b/dlls/ntdll/unix/loader.c
+@@ -780,6 +780,17 @@ static void regression_set_process_dll_isolation(void)
+     }
+ }
+ 
++/* Gate the Linux ABI compatibility bridge to the one exact process that needs
++ * it.  Clear inherited state first so Steam, CEF and unrelated games can never
++ * opt themselves into a signal-handler behaviour through the environment. */
++static void regression_set_process_abi_compatibility(void)
++{
++    unsetenv( "REGRESSION_LINUX_UNAME_SYSCALL" );
++    if (!regression_executable_is( "borderlands4.exe" )) return;
++    setenv( "REGRESSION_LINUX_UNAME_SYSCALL",
++            "borderlands-4-linux-uname@1", 1 );
++}
++
+ /* Enable the optional LGPL Windows Media codec component only for Steam games
+  * whose own content tree contains ASF/WMA/WMV assets.  The scan is deliberately
+  * bounded, read-only and does not follow symlinks.  This keeps the extra
+@@ -2902,6 +2914,7 @@ static void start_main_thread(void)
+     }
+ 
+     regression_set_process_dll_isolation();
++    regression_set_process_abi_compatibility();
+     regression_set_windows_media_compatibility();
+     regression_set_graphics_backend();
+ 
+diff --git a/dlls/ntdll/unix/signal_x86_64.c b/dlls/ntdll/unix/signal_x86_64.c
+--- a/dlls/ntdll/unix/signal_x86_64.c
++++ b/dlls/ntdll/unix/signal_x86_64.c
+@@ -85,6 +85,34 @@
+ #include <sys/sysctl.h>
+ static BOOL is_rosetta2;
+ 
++/*
++ * Some protected Windows applications invoke Linux helper stubs from a Unix
++ * call dispatched by Wine.  Linux syscall 63 is uname(), while macOS reserves
++ * the same number and raises SIGSYS.  Keep the Linux ABI layout local to this
++ * translation; struct utsname has different field sizes on macOS.
++ */
++#define LINUX_UTSNAME_FIELD_LENGTH 65
++struct linux_utsname_compat
++{
++    char sysname[LINUX_UTSNAME_FIELD_LENGTH];
++    char nodename[LINUX_UTSNAME_FIELD_LENGTH];
++    char release[LINUX_UTSNAME_FIELD_LENGTH];
++    char version[LINUX_UTSNAME_FIELD_LENGTH];
++    char machine[LINUX_UTSNAME_FIELD_LENGTH];
++    char domainname[LINUX_UTSNAME_FIELD_LENGTH];
++};
++
++static const struct linux_utsname_compat linux_utsname_identity =
++{
++    "Linux",
++    "regression",
++    "6.16.7-200.fc42.x86_64",
++    "#1 SMP PREEMPT_DYNAMIC Thu Sep 11 17:46:54 UTC 2025",
++    "x86_64",
++    "(none)"
++};
++static BOOL regression_linux_uname_enabled;
++
+ /* CW Hack 23427 */
+ static BOOL sequoia_or_later = FALSE;
+ #endif
+@@ -2812,6 +2840,18 @@ static void sigsys_handler( int signal, siginfo_t *siginfo, void *sigcontext )
+     struct syscall_frame *frame = get_syscall_frame();
+ 
+     TRACE_(seh)("SIGSYS, rax %#llx, rip %#llx.\n", RAX_sig(ucontext), RIP_sig(ucontext));
++
++    if (regression_linux_uname_enabled &&
++        is_inside_syscall( RSP_sig(ucontext) ) && RAX_sig(ucontext) == 63 &&
++        ((const unsigned char *)RIP_sig(ucontext))[-2] == 0x0f &&
++        ((const unsigned char *)RIP_sig(ucontext))[-1] == 0x05)
++    {
++        TRACE_(seh)("emulating Linux uname syscall from Unix dispatcher at rip %#llx.\n",
++                    RIP_sig(ucontext));
++        memcpy( (void *)RDI_sig(ucontext), &linux_utsname_identity, sizeof(linux_utsname_identity) );
++        RAX_sig(ucontext) = 0;
++        return;
++    }
+ 
+     frame->rip = RIP_sig(ucontext) + 0xb;
+     frame->rcx = RIP_sig(ucontext);
+@@ -3019,8 +3059,11 @@ void signal_init_process(void)
+        handlers but sysctl[byname] is not signal-safe. */
+     {
++        const char *linux_uname_profile = getenv( "REGRESSION_LINUX_UNAME_SYSCALL" );
+         int ret = 0;
+         size_t size = sizeof(ret);
+ 
++        regression_linux_uname_enabled = linux_uname_profile &&
++            !strcmp( linux_uname_profile, "borderlands-4-linux-uname@1" );
+         if (sysctlbyname( "sysctl.proc_translated", &ret, &size, NULL, 0 ) == -1)
+             is_rosetta2 = 0;
+         else

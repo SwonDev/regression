@@ -8,6 +8,8 @@ import Foundation
 /// convertir SQLite en una superficie de ejecución.
 public enum CompiledRepairRecipe: String, Codable, CaseIterable, Sendable {
     case unrealD3D11DualOverlayIsolation = "unreal-d3d11-dual-overlay-isolation-v1"
+    case unityIntroWineGStreamerIsolation = "unity-intro-winegstreamer-isolation-v1"
+    case unityExclusiveFullscreenBorderless = "unity-macos-focus-borderless-v1"
     case gameMakerRetinaFullscreen = "gamemaker-retina-fullscreen-v1"
 }
 
@@ -24,8 +26,38 @@ public enum CompiledRepairClassifier {
             "eosovh-win64-shipping.dll",
             "eossdk-win64-shipping.dll"
         ]
-        guard markers.allSatisfy(normalized.contains) else { return nil }
-        return .unrealD3D11DualOverlayIsolation
+        if markers.allSatisfy(normalized.contains) {
+            return .unrealD3D11DualOverlayIsolation
+        }
+
+        // Unity puede delegar el vídeo de introducción en Media Foundation. La receta solo es
+        // causal cuando aparecen juntos el reproductor de Unity, el worker MF y winegstreamer;
+        // una mención aislada a Unity o GStreamer no basta para aprenderla.
+        let unityMediaMarkers = [
+            "unityplayer.dll",
+            "rtworkq.dll",
+            "winegstreamer.dll",
+            "media foundation",
+            "videoplayer"
+        ]
+        if unityMediaMarkers.allSatisfy(normalized.contains) {
+            return .unityIntroWineGStreamerIsolation
+        }
+
+        // Unity deja evidencia inequívoca cuando el modo exclusivo no puede conservar la
+        // superficie al cambiar de escritorio: falla dos veces y revierte a otra resolución.
+        // Exigimos la secuencia completa para no convertir una mención suelta a fullscreen en
+        // una reparación aprendida.
+        let unityExclusiveFullscreenMarkers = [
+            "initialize engine version:",
+            "failed to apply requested exclusivefullscreen resolution",
+            "unable to apply requested exclusivefullscreen resolution again",
+            "reverting to current display resolution"
+        ]
+        if unityExclusiveFullscreenMarkers.allSatisfy(normalized.contains) {
+            return .unityExclusiveFullscreenBorderless
+        }
+        return nil
     }
 }
 

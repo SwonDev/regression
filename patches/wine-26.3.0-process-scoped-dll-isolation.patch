@@ -8,7 +8,7 @@
  #include <dirent.h>
  #include <errno.h>
  #include <fcntl.h>
-@@ -582,6 +583,120 @@ static void regression_force_builtin_load_order( const char *module )
+@@ -582,6 +583,150 @@ static void regression_force_builtin_load_order( const char *module )
      entry[i] = 0;
      add_load_order_override( entry );
  }
@@ -45,12 +45,15 @@
 +static void regression_apply_learned_process_repair(void)
 +{
 +    static const char header[] = "REGRESSION-COMPILED-REPAIRS\t1\n";
-+    static const char recipe[] = "unreal-d3d11-dual-overlay-isolation-v1";
++    static const char overlay_recipe[] = "unreal-d3d11-dual-overlay-isolation-v1";
++    static const char unity_media_recipe[] = "unity-intro-winegstreamer-isolation-v1";
++    static const char unity_borderless_recipe[] = "unity-macos-focus-borderless-v1";
++    static const char gamemaker_fullscreen_recipe[] = "gamemaker-retina-fullscreen-v1";
 +    const char *prefix = getenv( "WINEPREFIX" );
 +    char path[PATH_MAX], line[320], *separator, *newline;
 +    struct stat st;
 +    FILE *file;
-+    int fd, matched = 0, path_length;
++    int fd, matched_overlay = 0, matched_unity_media = 0, path_length;
 +    unsigned int count = 0;
 +
 +    if (!prefix || !prefix[0] ||
@@ -74,17 +77,36 @@
 +        *newline = 0;
 +        if (!(separator = strchr( line, '\t' )) || strchr( separator + 1, '\t' )) goto done;
 +        *separator++ = 0;
-+        if (!regression_valid_dll_name( line ) || !strchr( line, '.' ) ||
-+            strcmp( separator, recipe )) goto done;
-+        if (regression_executable_is( line )) matched = 1;
++        if (!regression_valid_dll_name( line ) || !strchr( line, '.' )) goto done;
++        if (!strcmp( separator, overlay_recipe ))
++        {
++            if (regression_executable_is( line )) matched_overlay = 1;
++        }
++        else if (!strcmp( separator, unity_media_recipe ))
++        {
++            if (regression_executable_is( line )) matched_unity_media = 1;
++        }
++        else if (!strcmp( separator, unity_borderless_recipe ) ||
++                 !strcmp( separator, gamemaker_fullscreen_recipe ))
++        {
++            /* Applied by the startup-parameter and state-repair layers. */
++        }
++        else goto done;
 +    }
 +    if (ferror( file )) goto done;
-+    if (matched)
++    if (matched_overlay)
 +    {
 +        regression_force_disabled_load_order( "eosovh-win64-shipping" );
-+        setenv( "REGRESSION_COMPILED_REPAIR", recipe, 1 );
++        setenv( "REGRESSION_COMPILED_REPAIR", overlay_recipe, 1 );
 +        fprintf( stderr,
 +                 "Regression: applied learned compiled repair only to the exact process.\n" );
++    }
++    if (matched_unity_media)
++    {
++        regression_force_disabled_load_order( "winegstreamer" );
++        setenv( "REGRESSION_COMPILED_REPAIR", unity_media_recipe, 1 );
++        fprintf( stderr,
++                 "Regression: isolated winegstreamer only in the learned Unity process.\n" );
 +    }
 +
 +done:
@@ -94,7 +116,7 @@
 +/* Isolate a conflicting optional DLL in one exact game process.  Environment
 + * routes are constrained to basenames and a disabled-only action; no path,
 + * load mode or command can be supplied by local learning data.  The compiled
-+ * Dragonwilds fallback survives Steam/wineserver dropping Unix-only state. */
++ * compiled fallbacks survive Steam/wineserver dropping Unix-only state. */
 +static void regression_set_process_dll_isolation(void)
 +{
 +    char executable_variable[96], dll_variable[96];
@@ -106,6 +128,13 @@
 +        regression_force_disabled_load_order( "eosovh-win64-shipping" );
 +        setenv( "REGRESSION_COMPILED_REPAIR",
 +                "unreal-d3d11-dual-overlay-isolation-v1", 1 );
++    }
++
++    if (regression_executable_is( "cross blitz.exe" ))
++    {
++        regression_force_disabled_load_order( "winegstreamer" );
++        setenv( "REGRESSION_COMPILED_REPAIR",
++                "unity-intro-winegstreamer-isolation-v1", 1 );
 +    }
 +
 +    regression_apply_learned_process_repair();
@@ -120,7 +149,8 @@
 +                  "REGRESSION_PROCESS_DLL_ISOLATION_ROUTE_%u_DLL", i );
 +        module = getenv( dll_variable );
 +        if (!regression_valid_dll_name( module ) ||
-+            strcasecmp( module, "eosovh-win64-shipping" )) continue;
++            (strcasecmp( module, "eosovh-win64-shipping" ) &&
++             strcasecmp( module, "winegstreamer" ))) continue;
 +        regression_force_disabled_load_order( module );
 +        fprintf( stderr, "Regression: disabled optional module %s only for matched process.\n",
 +                 module );
@@ -129,7 +159,7 @@
  
  /* Enable the optional LGPL Windows Media codec component only for Steam games
   * whose own content tree contains ASF/WMA/WMV assets.  The scan is deliberately
-@@ -2708,6 +2823,7 @@ void __wine_main( int argc, char *argv[], char *envp[] )
+@@ -2708,5 +2853,6 @@ void __wine_main( int argc, char *argv[], char *envp[] )
          }
      }
  

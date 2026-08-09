@@ -28,15 +28,44 @@ if [[ ! -f "$STEAM" ]]; then
     exit 1
 fi
 
-prepare_titan_quest_2_steam_entrypoint()
+prepare_unreal_bootstrap_routes()
+{
+    local controller="$ROOT/Contents/SharedSupport/bin/regressionctl"
+    local routes source target count=0
+    local shared_root="$WINEPREFIX/drive_c/Program Files (x86)/Steam/steamapps/common/"
+
+    [[ -x "$controller" ]] || return 0
+    if ! routes="$("$controller" unreal-bootstrap-routes)"; then
+        printf 'Regression: no se pudo detectar de forma segura los bootstraps Unreal; se conserva Steam.\n' >&2
+        return 0
+    fi
+    [[ -n "$routes" ]] || return 0
+
+    while IFS=$'\t' read -r source target; do
+        [[ "$source" =~ ^[A-Za-z0-9_-]+\.exe$ ]] || continue
+        [[ "$target" == "$shared_root"* && -f "$target" && ! -L "$target" ]] || continue
+        (( count < 16 )) || break
+        export "REGRESSION_BOOTSTRAP_REDIRECT_${count}_EXECUTABLE=$source"
+        export "REGRESSION_BOOTSTRAP_REDIRECT_${count}_TARGET=$target"
+        count=$((count + 1))
+    done <<< "$routes"
+
+    if (( count > 0 )); then
+        export REGRESSION_BOOTSTRAP_REDIRECT_COUNT="$count"
+    fi
+}
+
+prepare_external_apple_gptk_routes()
 {
     local installer="$ROOT/Contents/SharedSupport/bin/install-apple-gptk-component"
     local component="$APP_SUPPORT/Components/AppleGPTK/4.0b2"
-    local game_root shipping
+    local common_root tq2_shipping borderlands_shipping count=0
 
-    game_root="$(dirname "$STEAM")/steamapps/common/Titan Quest II"
-    shipping="$game_root/TQ2/Binaries/Win64/TQ2-Win64-Shipping.exe"
-    [[ -x "$installer" && -f "$shipping" ]] || return 0
+    common_root="$(dirname "$STEAM")/steamapps/common"
+    tq2_shipping="$common_root/Titan Quest II/TQ2/Binaries/Win64/TQ2-Win64-Shipping.exe"
+    borderlands_shipping="$common_root/Borderlands 4/OakGame/Binaries/Win64/Borderlands4.exe"
+    [[ -x "$installer" ]] || return 0
+    [[ -f "$tq2_shipping" || -f "$borderlands_shipping" ]] || return 0
 
     # Si el componente está dañado pero el DMG oficial permanece en caché, la
     # reparación es automática y transaccional. Si Apple aún exige descargarlo,
@@ -45,12 +74,17 @@ prepare_titan_quest_2_steam_entrypoint()
         "$installer" >/dev/null 2>&1 || return 0
     fi
 
-    export REGRESSION_BOOTSTRAP_REDIRECT_COUNT=1
-    export REGRESSION_BOOTSTRAP_REDIRECT_0_EXECUTABLE="TQ2.exe"
-    export REGRESSION_BOOTSTRAP_REDIRECT_0_TARGET="$shipping"
-    export REGRESSION_EXTERNAL_D3DMETAL_ROUTE_COUNT=1
-    export REGRESSION_EXTERNAL_D3DMETAL_ROUTE_0_EXECUTABLE="TQ2-Win64-Shipping.exe"
-    export REGRESSION_EXTERNAL_D3DMETAL_ROUTE_0_WINE_ROOT="$component/wine"
+    if [[ -f "$tq2_shipping" ]]; then
+        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_EXECUTABLE=TQ2-Win64-Shipping.exe"
+        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_WINE_ROOT=$component/wine"
+        count=$((count + 1))
+    fi
+    if [[ -f "$borderlands_shipping" ]]; then
+        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_EXECUTABLE=Borderlands4.exe"
+        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_WINE_ROOT=$component/wine"
+        count=$((count + 1))
+    fi
+    export REGRESSION_EXTERNAL_D3DMETAL_ROUTE_COUNT="$count"
 }
 
 prepare_windows_media_component()
@@ -85,12 +119,12 @@ prepare_process_dll_isolation_routes()
     export REGRESSION_PROCESS_DLL_ISOLATION_ROUTE_0_DLL="EOSOVH-Win64-Shipping"
 }
 
-# Steam hereda únicamente rutas compiladas y verificadas. Tanto el botón de
-# Regression (`Steam.exe -applaunch 1154030`) como «Jugar» dentro de Steam pasan
-# por el mismo bootstrap. El router de Wine sustituye su imagen de startup por
-# el Shipping exacto y aplica D3DMetal solo en ese proceso. Mantener una única
-# ruta evita diferencias de argv, Steamworks y EOS entre ambos puntos de entrada.
-prepare_titan_quest_2_steam_entrypoint
+# Steam hereda únicamente rutas detectadas por una receta compilada y acotada.
+# Tanto el botón de Regression como «Jugar» dentro de Steam pasan por el mismo
+# bootstrap. El router sustituye la imagen estándar de Unreal por el Shipping
+# exacto; los títulos D3D12 validados añaden D3DMetal solo al proceso permitido.
+prepare_unreal_bootstrap_routes
+prepare_external_apple_gptk_routes
 prepare_windows_media_component
 prepare_compiled_game_state_repairs
 prepare_process_dll_isolation_routes

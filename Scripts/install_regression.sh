@@ -4,7 +4,7 @@
 # y reutiliza D3DMetal solo desde una instalación local que el usuario ya haya licenciado.
 set -Eeuo pipefail
 
-VERSION="1.9.1"
+VERSION="1.10.0"
 REPO="SwonDev/regression"
 ASSET_NAME="Regression-${VERSION}-macos-arm64.tar.zst"
 APP_NAME="Regression.app"

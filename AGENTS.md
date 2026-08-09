@@ -306,6 +306,40 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
     app anterior; la misma release no se reintenta automáticamente en bucle. Nunca terminar un juego
     para actualizar, aceptar un asset de otro repositorio ni sustituir este flujo por comandos aprendidos; ver
     `docs/automatic-updates.md`.
+39. **Cross Blitz combina dos reparaciones Unity estrictamente por proceso.** El App ID
+    `1619520` activa `unity-intro-media-borderless-stability`: deshabilita únicamente
+    `winegstreamer` para `Cross Blitz.exe`, conserva Media Foundation y añade el argumento
+    oficial `-window-mode borderless`. La primera parte evita que la intro corrompa la
+    superficie; la segunda impide que Unity 2021.3 vuelva a una superficie gris al cambiar de
+    escritorio o recuperar foco en macOS. No cambiar el driver, el registro ni multimedia
+    globales. Run perfecto `8EB67186-3D63-4C29-9535-BFC1BAB0A52B`; ver
+    `docs/games/cross-blitz.md`.
+40. **Luminary Demo protege dos fallos generales de Wine, no una excepción gráfica.** El App ID
+    `4059020` usa un bootstrap Unreal que debe resolverse de forma acotada al Shipping instalado;
+    después, el runtime aplica el backport oficial de Wine que invalida y verifica los handles
+    `HDEVNOTIFY` entre `cfgmgr32` y `sechost`. El crash tardío estaba en
+    `CM_Unregister_Notification`/`I_ScUnregisterDeviceNotification`, no en D3DMetal ni DXMT.
+    No añadir bypass de VC++ ni override por juego. Run perfecto
+    `EE1C5A66-1AAA-4594-B30D-1E8ECFA5A27B`; ver `docs/games/luminary-demo.md`.
+41. **Los auxiliares Steam se limpian solo al consolidar la sesión exacta.** Después de que
+    todos los PID Windows del run hayan terminado, `GameSessionArtifactCleaner` puede enviar
+    `TERM` únicamente a `gameoverlayui64.exe` o `steamerrorreporter*.exe` que coincidan a la vez
+    con `-gameid`, un PID Windows finalizado y un `lsof` del runtime de Regression. Nunca termina
+    Steam, steamwebhelper, wineserver, otro juego ni el backend comparador. El preflight sigue
+    siendo de solo lectura.
+42. **Borderlands 4 combina D3D12 externo y una traducción ABI estricta.** El App ID `1285190`
+    selecciona GPTK 4.0b2 únicamente para el basename `Borderlands4.exe`. Su helper Unix ejecuta
+    el syscall Linux x86-64 63 (`uname`) dentro de `__wine_unix_call_dispatcher`; macOS responde
+    `SIGSYS` y el manejador anterior corrompía el retorno hasta producir el page fault bajo.
+    `wine-26.3.0-macos-linux-uname-sigsys.patch` borra cualquier activación heredada y solo la
+    habilita para el basename compilado exacto; dentro del manejador emula la estructura Linux
+    solo si coinciden `is_inside_syscall`, `RAX=63` y el opcode previo exacto `0f 05`. La
+    variante global dejó negra la tienda CEF en una A/B y fue descartada. No ampliar esa firma,
+    globalizar D3DMetal ni copiar el payload de Apple al release. La certificación final es la
+    observación importada final `1BDCD9E2-D5F1-4C30-BBDA-43B0E5B3BBCA`, con huellas
+    `a2ec1490…`/`d7172135…` posteriores al aislamiento de CEF y respaldada por confirmación
+    explícita de gameplay, HUD, cámara, entrada y rendimiento perfectos; ver
+    `docs/games/borderlands-4.md`.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 

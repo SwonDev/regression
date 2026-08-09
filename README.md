@@ -151,6 +151,9 @@ Los expedientes públicos explican causa, receta, evidencia y regla de no regres
 | RuneScape: Dragonwilds | Verificado perfecto | [Ver expediente](docs/games/dragonwilds.md) |
 | Tinkerlands | Verificado perfecto | [Ver expediente](docs/games/tinkerlands.md) |
 | Moonlighter 2: The Endless Vault | Verificado perfecto | [Ver expediente](docs/games/moonlighter-2.md) |
+| Cross Blitz | Verificado perfecto | [Ver expediente](docs/games/cross-blitz.md) |
+| Luminary Demo | Verificado perfecto | [Ver expediente](docs/games/luminary-demo.md) |
+| Borderlands® 4 | Verificado perfecto | [Ver expediente](docs/games/borderlands-4.md) |
 
 También forman parte de la matriz de regresión Steam/CEF, Palworld y la ruta D3D9. Moonlighter 2
 es a la vez un juego certificado y el control Unity obligatorio para cambios comunes de Wine.

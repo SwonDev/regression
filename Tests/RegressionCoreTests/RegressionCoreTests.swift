@@ -68,7 +68,29 @@ final class RegressionCoreTests: XCTestCase {
             VerifiedGameCatalog.certification(for: "2350790")?.gameName,
             "Moonlighter 2: The Endless Vault"
         )
-        XCTAssertEqual(VerifiedGameCatalog.revision, "2026-08-09.1")
+        XCTAssertEqual(
+            VerifiedGameCatalog.certification(for: "1619520")?.sourceRunID,
+            UUID(uuidString: "8EB67186-3D63-4C29-9535-BFC1BAB0A52B")
+        )
+        XCTAssertEqual(
+            VerifiedGameCatalog.certification(for: "4059020")?.sourceRunID,
+            UUID(uuidString: "EE1C5A66-1AAA-4594-B30D-1E8ECFA5A27B")
+        )
+        let borderlands = VerifiedGameCatalog.certification(for: "1285190")
+        XCTAssertEqual(borderlands?.gameName, "Borderlands® 4")
+        XCTAssertEqual(
+            borderlands?.sourceObservationID,
+            UUID(uuidString: "1BDCD9E2-D5F1-4C30-BBDA-43B0E5B3BBCA")
+        )
+        XCTAssertEqual(
+            borderlands?.configurationFingerprint,
+            "a2ec1490e641083b69d63e39f5d013a84760ccf50ca4fb8333b2843f191feeec"
+        )
+        XCTAssertEqual(
+            borderlands?.engineFingerprint,
+            "d7172135a42000c3c4f672663500351f27df9b89bea0d76551dc79be828b95d0"
+        )
+        XCTAssertEqual(VerifiedGameCatalog.revision, "2026-08-09.4")
         XCTAssertNil(VerifiedGameCatalog.certification(for: "999999999"))
     }
 
@@ -425,6 +447,98 @@ final class RegressionCoreTests: XCTestCase {
         XCTAssertFalse(unrelated.requiresActiveSteamClient)
         XCTAssertNil(unrelated.configurationValues["profile.launcher"])
         XCTAssertNil(unrelated.configurationValues["profile.router.contract"])
+    }
+
+    func testBorderlands4CompiledProfileIsExactAndRegressionOnly() throws {
+        let profile = try XCTUnwrap(
+            GameRuntimeProfileCatalog.profile(for: "1285190", backend: .regression)
+        )
+
+        XCTAssertEqual(profile.identifier, "borderlands-4.apple-gptk-linux-uname")
+        XCTAssertEqual(profile.revision, 1)
+        XCTAssertEqual(profile.executable, "borderlands4.exe")
+        XCTAssertTrue(profile.requiresActiveSteamClient)
+        XCTAssertEqual(profile.configurationValues["profile.scope"], "exact-app-process")
+        XCTAssertEqual(profile.configurationValues["profile.engine.family"], "unreal")
+        XCTAssertEqual(profile.configurationValues["profile.graphics.api"], "d3d12")
+        XCTAssertEqual(profile.configurationValues["profile.graphics.backend"], "d3dmetal")
+        XCTAssertEqual(profile.configurationValues["profile.graphics.route"], "complete")
+        XCTAssertEqual(
+            profile.configurationValues["profile.abi.translation"],
+            "linux-x86_64-uname-sigsys-v1"
+        )
+        XCTAssertEqual(
+            profile.configurationValues["profile.abi.detector"],
+            "unix-dispatcher-syscall-63-opcode-0f05"
+        )
+        XCTAssertEqual(
+            profile.configurationValues["profile.abi.scope"],
+            "exact-borderlands4-process-macos-sigsys-only"
+        )
+        XCTAssertEqual(profile.configurationValues["profile.component"], "apple-gptk")
+        XCTAssertEqual(profile.configurationValues["profile.component.version"], "4.0b2")
+        XCTAssertEqual(profile.configurationValues["profile.component.repair"], "manifest-verified")
+        XCTAssertEqual(
+            profile.configurationValues["profile.component.distribution"],
+            "external-apple-authorized"
+        )
+        XCTAssertEqual(profile.configurationValues["profile.launcher.entrypoints"], "regression,steam")
+        XCTAssertEqual(
+            profile.configurationValues["profile.router.contract"],
+            "compiled-exact-process-d3dmetal-and-linux-abi-v1"
+        )
+        XCTAssertNil(GameRuntimeProfileCatalog.profile(for: "1285190", backend: .crossOver))
+
+        let unrelated = try XCTUnwrap(
+            GameRuntimeProfileCatalog.profile(for: "619820", backend: .regression)
+        )
+        XCTAssertNil(unrelated.configurationValues["profile.abi.translation"])
+        XCTAssertNil(unrelated.configurationValues["profile.component.distribution"])
+    }
+
+    func testMacOSLinuxUnamePatchIsNarrowAndContainsNoDiagnostics() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let patchURL = repositoryRoot
+            .appendingPathComponent("patches/wine-26.3.0-macos-linux-uname-sigsys.patch")
+        let contents = try String(contentsOf: patchURL, encoding: .utf8)
+
+        XCTAssertTrue(contents.contains("is_inside_syscall( RSP_sig(ucontext) )"))
+        XCTAssertTrue(contents.contains("regression_linux_uname_enabled &&"))
+        XCTAssertTrue(contents.contains("RAX_sig(ucontext) == 63"))
+        XCTAssertTrue(contents.contains("[-2] == 0x0f"))
+        XCTAssertTrue(contents.contains("[-1] == 0x05"))
+        XCTAssertTrue(contents.contains("LINUX_UTSNAME_FIELD_LENGTH 65"))
+        XCTAssertTrue(contents.contains("char domainname[LINUX_UTSNAME_FIELD_LENGTH]"))
+        XCTAssertTrue(contents.contains("\"Linux\""))
+        XCTAssertTrue(contents.contains("\"x86_64\""))
+        XCTAssertTrue(contents.contains("REGRESSION_LINUX_UNAME_SYSCALL"))
+        XCTAssertTrue(contents.contains("unsetenv( \"REGRESSION_LINUX_UNAME_SYSCALL\" )"))
+        XCTAssertTrue(contents.contains("regression_executable_is( \"borderlands4.exe\" )"))
+        XCTAssertTrue(contents.contains("borderlands-4-linux-uname@1"))
+        XCTAssertFalse(contents.contains("DEBUG-BL4-SIGSYS"))
+        XCTAssertFalse(contents.contains("WINEDEBUG=+seh"))
+    }
+
+    func testExternalAppleRoutesRemainExactAndComponentVerified() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let launcherURL = repositoryRoot.appendingPathComponent("Scripts/regression-engine.sh")
+        let contents = try String(contentsOf: launcherURL, encoding: .utf8)
+
+        XCTAssertTrue(contents.contains("prepare_external_apple_gptk_routes"))
+        XCTAssertTrue(contents.contains("Titan Quest II/TQ2/Binaries/Win64/TQ2-Win64-Shipping.exe"))
+        XCTAssertTrue(contents.contains("Borderlands 4/OakGame/Binaries/Win64/Borderlands4.exe"))
+        XCTAssertTrue(contents.contains("REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_EXECUTABLE=TQ2-Win64-Shipping.exe"))
+        XCTAssertTrue(contents.contains("REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_EXECUTABLE=Borderlands4.exe"))
+        XCTAssertTrue(contents.contains("REGRESSION_EXTERNAL_D3DMETAL_ROUTE_COUNT=\"$count\""))
+        XCTAssertTrue(contents.contains("--verify-only"))
+        XCTAssertFalse(contents.contains("WINEDLLOVERRIDES=\"d3d12"))
+        XCTAssertFalse(contents.contains("REGRESSION_DEBUG_BORDERLANDS4"))
     }
 
     func testForsakenIsleWindowsMediaProfileIsExactAndRegressionOnly() throws {

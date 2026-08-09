@@ -7,8 +7,8 @@ MACOS_DIR="$APP/Contents/MacOS"
 PLIST="$APP/Contents/Info.plist"
 RESOURCES_DIR="$APP/Contents/Resources"
 STATE_ICON_DIR="$ROOT/assets/menubar/states"
-VERSION="1.9.1"
-BUILD_NUMBER="34"
+VERSION="1.10.0"
+BUILD_NUMBER="35"
 BACKUP_ROOT="$ROOT/backups/native-packaging"
 COMPATIBILITY_ROOT="$HOME/Library/Application Support/Regression/Compatibility"
 COMPATIBILITY_DB="$COMPATIBILITY_ROOT/compatibility.sqlite"
@@ -32,6 +32,10 @@ verify_protected_state()
         arguments+=(--before-three-games-promotion)
     elif [[ "$phase" == "before-three-games-hardening" ]]; then
         arguments+=(--before-three-games-hardening)
+    elif [[ "$phase" == "before-borderlands4-promotion" ]]; then
+        arguments+=(--before-borderlands4-promotion)
+    elif [[ "$phase" == "before-borderlands4-process-isolation" ]]; then
+        arguments+=(--before-borderlands4-process-isolation)
     fi
     if [[ -d "$bottle" ]]; then
         arguments+=(--include-bottle)
@@ -62,6 +66,8 @@ verify_prepackage_state()
             verify_protected_state before-windows-media-link-fix
         elif [[ "$installed_ntdll_hash" == "bf4f25e96883150e955f4465a5a15cbd6adaf0f152a8e1239004486dfbf2b81a" ]]; then
             verify_protected_state before-three-games-hardening
+        elif [[ "$installed_ntdll_hash" == "788a3fc9e19be0c7b8de7b1ce8ba78ceabcd25075ab1008172c17ce0e5d80346" ]]; then
+            verify_protected_state before-borderlands4-process-isolation
         else
             verify_protected_state
         fi
@@ -74,6 +80,9 @@ verify_prepackage_state()
     elif [[ "$installed_hash" == "5d99cae95a60c84b8bc9759736ed9e9bec1dafe9b9af8a8190f26c232781ec60" &&
             "$source_hash" == "1ca7959ef2da4968cc057386cce3bba507d2ca3b16d535096273947fe1eb66df" ]]; then
         verify_protected_state before-three-games-promotion
+    elif [[ "$installed_hash" == "5b8398a2703838342c5d5df751cae2da60de8ddeec0aec19774271fa621f91cf" &&
+            "$source_hash" == "ccd590e7e5d395757add0b561bf9fa76d54deb56c491706e28004259c0df913e" ]]; then
+        verify_protected_state before-borderlands4-promotion
     else
         echo "ERROR: el lanzador instalado no es el baseline anterior ni el candidato canónico." >&2
         exit 1
@@ -184,6 +193,43 @@ if [[ ! -x "$CONTROL_BINARY" ]]; then
     exit 1
 fi
 
+# Valida todos los insumos antes de crear el rollback o modificar el bundle. Un
+# requisito ausente debe dejar Regression.app exactamente como estaba.
+CANDIDATE_NTDLL="$ROOT/build/wine64/dlls/ntdll/ntdll.so"
+[[ -f "$CANDIDATE_NTDLL" &&
+   "$(shasum -a 256 "$CANDIDATE_NTDLL" | awk '{print $1}')" == "e3d336ec0691a2025546318cb65f37d868458ed9786fbc10e20a2a7bdd4fcfcc" ]] || {
+    echo "ERROR: falta el ntdll candidato exacto de las reparaciones compiladas." >&2
+    exit 1
+}
+strings -a "$CANDIDATE_NTDLL" | grep -F 'compiled-repair-activations-v1.tsv' >/dev/null || {
+    echo "ERROR: el ntdll candidato no contiene el consumidor de aprendizaje tipado." >&2
+    exit 1
+}
+ENGINE_SOURCE="$ROOT/Scripts/regression-engine.sh"
+[[ -x "$ENGINE_SOURCE" ]] || {
+    echo "ERROR: falta el lanzador versionado del motor propio." >&2
+    exit 1
+}
+COMPONENT_INSTALLER_SOURCE="$ROOT/Scripts/install_apple_gptk_component.sh"
+[[ -x "$COMPONENT_INSTALLER_SOURCE" ]] || {
+    echo "ERROR: falta el instalador autorreparable de Apple GPTK." >&2
+    exit 1
+}
+WINDOWS_MEDIA_BUILD="$ROOT/build/windows-media-component/1"
+WINDOWS_MEDIA_INSTALLER_SOURCE="$ROOT/Scripts/install_windows_media_component.sh"
+[[ -f "$WINDOWS_MEDIA_BUILD/manifest.sha256" ]] || {
+    echo "ERROR: falta el componente Windows Media; ejecuta build/build-windows-media-component.sh" >&2
+    exit 1
+}
+(
+    cd "$WINDOWS_MEDIA_BUILD"
+    shasum -a 256 -c manifest.sha256
+)
+[[ -x "$WINDOWS_MEDIA_INSTALLER_SOURCE" ]] || {
+    echo "ERROR: falta el instalador autorreparable de Windows Media." >&2
+    exit 1
+}
+
 mkdir -p "$BACKUP_ROOT"
 umask 077
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
@@ -213,16 +259,6 @@ ROLLBACK_DIR="$(mktemp -d "$BACKUP_ROOT/.package-rollback.XXXXXX")"
 cp -cR "$APP" "$ROLLBACK_DIR/Regression.app"
 MUTATION_STARTED=true
 
-CANDIDATE_NTDLL="$ROOT/build/wine64/dlls/ntdll/ntdll.so"
-[[ -f "$CANDIDATE_NTDLL" &&
-   "$(shasum -a 256 "$CANDIDATE_NTDLL" | awk '{print $1}')" == "4a1679b1e05d42e2aba768c4cf93e1acf8cd3ef6fed5400f9ef343953cbfd194" ]] || {
-    echo "ERROR: falta el ntdll candidato exacto de las reparaciones compiladas." >&2
-    exit 1
-}
-strings -a "$CANDIDATE_NTDLL" | grep -F 'compiled-repair-activations-v1.tsv' >/dev/null || {
-    echo "ERROR: el ntdll candidato no contiene el consumidor de aprendizaje tipado." >&2
-    exit 1
-}
 NTDLL_DESTINATION="$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
 TEMP_NTDLL="$NTDLL_DESTINATION.new"
 install -m 755 "$CANDIDATE_NTDLL" "$TEMP_NTDLL"
@@ -230,11 +266,6 @@ mv "$TEMP_NTDLL" "$NTDLL_DESTINATION"
 
 mkdir -p "$MACOS_DIR"
 ENGINE_LAUNCHER="$MACOS_DIR/regression-engine"
-ENGINE_SOURCE="$ROOT/Scripts/regression-engine.sh"
-[[ -x "$ENGINE_SOURCE" ]] || {
-    echo "ERROR: falta el lanzador versionado del motor propio." >&2
-    exit 1
-}
 TEMP_ENGINE="$MACOS_DIR/.regression-engine.new"
 install -m 755 "$ENGINE_SOURCE" "$TEMP_ENGINE"
 mv "$TEMP_ENGINE" "$ENGINE_LAUNCHER"
@@ -246,27 +277,12 @@ mkdir -p "$APP/Contents/SharedSupport/bin"
 TEMP_CONTROL="$APP/Contents/SharedSupport/bin/.regressionctl.new"
 install -m 755 "$CONTROL_BINARY" "$TEMP_CONTROL"
 mv "$TEMP_CONTROL" "$APP/Contents/SharedSupport/bin/regressionctl"
-COMPONENT_INSTALLER_SOURCE="$ROOT/Scripts/install_apple_gptk_component.sh"
 COMPONENT_INSTALLER="$APP/Contents/SharedSupport/bin/install-apple-gptk-component"
-[[ -x "$COMPONENT_INSTALLER_SOURCE" ]] || {
-    echo "ERROR: falta el instalador autorreparable de Apple GPTK." >&2
-    exit 1
-}
 TEMP_COMPONENT_INSTALLER="$APP/Contents/SharedSupport/bin/.install-apple-gptk-component.new"
 install -m 755 "$COMPONENT_INSTALLER_SOURCE" "$TEMP_COMPONENT_INSTALLER"
 mv "$TEMP_COMPONENT_INSTALLER" "$COMPONENT_INSTALLER"
-WINDOWS_MEDIA_BUILD="$ROOT/build/windows-media-component/1"
 WINDOWS_MEDIA_SOURCE="$APP/Contents/SharedSupport/components/windows-media/1"
-WINDOWS_MEDIA_INSTALLER_SOURCE="$ROOT/Scripts/install_windows_media_component.sh"
 WINDOWS_MEDIA_INSTALLER="$APP/Contents/SharedSupport/bin/install-windows-media-component"
-[[ -f "$WINDOWS_MEDIA_BUILD/manifest.sha256" ]] || {
-    echo "ERROR: falta el componente Windows Media; ejecuta build/build-windows-media-component.sh" >&2
-    exit 1
-}
-[[ -x "$WINDOWS_MEDIA_INSTALLER_SOURCE" ]] || {
-    echo "ERROR: falta el instalador autorreparable de Windows Media." >&2
-    exit 1
-}
 mkdir -p "$(dirname "$WINDOWS_MEDIA_SOURCE")"
 rm -rf "$WINDOWS_MEDIA_SOURCE.new"
 ditto "$WINDOWS_MEDIA_BUILD" "$WINDOWS_MEDIA_SOURCE.new"

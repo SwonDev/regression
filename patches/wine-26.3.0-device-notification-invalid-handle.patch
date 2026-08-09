@@ -1,0 +1,187 @@
+diff --git a/dlls/cfgmgr32/main.c b/dlls/cfgmgr32/main.c
+--- a/dlls/cfgmgr32/main.c
++++ b/dlls/cfgmgr32/main.c
+@@ -20,6 +20,7 @@
+ #include <assert.h>
+ 
+ #include "wine/debug.h"
++#include "wine/exception.h"
+ #include "wine/rbtree.h"
+ #include "winreg.h"
+ #include "winternl.h"
+@@ -72,8 +73,11 @@ static CONFIGRET map_error( DWORD error, CONFIGRET default_error )
+     return default_error;
+ }
+ 
++#define CM_NOTIFY_CONTEXT_MAGIC 0xbeef4dad
++
+ struct cm_notify_context
+ {
++    DWORD magic;
+     HDEVNOTIFY notify;
+     void *user_data;
+     PCM_NOTIFY_CALLBACK callback;
+@@ -207,6 +211,7 @@ CONFIGRET WINAPI CM_Register_Notification( PCM_NOTIFY_FILTER filter, void *user_
+ 
+     if (!(ctx = calloc( 1, sizeof(*ctx) ))) return CR_OUT_OF_MEMORY;
+ 
++    ctx->magic = CM_NOTIFY_CONTEXT_MAGIC;
+     ctx->user_data = user_data;
+     ctx->callback = callback;
+     if (!(ctx->notify = I_ScRegisterDeviceNotification( ctx, &notify_filter.header, devnotify_callback )))
+@@ -243,14 +248,28 @@ CONFIGRET WINAPI CM_Unregister_Notification( HCMNOTIFICATION notify )
+ {
+     struct cm_notify_context *ctx = notify;
++    CONFIGRET ret = CR_SUCCESS;
+ 
+     TRACE( "(%p)\n", notify );
+ 
+     if (!notify) return CR_INVALID_DATA;
+ 
+-    I_ScUnregisterDeviceNotification( ctx->notify );
+-    free( ctx );
++    __TRY
++    {
++        if (ctx->magic == CM_NOTIFY_CONTEXT_MAGIC)
++        {
++            I_ScUnregisterDeviceNotification( ctx->notify );
++            free( ctx );
++        }
++        else
++            ret = CR_INVALID_DATA;
++    }
++    __EXCEPT_PAGE_FAULT
++    {
++        ret = CR_FAILURE;
++    }
++    __ENDTRY
+ 
+-    return CR_SUCCESS;
++    return ret;
+ }
+ 
+ /***********************************************************************
+diff --git a/dlls/cfgmgr32/tests/cfgmgr32.c b/dlls/cfgmgr32/tests/cfgmgr32.c
+--- a/dlls/cfgmgr32/tests/cfgmgr32.c
++++ b/dlls/cfgmgr32/tests/cfgmgr32.c
+@@ -376,6 +376,16 @@ static void test_CM_Register_Notification(void)
+         }
+         winetest_pop_context();
+     }
++
++    /* Invalid unregister inputs must be rejected instead of dereferenced. */
++    ret = pCM_Unregister_Notification( NULL );
++    ok( ret == CR_INVALID_DATA, "Expected CR_INVALID_DATA, got %#lx\n", ret );
++
++    ret = pCM_Unregister_Notification( (HCMNOTIFICATION)"valid pointer but not a handle" );
++    ok( ret == CR_INVALID_DATA, "Expected CR_INVALID_DATA, got %#lx\n", ret );
++
++    ret = pCM_Unregister_Notification( (HCMNOTIFICATION)0xdeadbeef );
++    ok( ret == CR_FAILURE, "Expected CR_FAILURE, got %#lx\n", ret );
+ }
+ 
+ static void check_device_path_casing(const WCHAR *original_path)
+diff --git a/dlls/sechost/service.c b/dlls/sechost/service.c
+--- a/dlls/sechost/service.c
++++ b/dlls/sechost/service.c
+@@ -1978,9 +1978,12 @@ struct device_notify
+ 
+ static HANDLE device_notify_thread;
+ static struct list device_notify_list = LIST_INIT(device_notify_list);
++
++#define DEVICE_NOTIFY_MAGIC 0xdecafbad
+ 
+ struct device_notify
+ {
++    DWORD magic;
+     struct list entry;
+     WCHAR *path;
+     HANDLE handle;
+@@ -1995,6 +1998,7 @@ static struct device_notify *device_notify_copy( struct device_notify *notify, D
+     struct device_notify *event;
+ 
+     if (!(event = calloc( 1, sizeof(*event) + header->dbch_size ))) return NULL;
++    event->magic = DEVICE_NOTIFY_MAGIC;
+     event->handle = notify->handle;
+     event->callback = notify->callback;
+     memcpy( event->header, header, header->dbch_size );
+@@ -2143,6 +2147,7 @@ HDEVNOTIFY WINAPI I_ScRegisterDeviceNotification( HANDLE handle, const DEV_BROAD
+         SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+         return NULL;
+     }
++    notify->magic = DEVICE_NOTIFY_MAGIC;
+     notify->handle = handle;
+     notify->callback = callback;
+     memcpy( notify->header, filter, filter->dbch_size );
+@@ -2183,15 +2188,38 @@ BOOL WINAPI I_ScUnregisterDeviceNotification( HDEVNOTIFY handle )
+ {
+     struct device_notify *notify = handle;
++    BOOL ret = TRUE;
+ 
+     TRACE("%p\n", handle);
+ 
+     if (!handle)
++    {
++        SetLastError( ERROR_INVALID_HANDLE );
+         return FALSE;
++    }
+ 
+     EnterCriticalSection( &service_cs );
+-    list_remove( &notify->entry );
++
++    __TRY
++    {
++        if (notify->magic != DEVICE_NOTIFY_MAGIC)
++        {
++            SetLastError( ERROR_INVALID_HANDLE );
++            ret = FALSE;
++        }
++        else
++        {
++            list_remove( &notify->entry );
++            free( notify->path );
++            free( notify );
++        }
++    }
++    __EXCEPT_PAGE_FAULT
++    {
++        SetLastError( ERROR_SERVICE_SPECIFIC_ERROR );
++        ret = FALSE;
++    }
++    __ENDTRY
++
+     LeaveCriticalSection(&service_cs);
+-    free( notify->path );
+-    free( notify );
+-    return TRUE;
++    return ret;
+ }
+diff --git a/dlls/user32/tests/input.c b/dlls/user32/tests/input.c
+--- a/dlls/user32/tests/input.c
++++ b/dlls/user32/tests/input.c
+@@ -5246,8 +5246,23 @@ static void test_keyboard_layout_name(void)
+ 
+ static void test_UnregisterDeviceNotification(void)
+ {
+-    BOOL ret = UnregisterDeviceNotification(NULL);
+-    ok(ret == FALSE, "Unregistering NULL Device Notification returned: %d\n", ret);
++    const char *not_a_devnotify = "this is a valid but garbage pointer";
++    BOOL ret;
++
++    SetLastError( 0xdeadbeef );
++    ret = UnregisterDeviceNotification( NULL );
++    ok( ret == FALSE, "Unregistering NULL Device Notification returned: %d\n", ret );
++    ok_ret( ERROR_INVALID_HANDLE, GetLastError() );
++
++    SetLastError( 0xdeadbeef );
++    ret = UnregisterDeviceNotification( (HDEVNOTIFY)not_a_devnotify );
++    ok( ret == FALSE, "Unregistering invalid HDEVNOTIFY returned: %d\n", ret );
++    ok_ret( ERROR_INVALID_HANDLE, GetLastError() );
++
++    SetLastError( 0xdeadbeef );
++    ret = UnregisterDeviceNotification( (HDEVNOTIFY)0xdeadbeef );
++    ok( ret == FALSE, "Unregistering invalid HDEVNOTIFY returned: %d\n", ret );
++    ok_ret( ERROR_SERVICE_SPECIFIC_ERROR, GetLastError() );
+ }
+ 
+ static void test_SendInput( WORD vkey, WCHAR wch, HKL hkl )

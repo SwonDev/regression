@@ -3,6 +3,158 @@ import XCTest
 @testable import RegressionCore
 
 final class CompiledGameRepairTests: XCTestCase {
+    private func modernSplitVCBootstrapData() -> Data {
+        var data = Data("MZ\u{0}BootstrapPackagedGame-Win64-Shipping.pdb\u{0}".utf8)
+        for value in [
+            "Microsoft Visual C++ 2015-2022 Redistributable ",
+            #"Engine\Extras\Redist\en-us\vc_redist.arm64.exe"#,
+            #"Engine\Extras\Redist\en-us\vc_redist.x64.exe"#
+        ] {
+            data.append(value.data(using: .utf16LittleEndian)!)
+            data.append(contentsOf: [0, 0])
+        }
+        return data
+    }
+
+    func testUnrealBootstrapDetectorFindsOnlyAnExactPackagedGamePair() throws {
+        let steamRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-unreal-bootstrap-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: steamRoot) }
+        let game = steamRoot.appendingPathComponent(
+            "steamapps/common/Future Game",
+            isDirectory: true
+        )
+        let shipping = game.appendingPathComponent(
+            "InternalProject/Binaries/Win64/FutureGame-Win64-Shipping.exe"
+        )
+        try FileManager.default.createDirectory(
+            at: shipping.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try modernSplitVCBootstrapData()
+            .write(to: game.appendingPathComponent("FutureGame.exe"))
+        try Data(repeating: 0x41, count: 4_096).write(to: shipping)
+
+        let routes = try UnrealBootstrapRouteDetector.routes(in: steamRoot)
+
+        XCTAssertEqual(routes.count, 1)
+        XCTAssertEqual(routes[0].bootstrapExecutable, "FutureGame.exe")
+        XCTAssertEqual(routes[0].shippingExecutable, "FutureGame-Win64-Shipping.exe")
+        XCTAssertEqual(
+            routes[0].shippingURL.resolvingSymlinksInPath(),
+            shipping.resolvingSymlinksInPath()
+        )
+    }
+
+    func testUnrealBootstrapDetectorRejectsNearMatchesAndSymlinkedGames() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-unreal-bootstrap-reject-\(UUID().uuidString)")
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-unreal-bootstrap-outside-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        let common = root.appendingPathComponent("steamapps/common", isDirectory: true)
+        try FileManager.default.createDirectory(at: common, withIntermediateDirectories: true)
+
+        let wrongMarker = common.appendingPathComponent("WrongMarker", isDirectory: true)
+        let wrongMarkerShipping = wrongMarker.appendingPathComponent(
+            "WrongMarker/Binaries/Win64/WrongMarker-Win64-Shipping.exe"
+        )
+        try FileManager.default.createDirectory(
+            at: wrongMarkerShipping.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("MZ ordinary launcher".utf8)
+            .write(to: wrongMarker.appendingPathComponent("WrongMarker.exe"))
+        try Data(repeating: 0x42, count: 4_096).write(to: wrongMarkerShipping)
+
+        let mismatched = common.appendingPathComponent("Mismatched", isDirectory: true)
+        let mismatchedShipping = mismatched.appendingPathComponent(
+            "Other/Binaries/Win64/Other-Win64-Shipping.exe"
+        )
+        try FileManager.default.createDirectory(
+            at: mismatchedShipping.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try modernSplitVCBootstrapData()
+            .write(to: mismatched.appendingPathComponent("Mismatched.exe"))
+        try Data(repeating: 0x43, count: 4_096).write(to: mismatchedShipping)
+
+        let linkedGame = outside.appendingPathComponent("Linked", isDirectory: true)
+        let linkedShipping = linkedGame.appendingPathComponent(
+            "Linked/Binaries/Win64/Linked-Win64-Shipping.exe"
+        )
+        try FileManager.default.createDirectory(
+            at: linkedShipping.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try modernSplitVCBootstrapData()
+            .write(to: linkedGame.appendingPathComponent("Linked.exe"))
+        try Data(repeating: 0x44, count: 4_096).write(to: linkedShipping)
+        try FileManager.default.createSymbolicLink(
+            at: common.appendingPathComponent("Linked"),
+            withDestinationURL: linkedGame
+        )
+
+        XCTAssertTrue(try UnrealBootstrapRouteDetector.routes(in: root).isEmpty)
+    }
+
+    func testUnrealBootstrapDetectorRejectsLegacyAndIncompletePrerequisiteFamilies() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-unreal-bootstrap-family-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let common = root.appendingPathComponent("steamapps/common", isDirectory: true)
+
+        for (gameName, bootstrapData) in [
+            (
+                "Legacy",
+                Data("MZ BootstrapPackagedGame-Win64-Shipping.pdb Engine\\Extras\\Redist\\en-us\\UEPrereqSetup_x64.exe".utf8)
+            ),
+            (
+                "Incomplete",
+                Data("MZ BootstrapPackagedGame-Win64-Shipping.pdb Microsoft Visual C++ 2015-2022 Redistributable".utf8)
+            )
+        ] {
+            let game = common.appendingPathComponent(gameName, isDirectory: true)
+            let shipping = game.appendingPathComponent(
+                "\(gameName)/Binaries/Win64/\(gameName)-Win64-Shipping.exe"
+            )
+            try FileManager.default.createDirectory(
+                at: shipping.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try bootstrapData.write(to: game.appendingPathComponent("\(gameName).exe"))
+            try Data(repeating: 0x46, count: 4_096).write(to: shipping)
+        }
+
+        XCTAssertTrue(try UnrealBootstrapRouteDetector.routes(in: root).isEmpty)
+    }
+
+    func testUnrealBootstrapDetectorRejectsAmbiguousExecutableNames() throws {
+        let steamRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-unreal-bootstrap-ambiguous-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: steamRoot) }
+        let common = steamRoot.appendingPathComponent("steamapps/common", isDirectory: true)
+
+        for gameName in ["First", "Second"] {
+            let game = common.appendingPathComponent(gameName, isDirectory: true)
+            let shipping = game.appendingPathComponent(
+                "Shared/Binaries/Win64/Shared-Win64-Shipping.exe"
+            )
+            try FileManager.default.createDirectory(
+                at: shipping.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try modernSplitVCBootstrapData()
+                .write(to: game.appendingPathComponent("Shared.exe"))
+            try Data(repeating: 0x45, count: 4_096).write(to: shipping)
+        }
+
+        XCTAssertTrue(try UnrealBootstrapRouteDetector.routes(in: steamRoot).isEmpty)
+    }
+
     func testDragonwildsCrashStackSelectsOnlyTheDualOverlayRecipe() {
         let crash = """
         Unhandled Exception: EXCEPTION_ACCESS_VIOLATION reading address 0x5320747375725420
@@ -38,6 +190,77 @@ final class CompiledGameRepairTests: XCTestCase {
         )
         XCTAssertEqual(profile.configurationValues["profile.dll.disabled"], "eosovh-win64-shipping")
         XCTAssertNil(GameRuntimeProfileCatalog.profile(for: "1374490", backend: .crossOver))
+
+        let unrelated = try XCTUnwrap(
+            GameRuntimeProfileCatalog.profile(for: "619820", backend: .regression)
+        )
+        XCTAssertNil(unrelated.configurationValues["profile.dll.disabled"])
+    }
+
+    func testUnityIntroWineGStreamerCrashSelectsOnlyTheMediaIsolationRecipe() {
+        let crash = """
+        Cross Blitz.exe
+        UnityPlayer.dll
+        rtworkq.dll
+        winegstreamer.dll
+        Media Foundation VideoPlayer failed while decoding intro video
+        """
+
+        XCTAssertEqual(
+            CompiledRepairClassifier.recipe(forCrashLog: crash),
+            .unityIntroWineGStreamerIsolation
+        )
+        XCTAssertNil(
+            CompiledRepairClassifier.recipe(
+                forCrashLog: "UnityPlayer.dll\nwinegstreamer.dll"
+            )
+        )
+    }
+
+    func testUnityExclusiveFullscreenFocusFailureSelectsOnlyBorderlessRecipe() {
+        let playerLog = """
+        Initialize engine version: 2021.3.45f2
+        Failed to apply requested ExclusiveFullScreen resolution (1512x945)...will try again
+        Unable to apply requested ExclusiveFullScreen resolution again (1512x945)...reverting to current display resolution: 1512x982
+        """
+
+        XCTAssertEqual(
+            CompiledRepairClassifier.recipe(forCrashLog: playerLog),
+            .unityExclusiveFullscreenBorderless
+        )
+        XCTAssertNil(
+            CompiledRepairClassifier.recipe(
+                forCrashLog: "UnityPlayer.dll\nExclusiveFullScreen"
+            )
+        )
+    }
+
+    func testCrossBlitzRuntimeProfileDisablesOnlyWineGStreamerInItsExactProcess() throws {
+        let profile = try XCTUnwrap(
+            GameRuntimeProfileCatalog.profile(for: "1619520", backend: .regression)
+        )
+
+        XCTAssertEqual(profile.identifier, "unity-intro-media-borderless-stability")
+        XCTAssertEqual(profile.revision, 2)
+        XCTAssertEqual(profile.executable, "cross blitz.exe")
+        XCTAssertTrue(profile.requiresActiveSteamClient)
+        XCTAssertEqual(profile.configurationValues["profile.scope"], "exact-process")
+        XCTAssertEqual(
+            profile.configurationValues["profile.repair.id"],
+            CompiledRepairRecipe.unityIntroWineGStreamerIsolation.rawValue
+        )
+        XCTAssertEqual(profile.configurationValues["profile.dll.disabled"], "winegstreamer")
+        XCTAssertEqual(profile.configurationValues["profile.media.preserved"], "mfplat,mf,mfreadwrite")
+        XCTAssertEqual(
+            profile.configurationValues["profile.repair.secondary.id"],
+            CompiledRepairRecipe.unityExclusiveFullscreenBorderless.rawValue
+        )
+        XCTAssertEqual(
+            profile.configurationValues["profile.launch.arguments"],
+            "-window-mode borderless"
+        )
+        XCTAssertEqual(profile.configurationValues["profile.window.scope"], "exact-process")
+        XCTAssertNil(GameRuntimeProfileCatalog.profile(for: "1619520", backend: .crossOver))
 
         let unrelated = try XCTUnwrap(
             GameRuntimeProfileCatalog.profile(for: "619820", backend: .regression)

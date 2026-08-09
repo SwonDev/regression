@@ -1,0 +1,272 @@
+--- a/dlls/ntdll/unix/loader.c
++++ b/dlls/ntdll/unix/loader.c
+@@ -437,8 +437,59 @@
+     for (cursor = path; *cursor; cursor++)
+         if (*cursor == '/' || *cursor == '\\') basename = cursor + 1;
+     return !strcasecmp( basename, name );
++}
++
++static int regression_path_has_no_dot_components( const char *path )
++{
++    const char *component = path;
++
++    while (*component)
++    {
++        const char *end = strchr( component, '/' );
++        size_t length = end ? (size_t)(end - component) : strlen( component );
++
++        if (!length || (length == 1 && component[0] == '.') ||
++            (length == 2 && component[0] == '.' && component[1] == '.')) return 0;
++        if (!end) break;
++        component = end + 1;
++    }
++    return 1;
+ }
+ 
++static int regression_bootstrap_target_is_safe( const char *target,
++                                                const char *resolved_prefix,
++                                                char resolved_target[PATH_MAX],
++                                                const char **selected_target )
++{
++    static const char drive_root[] = "/drive_c/";
++    static const char shared_root[] =
++        "/drive_c/Program Files (x86)/Steam/steamapps/common/";
++    struct stat st;
++    size_t prefix_length = strlen( resolved_prefix );
++    const char *relative;
++
++    if (!target || !target[0] || strlen( target ) >= PATH_MAX ||
++        strncmp( target, resolved_prefix, prefix_length )) return 0;
++    relative = target + prefix_length;
++    if (!strncmp( relative, drive_root, sizeof(drive_root) - 1 ) &&
++        realpath( target, resolved_target ) &&
++        !strncmp( resolved_target, resolved_prefix, prefix_length ) &&
++        !strncmp( resolved_target + prefix_length, drive_root, sizeof(drive_root) - 1 ))
++    {
++        *selected_target = resolved_target;
++        return 1;
++    }
++
++    /* Regression puede compartir únicamente steamapps mediante un enlace
++     * canónico. Conservamos la ruta lógica dentro del prefijo y validamos cada
++     * componente posterior; nunca se acepta otro escape por symlink. */
++    if (strncmp( relative, shared_root, sizeof(shared_root) - 1 ) ||
++        !regression_path_has_no_dot_components( relative + sizeof(shared_root) - 1 ) ||
++        lstat( target, &st ) || !S_ISREG( st.st_mode ) || S_ISLNK( st.st_mode )) return 0;
++    *selected_target = target;
++    return 1;
++}
++
+ struct regression_builtin_bootstrap_route
+ {
+     const char *executable;
+@@ -504,18 +555,16 @@
+ static void regression_redirect_bootstrap( int argc, char *argv[] )
+ {
+     const char *prefix = getenv( "WINEPREFIX" );
+-    const char *source, *target;
++    const char *source, *target, *selected_target;
+     char **executable_arg;
+     char source_variable[80], target_variable[80];
+     char candidate_target[PATH_MAX], resolved_prefix[PATH_MAX], resolved_target[PATH_MAX];
+-    size_t prefix_length;
+     unsigned int i, count;
+ 
+     if (argc <= 0 || !prefix || !prefix[0] ||
+         getenv( "REGRESSION_BOOTSTRAP_REDIRECTED" )) return;
+     executable_arg = argc > 1 ? &argv[1] : &argv[0];
+     if (!realpath( prefix, resolved_prefix )) return;
+-    prefix_length = strlen( resolved_prefix );
+     count = regression_route_count( "REGRESSION_BOOTSTRAP_REDIRECT_COUNT" );
+ 
+     for (i = 0; i < count; i++)
+@@ -530,16 +579,14 @@
+             strchr( source, '/' ) || strchr( source, '\\') || strchr( source, ':' ) ||
+             !target || !target[0] ||
+             !regression_path_basename_is( *executable_arg, source ) ||
+-            !realpath( target, resolved_target )) continue;
++            !regression_bootstrap_target_is_safe( target, resolved_prefix,
++                                                  resolved_target, &selected_target )) continue;
+ 
+-        if (strlen( resolved_target ) < prefix_length + 9 ||
+-            strncmp( resolved_target, resolved_prefix, prefix_length ) ||
+-            strncmp( resolved_target + prefix_length, "/drive_c/", 9 )) continue;
+-        *executable_arg = strdup( resolved_target );
++        *executable_arg = strdup( selected_target );
+         if (!*executable_arg) return;
+         setenv( "REGRESSION_BOOTSTRAP_REDIRECTED", "1", 1 );
+         fprintf( stderr, "Regression: redirected exact bootstrap %s to %s.\n",
+-                 source, resolved_target );
++                 source, selected_target );
+         return;
+     }
+ 
+--- a/dlls/ntdll/unix/env.c
++++ b/dlls/ntdll/unix/env.c
+@@ -2042,9 +2042,146 @@
+     target[target_chars] = 0;
+     *redirected_len = target_chars * sizeof(WCHAR);
+     return target;
++}
++
++
++static unsigned int regression_bootstrap_route_count(void)
++{
++    const char *value = getenv( "REGRESSION_BOOTSTRAP_REDIRECT_COUNT" );
++    char *end;
++    unsigned long count;
++
++    if (!value || !value[0]) return 0;
++    count = strtoul( value, &end, 10 );
++    if (*end || !count || count > 16) return 0;
++    return count;
++}
++
++
++static int regression_bootstrap_source_matches( const WCHAR *image, UINT image_len,
++                                                const char *source )
++{
++    static const char steam_common[] = "\\steamapps\\common\\";
++    size_t image_chars, source_chars, start, i, marker_chars = sizeof(steam_common) - 1;
++    int has_steam_common = 0;
++
++    if (!source || !source[0] || strlen( source ) >= 128 ||
++        strchr( source, '/' ) || strchr( source, '\\' ) || strchr( source, ':' ) ||
++        image_len % sizeof(WCHAR)) return 0;
++    image_chars = image_len / sizeof(WCHAR);
++    source_chars = strlen( source );
++    if (image_chars < source_chars) return 0;
++    start = image_chars - source_chars;
++    for (i = 0; i < source_chars; i++)
++        if (ntdll_towupper( image[start + i] ) !=
++            ntdll_towupper( (unsigned char)source[i] )) return 0;
++    if (start && image[start - 1] != '\\' && image[start - 1] != '/') return 0;
++
++    for (i = 0; i + marker_chars <= image_chars; i++)
++    {
++        size_t j;
++        for (j = 0; j < marker_chars; j++)
++            if (ntdll_towupper( image[i + j] ) !=
++                ntdll_towupper( (unsigned char)steam_common[j] )) break;
++        if (j == marker_chars)
++        {
++            has_steam_common = 1;
++            break;
++        }
++    }
++    return has_steam_common;
++}
++
++
++static int regression_unix_target_is_safe( const char *target, const char *resolved_prefix )
++{
++    static const char shared_root[] =
++        "/drive_c/Program Files (x86)/Steam/steamapps/common/";
++    struct stat st;
++    size_t prefix_length = strlen( resolved_prefix );
++    const char *component, *relative;
++
++    if (!target || !target[0] || strlen( target ) >= PATH_MAX ||
++        strncmp( target, resolved_prefix, prefix_length )) return 0;
++    relative = target + prefix_length;
++    if (strncmp( relative, shared_root, sizeof(shared_root) - 1 )) return 0;
++    component = relative + sizeof(shared_root) - 1;
++    while (*component)
++    {
++        const char *end = strchr( component, '/' );
++        size_t length = end ? (size_t)(end - component) : strlen( component );
++        if (!length || (length == 1 && component[0] == '.') ||
++            (length == 2 && component[0] == '.' && component[1] == '.')) return 0;
++        if (!end) break;
++        component = end + 1;
++    }
++    return !lstat( target, &st ) && S_ISREG( st.st_mode ) && !S_ISLNK( st.st_mode );
+ }
+ 
+ 
++static WCHAR *regression_environment_shipping_image( const WCHAR *image, UINT image_len,
++                                                      UINT *redirected_len )
++{
++    static const char drive_root[] = "/drive_c/";
++    const char *prefix = getenv( "WINEPREFIX" );
++    char resolved_prefix[PATH_MAX], source_variable[80], target_variable[80];
++    unsigned int i, count;
++
++    if (!prefix || !prefix[0] || !realpath( prefix, resolved_prefix )) return NULL;
++    count = regression_bootstrap_route_count();
++    for (i = 0; i < count; i++)
++    {
++        const char *source, *target, *relative;
++        WCHAR converted[PATH_MAX], *result;
++        DWORD converted_chars;
++        size_t target_chars, j;
++
++        snprintf( source_variable, sizeof(source_variable),
++                  "REGRESSION_BOOTSTRAP_REDIRECT_%u_EXECUTABLE", i );
++        snprintf( target_variable, sizeof(target_variable),
++                  "REGRESSION_BOOTSTRAP_REDIRECT_%u_TARGET", i );
++        source = getenv( source_variable );
++        target = getenv( target_variable );
++        if (!regression_bootstrap_source_matches( image, image_len, source ) ||
++            !regression_unix_target_is_safe( target, resolved_prefix )) continue;
++
++        relative = target + strlen( resolved_prefix ) + sizeof(drive_root) - 1;
++        /* Startup image paths from wineserver use the NT \??\ prefix.  Keep
++         * that contract so copy_dos_path_string() strips exactly the prefix
++         * instead of truncating the drive-qualified DOS path. */
++        converted[0] = '\\';
++        converted[1] = '?';
++        converted[2] = '?';
++        converted[3] = '\\';
++        converted[4] = 'C';
++        converted[5] = ':';
++        converted[6] = '\\';
++        converted_chars = ntdll_umbstowcs( relative, strlen( relative ),
++                                           converted + 7, ARRAY_SIZE(converted) - 8 );
++        if (!converted_chars || converted_chars >= ARRAY_SIZE(converted) - 8) continue;
++        target_chars = converted_chars + 7;
++        for (j = 7; j < target_chars; j++)
++            if (converted[j] == '/') converted[j] = '\\';
++        converted[target_chars] = 0;
++        if (target_chars > (USHRT_MAX / sizeof(WCHAR)) - 1 ||
++            !(result = malloc( (target_chars + 1) * sizeof(WCHAR) ))) return NULL;
++        memcpy( result, converted, (target_chars + 1) * sizeof(WCHAR) );
++        *redirected_len = target_chars * sizeof(WCHAR);
++        return result;
++    }
++    return NULL;
++}
++
++
++static WCHAR *regression_shipping_image( const WCHAR *image, UINT image_len,
++                                         UINT *redirected_len )
++{
++    WCHAR *target = regression_environment_shipping_image( image, image_len, redirected_len );
++    if (target) return target;
++    return regression_tq2_shipping_image( image, image_len, redirected_len );
++}
++
++
+ /*************************************************************************
+  *		init_startup_info
+  */
+@@ -2082,8 +2219,8 @@
+ 
+     src = (WCHAR *)(info + 1);
+     src = (WCHAR *)((char *)src + info->curdir_len + info->dllpath_len);
+-    redirected_image = regression_tq2_shipping_image( src, info->imagepath_len,
+-                                                       &redirected_image_len );
++    redirected_image = regression_shipping_image( src, info->imagepath_len,
++                                                   &redirected_image_len );
+ 
+     env = malloc( env_size * sizeof(WCHAR) );
+     memcpy( env, (char *)info + info_size, env_size * sizeof(WCHAR) );
+@@ -2143,7 +2280,7 @@
+         src = (WCHAR *)((char *)src + info->imagepath_len);
+         copy_dos_path_string( &redirected_src, &dst, &params->ImagePathName,
+                               &nt_name, redirected_image_len );
+-        MESSAGE( "Regression: redirected exact Steam startup image for Titan Quest II.\n" );
++        MESSAGE( "Regression: redirected exact Steam bootstrap image to its verified Shipping.\n" );
+         free( redirected_image );
+     }
+     else

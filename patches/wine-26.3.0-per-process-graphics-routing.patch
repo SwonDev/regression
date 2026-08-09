@@ -84,7 +84,8 @@
 +    const char *home;
 +    int length;
 +
-+    if (!regression_executable_is( "tq2-win64-shipping.exe" )) return NULL;
++    if (!regression_executable_is( "tq2-win64-shipping.exe" ) &&
++        !regression_executable_is( "borderlands4.exe" )) return NULL;
 +    if (!(home = getenv( "HOME" )) || !home[0]) return NULL;
 +    length = snprintf( candidate, sizeof(candidate),
 +                       "%s/Library/Application Support/Regression/Components/"

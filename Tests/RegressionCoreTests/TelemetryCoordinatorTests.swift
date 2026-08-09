@@ -186,6 +186,17 @@ final class TelemetryCoordinatorTests: XCTestCase {
         XCTAssertEqual(Set(processes.map(\.processID)), Set([4242, 4343]))
         XCTAssertEqual(processes.first { $0.isRepresentative }?.processID, 4343)
         XCTAssertTrue(processes.allSatisfy { $0.endedAt != nil && $0.exitCode == 0 })
+        let cleanups = await fixture.artifactCleaner.recordedCleanups()
+        XCTAssertEqual(
+            cleanups,
+            [
+                RecordedArtifactCleanup(
+                    appID: "219990",
+                    backend: .regression,
+                    endedWindowsProcessIDs: [4242, 4343]
+                )
+            ]
+        )
     }
 
     private static func steamLogDate(_ value: String) -> Date? {
@@ -319,6 +330,7 @@ private final class TelemetryFixture {
     let bottleURL: URL
     let repository: CompatibilityRepository
     let telemetry: TelemetryCoordinator
+    let artifactCleaner: RecordingArtifactCleaner
 
     var game: SteamGame {
         SteamGame(
@@ -338,10 +350,12 @@ private final class TelemetryFixture {
         repository = CompatibilityRepository(
             databaseURL: root.appendingPathComponent("compatibility.sqlite")
         )
+        artifactCleaner = RecordingArtifactCleaner()
         telemetry = TelemetryCoordinator(
             repository: repository,
             monitor: SteamLogMonitor(),
-            sessionJoinGrace: sessionJoinGrace
+            sessionJoinGrace: sessionJoinGrace,
+            artifactCleaner: artifactCleaner
         )
     }
 
@@ -370,5 +384,32 @@ private final class TelemetryFixture {
 
     func remove() {
         try? FileManager.default.removeItem(at: root)
+    }
+}
+
+private struct RecordedArtifactCleanup: Equatable, Sendable {
+    let appID: String
+    let backend: BackendKind
+    let endedWindowsProcessIDs: Set<Int32>
+}
+
+private actor RecordingArtifactCleaner: GameSessionArtifactCleaning {
+    private var cleanups: [RecordedArtifactCleanup] = []
+
+    func clean(
+        appID: String,
+        backend: BackendKind,
+        endedWindowsProcessIDs: Set<Int32>
+    ) async -> [String] {
+        cleanups.append(RecordedArtifactCleanup(
+            appID: appID,
+            backend: backend,
+            endedWindowsProcessIDs: endedWindowsProcessIDs
+        ))
+        return []
+    }
+
+    func recordedCleanups() -> [RecordedArtifactCleanup] {
+        cleanups
     }
 }
