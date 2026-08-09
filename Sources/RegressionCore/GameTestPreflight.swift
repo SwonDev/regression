@@ -561,6 +561,16 @@ public actor GameTestPreflight {
             )
         }
 
+        if SteamManifestParser.installReadiness(in: contents) == .inProgress {
+            return GameTestPreflightCheck(
+                checkID: .gameInstallation,
+                status: .blocked,
+                title: "Instalación del juego",
+                detail: "Steam todavía está descargando, actualizando o preparando el juego.",
+                recoveryAction: "Espera a que Steam complete la instalación y repite el preflight."
+            )
+        }
+
         let commonRoot = steamAppsRoot
             .appendingPathComponent("common", isDirectory: true)
             .standardizedFileURL

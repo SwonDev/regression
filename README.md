@@ -142,8 +142,12 @@ Los expedientes públicos explican causa, receta, evidencia y regla de no regres
 | Fields of Mistria | Verificado perfecto | [Ver expediente](docs/games/fields-of-mistria.md) |
 | Titan Quest II | Verificado perfecto | [Ver expediente](docs/games/titan-quest-2.md) |
 | Forsaken Isle | Verificado perfecto | [Ver expediente](docs/games/forsaken-isle.md) |
+| RuneScape: Dragonwilds | Verificado perfecto | [Ver expediente](docs/games/dragonwilds.md) |
+| Tinkerlands | Verificado perfecto | [Ver expediente](docs/games/tinkerlands.md) |
+| Moonlighter 2: The Endless Vault | Verificado perfecto | [Ver expediente](docs/games/moonlighter-2.md) |
 
-También forman parte de la matriz de regresión Steam/CEF, Moonlighter 2, Palworld y la ruta D3D9.
+También forman parte de la matriz de regresión Steam/CEF, Palworld y la ruta D3D9. Moonlighter 2
+es a la vez un juego certificado y el control Unity obligatorio para cambios comunes de Wine.
 
 **Validados con incidencia conocida**
 
@@ -220,6 +224,10 @@ codesign --verify --deep --strict Regression.app
 # Verificación del asset que recibiría un Mac limpio
 bash build/verify-release-asset.sh ASSET CHECKSUM VERSION
 ```
+
+El verificador extrae el mismo tar que recibirá el usuario, audita dependencias, firmas,
+redistribuibles y rutas, y ejecuta además un arranque mínimo de Wine. Un asset cuyo wrapper no
+pueda localizar y cargar su `ntdll.so` se rechaza antes de poder publicarse o instalarse.
 
 La app canónica vive en `Regression.app/` y `/Applications/Regression.app` apunta a ella durante
 el desarrollo. El Wine público se recompila para

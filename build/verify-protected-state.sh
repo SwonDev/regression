@@ -13,6 +13,8 @@ BEFORE_HWR2_PROMOTION=false
 BEFORE_TQ2_ROUTE_UNIFICATION=false
 BEFORE_WINDOWS_MEDIA_PROMOTION=false
 BEFORE_WINDOWS_MEDIA_LINK_FIX=false
+BEFORE_THREE_GAMES_PROMOTION=false
+BEFORE_THREE_GAMES_HARDENING=false
 
 for argument in "$@"; do
     case "$argument" in
@@ -37,8 +39,14 @@ for argument in "$@"; do
         --before-windows-media-link-fix)
             BEFORE_WINDOWS_MEDIA_LINK_FIX=true
             ;;
+        --before-three-games-promotion)
+            BEFORE_THREE_GAMES_PROMOTION=true
+            ;;
+        --before-three-games-hardening)
+            BEFORE_THREE_GAMES_HARDENING=true
+            ;;
         *)
-            echo "Uso: $0 [--include-bottle] [--before-dd2-promotion|--before-dragonsword-promotion|--before-hwr2-promotion|--before-tq2-route-unification|--before-windows-media-promotion|--before-windows-media-link-fix]" >&2
+            echo "Uso: $0 [--include-bottle] [--before-dd2-promotion|--before-dragonsword-promotion|--before-hwr2-promotion|--before-tq2-route-unification|--before-windows-media-promotion|--before-windows-media-link-fix|--before-three-games-promotion|--before-three-games-hardening]" >&2
             exit 64
             ;;
     esac
@@ -51,6 +59,8 @@ $BEFORE_HWR2_PROMOTION && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
 $BEFORE_TQ2_ROUTE_UNIFICATION && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
 $BEFORE_WINDOWS_MEDIA_PROMOTION && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
 $BEFORE_WINDOWS_MEDIA_LINK_FIX && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
+$BEFORE_THREE_GAMES_PROMOTION && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
+$BEFORE_THREE_GAMES_HARDENING && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
 if (( PROMOTION_BASELINES > 1 )); then
     echo "ERROR: las verificaciones históricas de promoción son mutuamente excluyentes." >&2
     exit 64
@@ -109,8 +119,13 @@ if $BEFORE_TQ2_ROUTE_UNIFICATION; then
 elif $BEFORE_WINDOWS_MEDIA_PROMOTION; then
     verify_hash fd4e3e7ca59926b7977c63d9400dfb44a156f0aeb96b222ee3eba2c57fab3e4e \
         "Contents/MacOS/regression-engine"
-elif ! $BEFORE_WINDOWS_MEDIA_PROMOTION; then
+elif $BEFORE_THREE_GAMES_PROMOTION || $BEFORE_DD2_PROMOTION || \
+     $BEFORE_DRAGONSWORD_PROMOTION || $BEFORE_HWR2_PROMOTION || \
+     $BEFORE_WINDOWS_MEDIA_LINK_FIX; then
     verify_hash 5d99cae95a60c84b8bc9759736ed9e9bec1dafe9b9af8a8190f26c232781ec60 \
+        "Contents/MacOS/regression-engine"
+else
+    verify_hash 1ca7959ef2da4968cc057386cce3bba507d2ca3b16d535096273947fe1eb66df \
         "Contents/MacOS/regression-engine"
 fi
 verify_hash 6942782b7baf0049bb56aba2b9a4e00a107984b1b0198f2307fb63e87ce3103c \
@@ -141,8 +156,13 @@ elif $BEFORE_HWR2_PROMOTION; then
     verify_hash 2a446467a9faa0885f350d096fb6424c92f62201b733f974150c931e3a535a6a "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
 elif $BEFORE_WINDOWS_MEDIA_PROMOTION; then
     verify_hash adb97ddb229a7e20b1cac89b88ba81cfd9c9871c801b97dc50a596f0c5e2f113 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
-else
+elif $BEFORE_THREE_GAMES_PROMOTION || $BEFORE_TQ2_ROUTE_UNIFICATION || \
+     $BEFORE_WINDOWS_MEDIA_LINK_FIX; then
     verify_hash 9e3eb235bbe60a06bd2da4fe0199be8370c1beb02438c9a98a9a0e0d7ff3014c "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+elif $BEFORE_THREE_GAMES_HARDENING; then
+    verify_hash bf4f25e96883150e955f4465a5a15cbd6adaf0f152a8e1239004486dfbf2b81a "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+else
+    verify_hash 4a1679b1e05d42e2aba768c4cf93e1acf8cd3ef6fed5400f9ef343953cbfd194 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
 fi
 
 DRAGONSWORD_PROFILE="$WINE_ROOT/lib/profiles/dragonsword"

@@ -7,8 +7,8 @@ MACOS_DIR="$APP/Contents/MacOS"
 PLIST="$APP/Contents/Info.plist"
 RESOURCES_DIR="$APP/Contents/Resources"
 STATE_ICON_DIR="$ROOT/assets/menubar/states"
-VERSION="1.8.1"
-BUILD_NUMBER="32"
+VERSION="1.9.0"
+BUILD_NUMBER="33"
 BACKUP_ROOT="$ROOT/backups/native-packaging"
 COMPATIBILITY_ROOT="$HOME/Library/Application Support/Regression/Compatibility"
 COMPATIBILITY_DB="$COMPATIBILITY_ROOT/compatibility.sqlite"
@@ -28,6 +28,10 @@ verify_protected_state()
         arguments+=(--before-windows-media-promotion)
     elif [[ "$phase" == "before-windows-media-link-fix" ]]; then
         arguments+=(--before-windows-media-link-fix)
+    elif [[ "$phase" == "before-three-games-promotion" ]]; then
+        arguments+=(--before-three-games-promotion)
+    elif [[ "$phase" == "before-three-games-hardening" ]]; then
+        arguments+=(--before-three-games-hardening)
     fi
     if [[ -d "$bottle" ]]; then
         arguments+=(--include-bottle)
@@ -45,8 +49,10 @@ verify_prepackage_state()
     local source_hash
     local installed_component_hash
     local source_component_hash
+    local installed_ntdll_hash
     installed_hash="$(shasum -a 256 "$installed_engine" | awk '{print $1}')"
     source_hash="$(shasum -a 256 "$source_engine" | awk '{print $1}')"
+    installed_ntdll_hash="$(shasum -a 256 "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so" | awk '{print $1}')"
 
     if [[ "$installed_hash" == "$source_hash" ]]; then
         installed_component_hash="$(shasum -a 256 "$APP/Contents/SharedSupport/components/windows-media/1/manifest.sha256" | awk '{print $1}')"
@@ -54,6 +60,8 @@ verify_prepackage_state()
         if [[ "$installed_component_hash" == "d93847ced54536cbaaf8ed7922537dfb043448e0168184375c552e774fe35199" &&
               "$source_component_hash" == "ac662661fb3384c6ad100066391cab209f9de60b2e129fb92e07365ee6fe9bb1" ]]; then
             verify_protected_state before-windows-media-link-fix
+        elif [[ "$installed_ntdll_hash" == "bf4f25e96883150e955f4465a5a15cbd6adaf0f152a8e1239004486dfbf2b81a" ]]; then
+            verify_protected_state before-three-games-hardening
         else
             verify_protected_state
         fi
@@ -63,6 +71,9 @@ verify_prepackage_state()
     elif [[ "$installed_hash" == "fd4e3e7ca59926b7977c63d9400dfb44a156f0aeb96b222ee3eba2c57fab3e4e" &&
             "$source_hash" == "5d99cae95a60c84b8bc9759736ed9e9bec1dafe9b9af8a8190f26c232781ec60" ]]; then
         verify_protected_state before-windows-media-promotion
+    elif [[ "$installed_hash" == "5d99cae95a60c84b8bc9759736ed9e9bec1dafe9b9af8a8190f26c232781ec60" &&
+            "$source_hash" == "1ca7959ef2da4968cc057386cce3bba507d2ca3b16d535096273947fe1eb66df" ]]; then
+        verify_protected_state before-three-games-promotion
     else
         echo "ERROR: el lanzador instalado no es el baseline anterior ni el candidato canónico." >&2
         exit 1
@@ -184,6 +195,7 @@ NATIVE_BACKUP_PATHS=(
     Contents/MacOS/regression-engine
     Contents/Resources
     Contents/SharedSupport/bin/regressionctl
+    Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so
     Contents/_CodeSignature
 )
 if [[ -e "$APP/Contents/SharedSupport/bin/install-windows-media-component" ]]; then
@@ -200,6 +212,21 @@ chmod 600 "$NATIVE_BACKUP"
 ROLLBACK_DIR="$(mktemp -d "$BACKUP_ROOT/.package-rollback.XXXXXX")"
 cp -cR "$APP" "$ROLLBACK_DIR/Regression.app"
 MUTATION_STARTED=true
+
+CANDIDATE_NTDLL="$ROOT/build/wine64/dlls/ntdll/ntdll.so"
+[[ -f "$CANDIDATE_NTDLL" &&
+   "$(shasum -a 256 "$CANDIDATE_NTDLL" | awk '{print $1}')" == "4a1679b1e05d42e2aba768c4cf93e1acf8cd3ef6fed5400f9ef343953cbfd194" ]] || {
+    echo "ERROR: falta el ntdll candidato exacto de las reparaciones compiladas." >&2
+    exit 1
+}
+strings -a "$CANDIDATE_NTDLL" | grep -F 'compiled-repair-activations-v1.tsv' >/dev/null || {
+    echo "ERROR: el ntdll candidato no contiene el consumidor de aprendizaje tipado." >&2
+    exit 1
+}
+NTDLL_DESTINATION="$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+TEMP_NTDLL="$NTDLL_DESTINATION.new"
+install -m 755 "$CANDIDATE_NTDLL" "$TEMP_NTDLL"
+mv "$TEMP_NTDLL" "$NTDLL_DESTINATION"
 
 mkdir -p "$MACOS_DIR"
 ENGINE_LAUNCHER="$MACOS_DIR/regression-engine"

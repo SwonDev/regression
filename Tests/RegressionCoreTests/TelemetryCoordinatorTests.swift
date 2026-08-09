@@ -87,6 +87,64 @@ final class TelemetryCoordinatorTests: XCTestCase {
         XCTAssertEqual(profile.perfectRuns, 0)
     }
 
+    func testCrashedRunLearnsOnlyTheCompiledRecipeFromItsRecentLog() async throws {
+        let fixture = try TelemetryFixture()
+        defer { fixture.remove() }
+        let processLogURL = fixture.root.appendingPathComponent("learned-gameprocess_log.txt")
+        XCTAssertTrue(FileManager.default.createFile(atPath: processLogURL.path, contents: nil))
+        await fixture.telemetry.beginMonitoring(logURL: processLogURL)
+
+        let crashDirectory = fixture.bottleURL.appendingPathComponent(
+            "drive_c/users/test/AppData/Local/Future/Saved/Crashes/UECC-1",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: crashDirectory, withIntermediateDirectories: true)
+        let crashURL = crashDirectory.appendingPathComponent("Future.log")
+        try Data("""
+        Unhandled Exception: EXCEPTION_ACCESS_VIOLATION reading address 0x1
+        d3d11.dll
+        gameoverlayrenderer64.dll
+        EOSOVH-Win64-Shipping.dll
+        EOSSDK-Win64-Shipping.dll
+        Future-Win64-Shipping.exe
+        """.utf8).write(to: crashURL)
+        let timestamp = try XCTUnwrap(Self.steamLogDate("2026-07-28 12:00:02"))
+        try FileManager.default.setAttributes(
+            [.modificationDate: timestamp],
+            ofItemAtPath: crashURL.path
+        )
+
+        try Data(#"""
+        [2026-07-28 12:00:00] AppID 219990 adding PID 4242 as a tracked process "C:\Games\Future\Future-Win64-Shipping.exe"
+        [2026-07-28 12:00:02] AppID 219990 no longer tracking PID 4242, exit code 1
+
+        """#.utf8).write(to: processLogURL)
+
+        let outcome = await fixture.telemetry.poll(
+            backend: .regression,
+            logURL: processLogURL,
+            games: [fixture.game],
+            system: fixture.context().system,
+            steamRootURL: fixture.root.appendingPathComponent("Steam", isDirectory: true),
+            bottleURL: fixture.bottleURL,
+            bottleName: "Steam",
+            providerVersion: "1.9"
+        )
+
+        XCTAssertTrue(outcome.changed)
+        XCTAssertTrue(outcome.issues.isEmpty)
+        XCTAssertEqual(
+            try CompiledRepairActivationStore.activations(in: fixture.bottleURL),
+            [CompiledRepairActivation(
+                executable: "future-win64-shipping.exe",
+                recipe: .unrealD3D11DualOverlayIsolation
+            )]
+        )
+        let receipts = try await fixture.repository.repairReceipts(appID: "219990")
+        XCTAssertEqual(receipts.first?.recipeID, CompiledRepairRecipe.unrealD3D11DualOverlayIsolation.rawValue)
+        XCTAssertEqual(receipts.first?.result, .succeeded)
+    }
+
     func testLauncherAndShippingExecutableRemainOneLogicalRun() async throws {
         let fixture = try TelemetryFixture()
         defer { fixture.remove() }
@@ -128,6 +186,14 @@ final class TelemetryCoordinatorTests: XCTestCase {
         XCTAssertEqual(Set(processes.map(\.processID)), Set([4242, 4343]))
         XCTAssertEqual(processes.first { $0.isRepresentative }?.processID, 4343)
         XCTAssertTrue(processes.allSatisfy { $0.endedAt != nil && $0.exitCode == 0 })
+    }
+
+    private static func steamLogDate(_ value: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter.date(from: value)
     }
 
     func testRegisteredLaunchIntentDoesNotRequestPassivePreflight() async throws {

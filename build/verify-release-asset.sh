@@ -61,6 +61,7 @@ MEDIA_ROOT="$APP/Contents/SharedSupport/components/windows-media/1"
 for binary in \
     "$WINE_ROOT/bin/wine" \
     "$WINE_ROOT/bin/wineserver" \
+    "$WINE_ROOT/lib/wine/x86_64-unix/wine" \
     "$WINE_ROOT/lib/wine/x86_64-unix/ntdll.so"
 do
     [[ -x "$binary" ]] || fail "falta el binario público $binary"
@@ -72,13 +73,21 @@ do
     fi
 done
 
+
+for required in "$PUBLIC_WINE_PREFIX/bin" "$PUBLIC_WINE_PREFIX/lib"; do
+    strings -a "$WINE_ROOT/bin/wine" | grep -F "$required" >/dev/null \
+        || fail "el wrapper Wine no contiene la ruta pública requerida: $required"
+done
+
 NTDLL="$WINE_ROOT/lib/wine/x86_64-unix/ntdll.so"
 for required in \
     "$PUBLIC_WINE_PREFIX/bin" \
     "$PUBLIC_WINE_PREFIX/lib/wine" \
     "$PUBLIC_WINE_PREFIX/share/wine" \
     REGRESSION_BOOTSTRAP_REDIRECT_COUNT \
-    REGRESSION_WINDOWS_MEDIA_PROFILE
+    REGRESSION_WINDOWS_MEDIA_PROFILE \
+    REGRESSION_PROCESS_DLL_ISOLATION_ROUTE_COUNT \
+    compiled-repair-activations-v1.tsv
 do
     strings -a "$NTDLL" | grep -F "$required" >/dev/null \
         || fail "ntdll.so no contiene el contrato público: $required"
@@ -126,4 +135,11 @@ while IFS= read -r -d '' candidate; do
 done < <(find "$APP" -type f -print0)
 
 codesign --verify --deep --strict "$APP"
+
+SMOKE_PREFIX="$WORK_DIR/wine-smoke-prefix"
+WINE_VERSION="$(env WINEPREFIX="$SMOKE_PREFIX" WINEDEBUG=-all \
+    /usr/bin/arch -x86_64 "$WINE_ROOT/bin/wine" --version 2>&1)" \
+    || fail "el arranque público de Wine no puede cargar ntdll.so"
+[[ "$WINE_VERSION" == wine-* ]] \
+    || fail "el arranque público de Wine devolvió una versión inesperada: $WINE_VERSION"
 printf 'Asset público Regression %s verificado: %s\n' "$EXPECTED_VERSION" "$ACTUAL_SHA"

@@ -55,6 +55,7 @@ public actor TelemetryCoordinator {
         let id: UUID
         let appID: String
         let backend: BackendKind
+        let startedAt: Date
         let beforeConfiguration: [String: String]
         let bottleURL: URL
         let providerVersion: String
@@ -64,6 +65,7 @@ public actor TelemetryCoordinator {
         var processes: [Int32: String]
         var exitCodes: [Int32: Int32]
         var representativeProcessID: Int32
+        var representativeExecutable: String
         var pendingTermination: PendingTermination?
     }
 
@@ -159,6 +161,7 @@ public actor TelemetryCoordinator {
                         run.processes[processID] = executable
                         run.exitCodes.removeValue(forKey: processID)
                         run.representativeProcessID = processID
+                        run.representativeExecutable = executable
                         run.pendingTermination = nil
                         active[key] = run
                         outcome.changed = true
@@ -216,6 +219,7 @@ public actor TelemetryCoordinator {
                         id: context.id,
                         appID: appID,
                         backend: backend,
+                        startedAt: context.startedAt,
                         beforeConfiguration: configuration,
                         bottleURL: pendingRun?.bottleURL ?? bottleURL,
                         providerVersion: providerVersion,
@@ -225,6 +229,7 @@ public actor TelemetryCoordinator {
                         processes: [processID: executable],
                         exitCodes: [:],
                         representativeProcessID: processID,
+                        representativeExecutable: executable,
                         pendingTermination: nil
                     )
                     if pendingRun == nil {
@@ -325,6 +330,36 @@ public actor TelemetryCoordinator {
                     afterConfiguration: after,
                     delta: delta
                 )
+                if result == .crashed, run.backend == .regression {
+                    do {
+                        if let learned = try CompiledCrashRepairLearner.learn(
+                            appID: run.appID,
+                            executable: run.representativeExecutable,
+                            bottleURL: run.bottleURL,
+                            startedAt: run.startedAt,
+                            endedAt: termination.endedAt
+                        ) {
+                            try await repository.recordRepairReceipt(RepairReceipt(
+                                appID: learned.appID,
+                                backend: .regression,
+                                recipeID: learned.recipe.rawValue,
+                                recipeVersion: 1,
+                                beforeFingerprint: learned.activation.beforeFingerprint,
+                                afterFingerprint: learned.activation.afterFingerprint,
+                                rollbackReference: PrivacySanitizer.normalizedPath(
+                                    learned.activation.rollbackURL.path
+                                ),
+                                result: .succeeded,
+                                notes: "Activación tipada aprendida desde una firma de crash estricta en \(PrivacySanitizer.normalizedPath(learned.crashLogURL.path))."
+                            ))
+                        }
+                    } catch {
+                        outcome.issues.append(Self.issue(
+                            "No se pudo registrar una autorreparación tipada para el App ID \(run.appID)",
+                            error: error
+                        ))
+                    }
+                }
                 active.removeValue(forKey: key)
                 outcome.changed = true
             } catch {

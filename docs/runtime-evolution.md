@@ -116,8 +116,9 @@ Reglas:
 
 ## Autoinstalación, autorreparación y autoselección
 
-La arquitectura está preparada para esas capacidades, pero en esta versión permanecen en modo
-**observar y recomendar**. Se habilitarán por fases:
+La arquitectura separa aprendizaje de autoridad. El inventario de tecnologías y los candidatos
+siguen en modo **observar y recomendar**; las recetas cerradas que ya forman parte del código
+firmado sí pueden instalar, reparar o activar automáticamente una capacidad permitida.
 
 ### Fase A — recomendación segura
 
@@ -125,7 +126,7 @@ La arquitectura está preparada para esas capacidades, pero en esta versión per
 - mostrar la fuente, licencia, tamaño, impacto y acción propuesta;
 - ofrecer siempre cancelar, exportar el diagnóstico y usar el baseline.
 
-### Fase B — recetas permitidas y reversibles
+### Fase B — recetas permitidas y reversibles, activa
 
 - catálogo de recetas compiladas en el código, cada una con ID, versión y pruebas;
 - descarga solo desde fuente oficial, checksum/firma y licencia comprobados;
@@ -134,6 +135,20 @@ La arquitectura está preparada para esas capacidades, pero en esta versión per
 
 Los datos aprendidos nunca se convierten en shell, argumentos arbitrarios ni URLs ejecutables.
 Solo pueden alimentar parámetros tipados de una receta incluida y auditada en Regression.
+
+La implementación actual cubre tres clases:
+
+- **componentes con manifiesto:** Windows Media se verifica y repara desde el payload firmado;
+  GPTK se verifica y puede repararse desde el DMG oficial ya autorizado, sin redistribuir Apple;
+- **estado conocido:** Tinkerlands corrige atómica e idempotentemente una combinación exacta de
+  ventana/Retina, con backup y sin tocar otros juegos;
+- **crash conocido:** un stack estricto Unreal+D3D11+Steam Overlay+EOS Overlay puede activar para
+  un basename PE exacto la receta compilada de aislamiento del overlay EOS. El fichero aprendido
+  solo guarda `ejecutable + enum de receta`; no contiene la acción ejecutable.
+
+Cada reparación genera o conserva evidencia de antes/después y rollback. Si faltan la fuente
+oficial, el hash, la firma, el permiso o una receta auditada, Regression se detiene o recomienda;
+no improvisa una descarga ni modifica el sistema.
 
 ### Fase C — selección automática acotada
 

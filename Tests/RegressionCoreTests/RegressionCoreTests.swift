@@ -56,7 +56,19 @@ final class RegressionCoreTests: XCTestCase {
             forsaken?.sourceObservationID,
             UUID(uuidString: "31104A67-1DE6-4C6D-BE5D-797A60648769")
         )
-        XCTAssertEqual(VerifiedGameCatalog.revision, "2026-08-08.2")
+        XCTAssertEqual(
+            VerifiedGameCatalog.certification(for: "1374490")?.sourceRunID,
+            UUID(uuidString: "E5244599-5E9F-4F78-BB9B-00CC781E539E")
+        )
+        XCTAssertEqual(
+            VerifiedGameCatalog.certification(for: "2617700")?.gameName,
+            "Tinkerlands"
+        )
+        XCTAssertEqual(
+            VerifiedGameCatalog.certification(for: "2350790")?.gameName,
+            "Moonlighter 2: The Endless Vault"
+        )
+        XCTAssertEqual(VerifiedGameCatalog.revision, "2026-08-09.1")
         XCTAssertNil(VerifiedGameCatalog.certification(for: "999999999"))
     }
 
@@ -173,6 +185,40 @@ final class RegressionCoreTests: XCTestCase {
             backend: .regression
         ))
         XCTAssertNil(game.installedBytes)
+    }
+
+    func testSteamManifestDoesNotTreatAnEmptyDownloadAsInstalled() {
+        let downloading = #"""
+        "AppState"
+        {
+            "appid" "1623730"
+            "StateFlags" "1026"
+            "BytesToDownload" "32963904576"
+            "BytesDownloaded" "0"
+        }
+        """#
+        XCTAssertEqual(
+            SteamManifestParser.installReadiness(in: downloading),
+            .inProgress
+        )
+
+        let installed = #"""
+        "AppState"
+        {
+            "appid" "1623730"
+            "StateFlags" "4"
+            "BytesToDownload" "32963904576"
+            "BytesDownloaded" "32963904576"
+        }
+        """#
+        XCTAssertEqual(
+            SteamManifestParser.installReadiness(in: installed),
+            .installed
+        )
+        XCTAssertEqual(
+            SteamManifestParser.installReadiness(in: #""AppState" { "appid" "42" }"#),
+            .unknown
+        )
     }
 
     func testManualVerificationEvidenceUsesOneCanonicalMapping() {

@@ -11,6 +11,7 @@ PATCHES=(
     "$ROOT/patches/wine-26.3.0-per-process-retina.patch"
     "$ROOT/patches/wine-26.3.0-winemac-gl-surface-resync.patch"
     "$ROOT/patches/wine-26.3.0-windows-media-autodetect.patch"
+    "$ROOT/patches/wine-26.3.0-process-scoped-dll-isolation.patch"
 )
 
 [[ -d "$WINE_SOURCE" ]] || {
@@ -40,6 +41,15 @@ for patch_file in "${PATCHES[@]}"; do
         # parche. Eso impide invertir el hunk original aunque su contrato esté
         # íntegro. Verificar ambos símbolos compilados evita confundirlo con un
         # parche parcial y mantiene el aplicador idempotente.
+        echo "Parche ya aplicado y extendido: $(basename "$patch_file")"
+    elif [[ "$(basename "$patch_file")" == "wine-26.3.0-windows-media-autodetect.patch" ]] &&
+         rg -q 'static void regression_set_windows_media_compatibility\(void\)' \
+             "$WINE_SOURCE/dlls/ntdll/unix/loader.c" &&
+         rg -q 'regression_set_windows_media_compatibility\(\);' \
+             "$WINE_SOURCE/dlls/ntdll/unix/loader.c"; then
+        # La reparación tipada de DLL por proceso se inserta junto al router de
+        # medios. Verificar los dos símbolos conserva la idempotencia sin
+        # aceptar un parche de GStreamer parcial.
         echo "Parche ya aplicado y extendido: $(basename "$patch_file")"
     else
         echo "ERROR: el parche no está aplicado ni puede aplicarse limpiamente: $patch_file" >&2

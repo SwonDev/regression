@@ -63,6 +63,28 @@ prepare_windows_media_component()
     fi
 }
 
+prepare_compiled_game_state_repairs()
+{
+    local controller="$ROOT/Contents/SharedSupport/bin/regressionctl"
+    local repair_log="$APP_SUPPORT/Logs/Launcher/compiled-state-repair.log"
+
+    [[ -x "$controller" ]] || return 0
+    mkdir -p "$(dirname "$repair_log")"
+    if ! "$controller" prepare-launch-state >"$repair_log" 2>&1; then
+        printf 'Regression: no se pudo completar la reparación tipada del estado de lanzamiento; se conserva Steam.\n' >&2
+    fi
+}
+
+prepare_process_dll_isolation_routes()
+{
+    # La acción disponible es deliberadamente limitada: deshabilitar una DLL
+    # opcional dentro de un ejecutable exacto. Wine valida ambos basenames y no
+    # acepta rutas, modos de carga ni comandos desde el aprendizaje local.
+    export REGRESSION_PROCESS_DLL_ISOLATION_ROUTE_COUNT=1
+    export REGRESSION_PROCESS_DLL_ISOLATION_ROUTE_0_EXECUTABLE="RSDragonwilds-Win64-Shipping.exe"
+    export REGRESSION_PROCESS_DLL_ISOLATION_ROUTE_0_DLL="EOSOVH-Win64-Shipping"
+}
+
 # Steam hereda únicamente rutas compiladas y verificadas. Tanto el botón de
 # Regression (`Steam.exe -applaunch 1154030`) como «Jugar» dentro de Steam pasan
 # por el mismo bootstrap. El router de Wine sustituye su imagen de startup por
@@ -70,5 +92,7 @@ prepare_windows_media_component()
 # ruta evita diferencias de argv, Steamworks y EOS entre ambos puntos de entrada.
 prepare_titan_quest_2_steam_entrypoint
 prepare_windows_media_component
+prepare_compiled_game_state_repairs
+prepare_process_dll_isolation_routes
 
 exec "$W/bin/wine" "$STEAM" "$@"

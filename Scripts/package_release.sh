@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${REGRESSION_RELEASE_VERSION:-1.8.1}"
+VERSION="${REGRESSION_RELEASE_VERSION:-1.9.0}"
 APP="$ROOT/Regression.app"
 APP_NAME="Regression.app"
 OUTPUT_DIR="${REGRESSION_RELEASE_OUTPUT_DIR:-$ROOT/build/release-$VERSION}"
@@ -66,7 +66,8 @@ WINE_ROOT="$PUBLIC_APP/Contents/SharedSupport/wine-root"
 # Reconstruir y sustituir solo estas tres piezas conserva los módulos PE y los perfiles ya
 # validados, pero garantiza que una descarga limpia resuelva su propio runtime.
 "$ROOT/build/build-public-wine-runtime.sh"
-cp "$PUBLIC_WINE_BUILD/loader/wine" "$WINE_ROOT/bin/wine"
+cp "$PUBLIC_WINE_BUILD/tools/wine/wine" "$WINE_ROOT/bin/wine"
+cp "$PUBLIC_WINE_BUILD/loader/wine" "$WINE_ROOT/lib/wine/x86_64-unix/wine"
 cp "$PUBLIC_WINE_BUILD/server/wineserver" "$WINE_ROOT/bin/wineserver"
 cp "$PUBLIC_WINE_BUILD/dlls/ntdll/ntdll.so" \
     "$WINE_ROOT/lib/wine/x86_64-unix/ntdll.so"
@@ -78,11 +79,18 @@ for required in \
     "$PUBLIC_WINE_PREFIX/lib/wine" \
     "$PUBLIC_WINE_PREFIX/share/wine" \
     REGRESSION_BOOTSTRAP_REDIRECT_COUNT \
-    REGRESSION_WINDOWS_MEDIA_PROFILE
+    REGRESSION_WINDOWS_MEDIA_PROFILE \
+    REGRESSION_PROCESS_DLL_ISOLATION_ROUTE_COUNT \
+    compiled-repair-activations-v1.tsv
 do
     strings -a "$WINE_ROOT/lib/wine/x86_64-unix/ntdll.so" \
         | grep -F "$required" >/dev/null \
         || fail "El ntdll público no contiene el contrato requerido: $required"
+done
+
+for required in "$PUBLIC_WINE_PREFIX/bin" "$PUBLIC_WINE_PREFIX/lib"; do
+    strings -a "$WINE_ROOT/bin/wine" | grep -F "$required" >/dev/null \
+        || fail "El wrapper Wine público no contiene la ruta requerida: $required"
 done
 
 # Apple exige licencia individual para GPTK. El asset conserva solo directorios vacíos para que

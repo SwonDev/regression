@@ -67,7 +67,7 @@ public struct VerifiedGameCertification: Codable, Equatable, Identifiable, Senda
 /// motor ni sustituye la telemetría: evita perder el estado blindado al regenerar los datos
 /// locales. Solo se añade una entrada después de validar render, entrada, opciones y gameplay.
 public enum VerifiedGameCatalog {
-    public static let revision = "2026-08-08.2"
+    public static let revision = "2026-08-09.1"
 
     public static let all: [VerifiedGameCertification] = [
         VerifiedGameCertification(
@@ -164,6 +164,42 @@ public enum VerifiedGameCatalog {
                 "f6c2734165d679081d1f3e9126126561a19e375ef681bd8dfc84ef6f0788be69",
             engineFingerprint:
                 "f6c2734165d679081d1f3e9126126561a19e375ef681bd8dfc84ef6f0788be69"
+        ),
+        VerifiedGameCertification(
+            appID: "1374490",
+            gameName: "RuneScape: Dragonwilds",
+            backend: .regression,
+            verifiedAt: "2026-08-09",
+            evidence: "docs/games/dragonwilds.md",
+            sourceRunID: UUID(uuidString: "E5244599-5E9F-4F78-BB9B-00CC781E539E"),
+            configurationFingerprint:
+                "596c6ae2057bbae251428da17ad911e46f7ef6dba73950d8c5bd00d9c9cc53a5",
+            engineFingerprint:
+                "17e2f294927c10198edaf33ca11751376269a8271023e5e660bdca8d36874c56"
+        ),
+        VerifiedGameCertification(
+            appID: "2617700",
+            gameName: "Tinkerlands",
+            backend: .regression,
+            verifiedAt: "2026-08-09",
+            evidence: "docs/games/tinkerlands.md",
+            sourceRunID: UUID(uuidString: "0B6589C9-374B-4570-A30A-645EEF57A497"),
+            configurationFingerprint:
+                "7808621e2355e2c159b3bd78836738d2fc93ef9a5d2dc6468244117f3ff6e8f9",
+            engineFingerprint:
+                "37e2ce6806f201c1bec1f0807e467b28b1dd988ba33635e9fb6c823a7ccfd745"
+        ),
+        VerifiedGameCertification(
+            appID: "2350790",
+            gameName: "Moonlighter 2: The Endless Vault",
+            backend: .regression,
+            verifiedAt: "2026-08-09",
+            evidence: "docs/games/moonlighter-2.md",
+            sourceRunID: UUID(uuidString: "9E384BCC-18FA-4BE6-A879-8AA1E724E4C4"),
+            configurationFingerprint:
+                "a6601afa279218f05f11c770759898744ff0dcc0bc9a5527cefb19a1bc2331b9",
+            engineFingerprint:
+                "28d3234281bc056e55cb93c13dbb06d50b53771467c154733de930ef70afa5d1"
         )
     ]
 

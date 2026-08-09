@@ -66,6 +66,34 @@ enum RegressionControl {
                 }
             }
 
+        case "prepare-launch-state":
+            let report = try GameDisplayStateRepair.repairTinkerlands(
+                in: installations.regression.bottleURL
+            )
+            guard !report.entries.isEmpty else {
+                print("Estado de lanzamiento: no necesita reparación")
+                return
+            }
+
+            try await repository.prepare()
+            for entry in report.entries {
+                try await repository.recordRepairReceipt(RepairReceipt(
+                    appID: "2617700",
+                    backend: .regression,
+                    recipeID: CompiledRepairRecipe.gameMakerRetinaFullscreen.rawValue,
+                    recipeVersion: 1,
+                    beforeFingerprint: entry.beforeFingerprint,
+                    afterFingerprint: entry.afterFingerprint,
+                    rollbackReference: PrivacySanitizer.normalizedPath(entry.rollbackURL.path),
+                    result: .succeeded,
+                    notes: "Se corrigió únicamente fullscreen=0 con la resolución máxima de Tinkerlands."
+                ))
+                print(
+                    "Estado de lanzamiento reparado:",
+                    PrivacySanitizer.normalizedPath(entry.optionsURL.path)
+                )
+            }
+
         case "share-library":
             guard let crossOver = installations.crossOver else {
                 throw RegressionCoreError.crossOverNotInstalled

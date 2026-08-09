@@ -1,0 +1,138 @@
+--- a/dlls/ntdll/unix/loader.c
++++ b/dlls/ntdll/unix/loader.c
+@@ -25,6 +25,7 @@
+ #include "config.h"
+ 
+ #include <assert.h>
++#include <ctype.h>
+ #include <dirent.h>
+ #include <errno.h>
+ #include <fcntl.h>
+@@ -582,6 +583,120 @@ static void regression_force_builtin_load_order( const char *module )
+     entry[i] = 0;
+     add_load_order_override( entry );
+ }
++
++static int regression_valid_dll_name( const char *name )
++{
++    const unsigned char *cursor = (const unsigned char *)name;
++    size_t length;
++
++    if (!name || !(length = strlen( name )) || length >= 120) return 0;
++    for (; *cursor; cursor++)
++        if (!isalnum( *cursor ) && *cursor != '-' && *cursor != '_' && *cursor != '.')
++            return 0;
++    return 1;
++}
++
++static void regression_force_disabled_load_order( const char *module )
++{
++    WCHAR entry[128];
++    size_t i, length;
++
++    if (!regression_valid_dll_name( module )) return;
++    length = strlen( module );
++    for (i = 0; i < length; i++) entry[i] = (unsigned char)module[i];
++    entry[i++] = '=';
++    entry[i++] = 'd';
++    entry[i] = 0;
++    add_load_order_override( entry );
++}
++
++/* Consume only the closed, local activation format written by Regression.
++ * A record can select one compiled recipe for one exact executable basename;
++ * it cannot name a DLL, path, load order, URL or command. */
++static void regression_apply_learned_process_repair(void)
++{
++    static const char header[] = "REGRESSION-COMPILED-REPAIRS\t1\n";
++    static const char recipe[] = "unreal-d3d11-dual-overlay-isolation-v1";
++    const char *prefix = getenv( "WINEPREFIX" );
++    char path[PATH_MAX], line[320], *separator, *newline;
++    struct stat st;
++    FILE *file;
++    int fd, matched = 0, path_length;
++    unsigned int count = 0;
++
++    if (!prefix || !prefix[0] ||
++        (path_length = snprintf( path, sizeof(path),
++                                 "%s/.regression/compiled-repair-activations-v1.tsv",
++                                 prefix )) < 0 ||
++        (size_t)path_length >= sizeof(path) || lstat( path, &st ) ||
++        !S_ISREG( st.st_mode ) || st.st_uid != geteuid() ||
++        (st.st_mode & 0022) || st.st_size <= 0 || st.st_size > 64 * 1024) return;
++    if ((fd = open( path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW )) == -1) return;
++    if (!(file = fdopen( fd, "r" )))
++    {
++        close( fd );
++        return;
++    }
++    if (!fgets( line, sizeof(line), file ) || strcmp( line, header )) goto done;
++
++    while (fgets( line, sizeof(line), file ))
++    {
++        if (++count > 128 || !(newline = strchr( line, '\n' )) || newline[1]) goto done;
++        *newline = 0;
++        if (!(separator = strchr( line, '\t' )) || strchr( separator + 1, '\t' )) goto done;
++        *separator++ = 0;
++        if (!regression_valid_dll_name( line ) || !strchr( line, '.' ) ||
++            strcmp( separator, recipe )) goto done;
++        if (regression_executable_is( line )) matched = 1;
++    }
++    if (ferror( file )) goto done;
++    if (matched)
++    {
++        regression_force_disabled_load_order( "eosovh-win64-shipping" );
++        setenv( "REGRESSION_COMPILED_REPAIR", recipe, 1 );
++        fprintf( stderr,
++                 "Regression: applied learned compiled repair only to the exact process.\n" );
++    }
++
++done:
++    fclose( file );
++}
++
++/* Isolate a conflicting optional DLL in one exact game process.  Environment
++ * routes are constrained to basenames and a disabled-only action; no path,
++ * load mode or command can be supplied by local learning data.  The compiled
++ * Dragonwilds fallback survives Steam/wineserver dropping Unix-only state. */
++static void regression_set_process_dll_isolation(void)
++{
++    char executable_variable[96], dll_variable[96];
++    const char *module;
++    unsigned int i, count;
++
++    if (regression_executable_is( "rsdragonwilds-win64-shipping.exe" ))
++    {
++        regression_force_disabled_load_order( "eosovh-win64-shipping" );
++        setenv( "REGRESSION_COMPILED_REPAIR",
++                "unreal-d3d11-dual-overlay-isolation-v1", 1 );
++    }
++
++    regression_apply_learned_process_repair();
++
++    count = regression_route_count( "REGRESSION_PROCESS_DLL_ISOLATION_ROUTE_COUNT" );
++    for (i = 0; i < count; i++)
++    {
++        snprintf( executable_variable, sizeof(executable_variable),
++                  "REGRESSION_PROCESS_DLL_ISOLATION_ROUTE_%u_EXECUTABLE", i );
++        if (!regression_executable_matches_env( executable_variable )) continue;
++        snprintf( dll_variable, sizeof(dll_variable),
++                  "REGRESSION_PROCESS_DLL_ISOLATION_ROUTE_%u_DLL", i );
++        module = getenv( dll_variable );
++        if (!regression_valid_dll_name( module ) ||
++            strcasecmp( module, "eosovh-win64-shipping" )) continue;
++        regression_force_disabled_load_order( module );
++        fprintf( stderr, "Regression: disabled optional module %s only for matched process.\n",
++                 module );
++    }
++}
+ 
+ /* Enable the optional LGPL Windows Media codec component only for Steam games
+  * whose own content tree contains ASF/WMA/WMV assets.  The scan is deliberately
+@@ -2708,6 +2823,7 @@ void __wine_main( int argc, char *argv[], char *envp[] )
+         }
+     }
+ 
++    regression_set_process_dll_isolation();
+     regression_set_windows_media_compatibility();
+     regression_set_graphics_backend();

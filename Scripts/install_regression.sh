@@ -4,7 +4,7 @@
 # y reutiliza D3DMetal solo desde una instalación local que el usuario ya haya licenciado.
 set -Eeuo pipefail
 
-VERSION="1.8.1"
+VERSION="1.9.0"
 REPO="SwonDev/regression"
 ASSET_NAME="Regression-${VERSION}-macos-arm64.tar.zst"
 APP_NAME="Regression.app"
@@ -173,7 +173,7 @@ verify_staged_release() {
     local wine_root="$app/Contents/SharedSupport/wine-root"
     local ntdll="$wine_root/lib/wine/x86_64-unix/ntdll.so"
     local media="$app/Contents/SharedSupport/components/windows-media/1"
-    local binary architecture runtime required
+    local binary architecture runtime required smoke_prefix wine_version
 
     for binary in \
         "$app/Contents/MacOS/Regression" \
@@ -182,9 +182,21 @@ verify_staged_release() {
         "$app/Contents/SharedSupport/bin/install-windows-media-component" \
         "$wine_root/bin/wine" \
         "$wine_root/bin/wineserver" \
+        "$wine_root/lib/wine/x86_64-unix/wine" \
         "$ntdll"
     do
         [[ -x "$binary" ]] || { fail "Falta un ejecutable requerido: $binary"; return 1; }
+    done
+
+
+    for required in \
+        /Applications/Regression.app/Contents/SharedSupport/wine-root/bin \
+        /Applications/Regression.app/Contents/SharedSupport/wine-root/lib
+    do
+        /usr/bin/strings -a "$wine_root/bin/wine" | /usr/bin/grep -F "$required" >/dev/null || {
+            fail "El wrapper Wine no contiene la ruta pública requerida: $required"
+            return 1
+        }
     done
 
     for required in \
@@ -192,7 +204,9 @@ verify_staged_release() {
         /Applications/Regression.app/Contents/SharedSupport/wine-root/lib/wine \
         /Applications/Regression.app/Contents/SharedSupport/wine-root/share/wine \
         REGRESSION_BOOTSTRAP_REDIRECT_COUNT \
-        REGRESSION_WINDOWS_MEDIA_PROFILE
+        REGRESSION_WINDOWS_MEDIA_PROFILE \
+        REGRESSION_PROCESS_DLL_ISOLATION_ROUTE_COUNT \
+        compiled-repair-activations-v1.tsv
     do
         /usr/bin/strings -a "$ntdll" | /usr/bin/grep -F "$required" >/dev/null || {
             fail "El runtime descargado no contiene el contrato requerido: $required"
@@ -234,6 +248,17 @@ verify_staged_release() {
     fi
     /usr/bin/codesign --verify --deep --strict "$app" >/dev/null 2>&1 || {
         fail "El bundle descargado no conserva una firma íntegra."
+        return 1
+    }
+
+    smoke_prefix="$WORK_DIR/wine-smoke-prefix"
+    wine_version="$(env WINEPREFIX="$smoke_prefix" WINEDEBUG=-all \
+        /usr/bin/arch -x86_64 "$wine_root/bin/wine" --version 2>&1)" || {
+        fail "El arranque público de Wine no puede cargar ntdll.so."
+        return 1
+    }
+    [[ "$wine_version" == wine-* ]] || {
+        fail "El arranque público de Wine devolvió una versión inesperada: $wine_version"
         return 1
     }
 }

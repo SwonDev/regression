@@ -31,7 +31,7 @@ public struct CompiledGameRuntimeProfile: Equatable, Sendable {
 }
 
 public enum GameRuntimeProfileCatalog {
-    public static let revision = "2026-08-08.10"
+    public static let revision = "2026-08-08.12"
 
     public static let all: [CompiledGameRuntimeProfile] = [
         CompiledGameRuntimeProfile(
@@ -92,6 +92,46 @@ public enum GameRuntimeProfileCatalog {
                 "profile.component.id": "apple-gptk",
                 "profile.component.version": "4.0b2",
                 "profile.component.repair": "manifest-verified"
+            ]
+        ),
+        CompiledGameRuntimeProfile(
+            appID: "1374490",
+            identifier: "unreal-d3d11-dual-overlay-isolation",
+            revision: 1,
+            executable: "rsdragonwilds-win64-shipping.exe",
+            requiresActiveSteamClient: true,
+            configurationValues: [
+                "profile.id": "unreal-d3d11-dual-overlay-isolation",
+                "profile.revision": "1",
+                "profile.scope": "exact-process",
+                "profile.executable": "rsdragonwilds-win64-shipping.exe",
+                "profile.engine.family": "unreal",
+                "profile.graphics.api": "d3d11",
+                "profile.repair.id": CompiledRepairRecipe.unrealD3D11DualOverlayIsolation.rawValue,
+                "profile.repair.detector": "strict-crash-stack-v1",
+                "profile.repair.learning": "typed-executable-recipe-activation-v1",
+                "profile.repair.rollback": "private-activation-snapshot",
+                "profile.dll.disabled": "eosovh-win64-shipping",
+                "profile.dll.policy": "disabled-only-in-matched-process",
+                "profile.launcher.entrypoints": "regression,steam",
+                "profile.router.contract": "compiled-process-scoped-dll-isolation-v1"
+            ]
+        ),
+        CompiledGameRuntimeProfile(
+            appID: "2617700",
+            identifier: "gamemaker-retina-fullscreen-repair",
+            revision: 1,
+            executable: "tinkerlands.exe",
+            configurationValues: [
+                "profile.id": "gamemaker-retina-fullscreen-repair",
+                "profile.revision": "1",
+                "profile.scope": "bounded-user-options",
+                "profile.executable": "tinkerlands.exe",
+                "profile.engine.family": "gamemaker",
+                "profile.repair.id": CompiledRepairRecipe.gameMakerRetinaFullscreen.rawValue,
+                "profile.repair.condition": "fullscreen=0,resolution>=6",
+                "profile.repair.rollback": "adjacent-first-write-backup",
+                "profile.launcher.entrypoints": "regression,steam"
             ]
         )
     ]

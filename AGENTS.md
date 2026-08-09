@@ -257,12 +257,16 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
 33. **La release pública recompila el arranque de Wine para su ruta canónica.** El bundle de
     desarrollo lleva un `--prefix` absoluto hacia el checkout y no se puede convertir en
     descargable sustituyendo texto ni copiándolo sin más. `build/build-public-wine-runtime.sh`
-    recompila `loader/wine`, `server/wineserver` y `dlls/ntdll/ntdll.so` para
+    recompila el wrapper instalado `tools/wine/wine`, el loader interno `loader/wine`,
+    `server/wineserver` y `dlls/ntdll/ntdll.so` para
     `/Applications/Regression.app/Contents/SharedSupport/wine-root`; conserva las recetas
     compiladas de Titan Quest II y Windows Media y rechaza cualquier prefijo local. Después,
     `build/verify-release-asset.sh` extrae el tar real y verifica hashes, firmas, VC++/UCRT en
-    ambas arquitecturas, medios, dependencias Mach-O, enlaces y ausencia de GPTK o copias de
-    laboratorio. El tar debe conservar xattrs para no perder las firmas de scripts. Una
+    ambas arquitecturas, medios, dependencias Mach-O, enlaces, ausencia de GPTK o copias de
+    laboratorio y un arranque real `wine --version` que debe cargar `ntdll.so`. Nunca copiar
+    `loader/wine` a `bin/wine`: el primero pertenece en `lib/wine/x86_64-unix/wine`; el wrapper
+    contiene `BINDIR/LIBDIR` y es el único punto de entrada instalado. El tar debe conservar
+    xattrs para no perder las firmas de scripts. Una
     instalación nueva elige Regression; el comparador opcional se conserva para desarrollo,
     pero nunca es requisito del release. No publicar ni instalar una versión que no supere este
     verificador sobre el mismo asset que se subirá a GitHub.
@@ -273,6 +277,23 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
     `docs/` y se enlazan desde `docs/README.md`. No volver a fijar una versión en la URL de
     instalación ni acumular cronologías en la portada; la release y sus badges deben poder
     avanzar sin que el README quede obsoleto.
+35. **Dragonwilds aísla solo el overlay EOS del Shipping exacto.** El crash reproducido exige
+    simultáneamente `EXCEPTION_ACCESS_VIOLATION`, D3D11, Steam Overlay, EOSOVH y EOSSDK. La receta
+    `unreal-d3d11-dual-overlay-isolation-v1` deshabilita únicamente
+    `EOSOVH-Win64-Shipping` dentro de un basename PE exacto; Steam Overlay, EOSSDK y DXMT siguen
+    activos. El aprendizaje solo puede persistir `ejecutable + enum conocido`, con límites,
+    snapshot y recibo; nunca rutas, DLL arbitrarias ni comandos. Run perfecto:
+    `E5244599-5E9F-4F78-BB9B-00CC781E539E`; ver `docs/games/dragonwilds.md`.
+36. **Tinkerlands repara estado, no el driver global.** La receta
+    `gamemaker-retina-fullscreen-v1` solo transforma `fullscreen=0` a `1` cuando el JSON exacto
+    de Tinkerlands declara además `resolution>=6`; conserva el resto, hace backup, es atómica e
+    idempotente. No cambiar `RetinaMode`, resolución ni fullscreen globales. Run perfecto:
+    `0B6589C9-374B-4570-A30A-645EEF57A497`; ver `docs/games/tinkerlands.md`.
+37. **Moonlighter 2 protege el baseline Unity sin perfil especial.** El run
+    `9E384BCC-18FA-4BE6-A879-8AA1E724E4C4` pasó menú, gameplay, movimiento, pausa, opciones
+    cambiadas/restauradas y cierre sobre el runtime general. No crear una excepción mientras el
+    baseline pase. Sigue siendo la puerta Unity obligatoria ante cualquier cambio común de Wine;
+    ver `docs/games/moonlighter-2.md`.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 
@@ -352,6 +373,9 @@ pruebas; sustituir un PIN global requiere validar toda la matriz correspondiente
 | DragonSword | D3DMetal completo por proceso; ocho módulos builtin fijados | Evita ruta híbrida D3DMetal/DXMT y tirones | Gameplay + pausa + salida + captura 3024×1964 |
 | Heroes of Hammerwatch II | `CX_FWD_COMPAT_GL_CTX=1` solo en `HWR2.exe`; OpenGL CX 26.3 | BGFX omite el bit forward-compatible requerido por macOS | Menú + gameplay + foco + Steam + Grim Dawn |
 | Titan Quest II | bootstrap exacto → Shipping + GPTK 4.0b2 externo solo en `TQ2-Win64-Shipping.exe` | El bootstrap da un falso negativo de VC++ y Steam conserva su imagen en wineserver | Ambos botones + gameplay + opciones + Steam + matriz Wine |
+| Dragonwilds | `EOSOVH-Win64-Shipping=disabled` solo en `RSDragonwilds-Win64-Shipping.exe`; Steam Overlay/EOSSDK/DXMT intactos | Colisión estricta de doble overlay en D3D11 | Gameplay + WASD + cámara + pausa + opciones + Steam + matriz Wine |
+| Tinkerlands | Reparación JSON exacta `fullscreen=0,resolution>=6` → fullscreen, con rollback | Desajuste de coordenadas en ventana Retina de alta resolución | Menú + clics + opciones + gameplay + pausa |
+| Moonlighter 2 | Baseline general, sin perfil | Control Unity del prefijo y loader Wine | Menú + gameplay + entrada + pausa + opciones restauradas |
 | RetinaMode | `n` (HKCU\Software\Wine\Mac Driver) | Alinea clicks | Click en tienda |
 | Fuentes | 55 TTFs (corefonts + CJK) en la botella | Sin ellas Steam crashea (assert Win32Font) | Steam arranca |
 | DLLs PE | **SIN strip** | El strip rompe unwind SEH y firma de módulos | Juegos Unity |

@@ -83,6 +83,41 @@ final class GameTestPreflightTests: XCTestCase {
         XCTAssertEqual(callCount, 1)
     }
 
+    func testDownloadInProgressBlocksTheGameBeforeLaunch() async throws {
+        let fixture = try PreflightFixture()
+        defer { fixture.cleanup() }
+        try Data(#"""
+        "AppState"
+        {
+            "appid" "42"
+            "name" "Test Game"
+            "installdir" "Test Game"
+            "StateFlags" "1026"
+            "SizeOnDisk" "0"
+            "BytesToDownload" "4096"
+            "BytesDownloaded" "0"
+        }
+        """#.utf8).write(to: fixture.game.manifestURL, options: .atomic)
+
+        let report = await GameTestPreflight(
+            runner: PreflightProcessRunner(output: ""),
+            applicationSupportURL: fixture.applicationSupportURL
+        ).evaluate(
+            backend: .regression,
+            installations: fixture.installations,
+            runningState: RunningBackendState(),
+            databaseHealth: healthyDatabase(),
+            sharedLibraryAssessment: nil,
+            game: fixture.game
+        )
+
+        let installation = try XCTUnwrap(
+            report.checks.first { $0.checkID == .gameInstallation }
+        )
+        XCTAssertEqual(installation.status, .blocked)
+        XCTAssertTrue(installation.detail.contains("descargando"))
+    }
+
     func testPreflightSnapshotIsHashedLinkedAndExported() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
             "regression-preflight-db-\(UUID().uuidString)",

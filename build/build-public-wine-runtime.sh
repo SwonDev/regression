@@ -42,15 +42,21 @@ rg -Fq -- "--prefix=$PUBLIC_PREFIX" "$CONFIG_STATUS" \
     || fail "$PUBLIC_BUILD existe, pero no está configurado para $PUBLIC_PREFIX"
 
 make -s -C "$PUBLIC_BUILD" -j"$(sysctl -n hw.activecpu)" \
-    dlls/ntdll/ntdll.so loader/wine server/wineserver
+    dlls/ntdll/ntdll.so loader/wine tools/wine/wine server/wineserver
 
 NTDLL="$PUBLIC_BUILD/dlls/ntdll/ntdll.so"
-WINE="$PUBLIC_BUILD/loader/wine"
+WINE_LOADER="$PUBLIC_BUILD/loader/wine"
+WINE_WRAPPER="$PUBLIC_BUILD/tools/wine/wine"
 WINESERVER="$PUBLIC_BUILD/server/wineserver"
-for binary in "$NTDLL" "$WINE" "$WINESERVER"; do
+for binary in "$NTDLL" "$WINE_LOADER" "$WINE_WRAPPER" "$WINESERVER"; do
     [[ -x "$binary" ]] || fail "no se generó $binary"
     file "$binary" | rg -q 'Mach-O 64-bit.*x86_64' \
         || fail "$binary no es un Mach-O x86_64"
+done
+
+for required in "$PUBLIC_PREFIX/bin" "$PUBLIC_PREFIX/lib"; do
+    strings -a "$WINE_WRAPPER" | grep -F "$required" >/dev/null \
+        || fail "el wrapper Wine público no contiene la ruta requerida: $required"
 done
 
 for required in \
@@ -58,13 +64,15 @@ for required in \
     "$PUBLIC_PREFIX/lib/wine" \
     "$PUBLIC_PREFIX/share/wine" \
     REGRESSION_BOOTSTRAP_REDIRECT_COUNT \
-    REGRESSION_WINDOWS_MEDIA_PROFILE
+    REGRESSION_WINDOWS_MEDIA_PROFILE \
+    REGRESSION_PROCESS_DLL_ISOLATION_ROUTE_COUNT \
+    compiled-repair-activations-v1.tsv
 do
     strings -a "$NTDLL" | grep -F "$required" >/dev/null \
         || fail "ntdll.so público no contiene el contrato requerido: $required"
 done
 
-if strings -a "$NTDLL" "$WINE" "$WINESERVER" \
+if strings -a "$NTDLL" "$WINE_LOADER" "$WINE_WRAPPER" "$WINESERVER" \
     | grep -E '/Users/[^/]+/.*Regression\.app' >/dev/null; then
     fail "los binarios públicos todavía contienen un prefijo de aplicación local"
 fi

@@ -45,6 +45,9 @@ tampoco crea un veredicto perfecto.
 | Fields of Mistria | [`fields-of-mistria.md`](games/fields-of-mistria.md) |
 | Titan Quest II | [`titan-quest-2.md`](games/titan-quest-2.md) |
 | Forsaken Isle | [`forsaken-isle.md`](games/forsaken-isle.md) |
+| RuneScape: Dragonwilds | [`dragonwilds.md`](games/dragonwilds.md) |
+| Tinkerlands | [`tinkerlands.md`](games/tinkerlands.md) |
+| Moonlighter 2: The Endless Vault | [`moonlighter-2.md`](games/moonlighter-2.md) |
 
 Cube World y FINAL FANTASY TACTICS — The Ivalice Chronicles también están certificados en el
 catálogo integrado; sus primeras evidencias son anteriores al formato actual de expediente.

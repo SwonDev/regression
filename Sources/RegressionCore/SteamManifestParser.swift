@@ -1,5 +1,11 @@
 import Foundation
 
+public enum SteamManifestInstallReadiness: Equatable, Sendable {
+    case installed
+    case inProgress
+    case unknown
+}
+
 public enum SteamManifestParser {
     public static func parse(
         contents: String,
@@ -55,6 +61,27 @@ public enum SteamManifestParser {
             }
             .filter { $0.appID != "228980" }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// Distingue un manifest ya creado por Steam de una instalación utilizable.
+    ///
+    /// Steam escribe el ACF y crea la carpeta `common` antes de descargar el primer byte. El bit
+    /// `4` de `StateFlags` representa el estado instalado; además se bloquea una descarga con
+    /// contador incompleto aunque el juego estuviese previamente presente. Los manifests antiguos
+    /// sin estos campos conservan el comportamiento previo y quedan como `unknown`.
+    public static func installReadiness(in contents: String) -> SteamManifestInstallReadiness {
+        let bytesToDownload = value(for: "BytesToDownload", in: contents).flatMap(Int64.init)
+        let bytesDownloaded = value(for: "BytesDownloaded", in: contents).flatMap(Int64.init)
+        if let total = bytesToDownload, total > 0,
+           let downloaded = bytesDownloaded, downloaded < total {
+            return .inProgress
+        }
+
+        if let rawFlags = value(for: "StateFlags", in: contents),
+           let flags = Int(rawFlags) {
+            return flags & 4 == 4 ? .installed : .inProgress
+        }
+        return .unknown
     }
 
     private static func value(for key: String, in contents: String) -> String? {
