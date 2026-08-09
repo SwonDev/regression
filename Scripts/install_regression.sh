@@ -4,7 +4,7 @@
 # y reutiliza D3DMetal solo desde una instalación local que el usuario ya haya licenciado.
 set -Eeuo pipefail
 
-VERSION="1.9.0"
+VERSION="1.9.1"
 REPO="SwonDev/regression"
 ASSET_NAME="Regression-${VERSION}-macos-arm64.tar.zst"
 APP_NAME="Regression.app"
@@ -131,6 +131,10 @@ rollback() {
     fi
     if [[ -n "$BOTTLE_REGISTRY_BACKUP" && -f "$BOTTLE_REGISTRY_BACKUP" ]]; then
         cp "$BOTTLE_REGISTRY_BACKUP" "$BOTTLE/system.reg"
+    fi
+    if [[ $LAUNCH -eq 1 && -n "$DESTINATION" && -d "$DESTINATION" ]]; then
+        /usr/bin/open "$DESTINATION" 2>/dev/null || true
+        warn "La versión anterior de Regression se ha vuelto a abrir tras el rollback."
     fi
     cleanup
     exit "$status"

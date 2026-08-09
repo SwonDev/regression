@@ -32,6 +32,36 @@ public enum RegressionReleaseUpdateStatus: Equatable, Sendable {
     case failed(message: String)
 }
 
+public enum RegressionAutomaticUpdateDecision: Equatable, Sendable {
+    case disabled
+    case noUpdate
+    case requiresCanonicalInstallation
+    case waitForIdle
+    case manualRetryRequired
+    case installNow
+}
+
+/// La actualización automática solo puede sustituir la instalación pública canónica.
+/// Una release válida se aplaza mientras Steam de Regression o una operación crítica
+/// estén activos; el siguiente refresco en reposo vuelve a evaluarla.
+public enum RegressionAutomaticUpdatePolicy {
+    public static func decision(
+        enabled: Bool,
+        canonicalInstallation: Bool,
+        regressionIsRunning: Bool,
+        applicationIsBusy: Bool,
+        lastAttemptedVersion: String? = nil,
+        status: RegressionReleaseUpdateStatus
+    ) -> RegressionAutomaticUpdateDecision {
+        guard enabled else { return .disabled }
+        guard case let .available(_, release) = status else { return .noUpdate }
+        guard canonicalInstallation else { return .requiresCanonicalInstallation }
+        guard !regressionIsRunning, !applicationIsBusy else { return .waitForIdle }
+        guard lastAttemptedVersion != release.version else { return .manualRetryRequired }
+        return .installNow
+    }
+}
+
 public enum RegressionReleaseUpdateError: LocalizedError, Equatable, Sendable {
     case invalidResponse
     case responseTooLarge
@@ -42,6 +72,7 @@ public enum RegressionReleaseUpdateError: LocalizedError, Equatable, Sendable {
     case invalidDigest
     case installerTooLarge
     case integrityMismatch
+    case unsafeUpdateDirectory
 
     public var errorDescription: String? {
         switch self {
@@ -54,6 +85,7 @@ public enum RegressionReleaseUpdateError: LocalizedError, Equatable, Sendable {
         case .invalidDigest: "El SHA-256 publicado para el instalador no es válido."
         case .installerTooLarge: "El instalador supera el tamaño máximo permitido."
         case .integrityMismatch: "El instalador descargado no coincide con el SHA-256 publicado."
+        case .unsafeUpdateDirectory: "El directorio local de actualización no es seguro."
         }
     }
 }
@@ -108,7 +140,7 @@ public actor RegressionReleaseUpdateService {
         for release: RegressionRelease,
         to directoryURL: URL
     ) async throws -> URL {
-        guard Self.isAllowedDownloadURL(release.installerURL) else {
+        guard Self.isAllowedInstallerAssetURL(release.installerURL) else {
             throw RegressionReleaseUpdateError.unsupportedDownloadURL
         }
         guard release.installerSize > 0, release.installerSize <= maximumInstallerBytes else {
@@ -123,7 +155,7 @@ public actor RegressionReleaseUpdateService {
 
         let (data, response) = try await fetch(request)
         try validate(response: response, dataSize: data.count, maximumSize: maximumInstallerBytes)
-        guard let finalURL = response.url, Self.isAllowedDownloadURL(finalURL) else {
+        guard let finalURL = response.url, Self.isAllowedDownloadResponseURL(finalURL) else {
             throw RegressionReleaseUpdateError.unsupportedDownloadURL
         }
         let actualDigest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
@@ -131,12 +163,29 @@ public actor RegressionReleaseUpdateService {
             throw RegressionReleaseUpdateError.integrityMismatch
         }
 
+        if (try? directoryURL.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
+            throw RegressionReleaseUpdateError.unsafeUpdateDirectory
+        }
         try FileManager.default.createDirectory(
             at: directoryURL,
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700]
         )
+        let directoryValues = try directoryURL.resourceValues(
+            forKeys: [.isDirectoryKey, .isSymbolicLinkKey]
+        )
+        guard directoryValues.isDirectory == true,
+              directoryValues.isSymbolicLink != true else {
+            throw RegressionReleaseUpdateError.unsafeUpdateDirectory
+        }
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: directoryURL.path
+        )
         let destination = directoryURL.appendingPathComponent("install_regression.sh")
+        if (try? destination.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
+            throw RegressionReleaseUpdateError.unsafeUpdateDirectory
+        }
         try data.write(to: destination, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: destination.path)
         return destination
@@ -147,7 +196,7 @@ public actor RegressionReleaseUpdateService {
         guard !payload.draft, !payload.prerelease,
               let version = SemanticVersion.normalized(payload.tagName),
               let pageURL = URL(string: payload.htmlURL),
-              pageURL.scheme == "https", pageURL.host == "github.com" else {
+              Self.isAllowedReleasePageURL(pageURL) else {
             throw RegressionReleaseUpdateError.invalidRelease
         }
         let expectedName = "install_regression.sh"
@@ -155,7 +204,7 @@ public actor RegressionReleaseUpdateService {
               let installerURL = URL(string: asset.browserDownloadURL) else {
             throw RegressionReleaseUpdateError.missingInstaller
         }
-        guard Self.isAllowedDownloadURL(installerURL) else {
+        guard Self.isAllowedInstallerAssetURL(installerURL) else {
             throw RegressionReleaseUpdateError.unsupportedDownloadURL
         }
         guard let rawDigest = asset.digest else {
@@ -186,10 +235,25 @@ public actor RegressionReleaseUpdateService {
         }
     }
 
-    private static func isAllowedDownloadURL(_ url: URL) -> Bool {
+    private static func isAllowedReleasePageURL(_ url: URL) -> Bool {
+        url.scheme == "https"
+            && url.host?.lowercased() == "github.com"
+            && url.path.hasPrefix("/SwonDev/regression/releases/tag/")
+            && url.pathComponents.count == 6
+    }
+
+    private static func isAllowedInstallerAssetURL(_ url: URL) -> Bool {
+        url.scheme == "https"
+            && url.host?.lowercased() == "github.com"
+            && url.path.hasPrefix("/SwonDev/regression/releases/download/")
+            && url.pathComponents.count == 7
+            && url.lastPathComponent == "install_regression.sh"
+    }
+
+    private static func isAllowedDownloadResponseURL(_ url: URL) -> Bool {
+        if isAllowedInstallerAssetURL(url) { return true }
         guard url.scheme == "https", let host = url.host?.lowercased() else { return false }
-        return host == "github.com"
-            || host == "objects.githubusercontent.com"
+        return host == "objects.githubusercontent.com"
             || host.hasSuffix(".githubusercontent.com")
     }
 }

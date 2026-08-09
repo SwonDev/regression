@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${REGRESSION_RELEASE_VERSION:-1.9.0}"
+VERSION="${REGRESSION_RELEASE_VERSION:-1.9.1}"
 APP="$ROOT/Regression.app"
 APP_NAME="Regression.app"
 OUTPUT_DIR="${REGRESSION_RELEASE_OUTPUT_DIR:-$ROOT/build/release-$VERSION}"
@@ -321,8 +321,10 @@ WINDOWS_MEDIA_PUBLIC="$PUBLIC_APP/Contents/SharedSupport/components/windows-medi
 if [[ -d "$WINDOWS_MEDIA_PUBLIC" ]]; then
     (
         cd "$WINDOWS_MEDIA_PUBLIC"
+        manifest_candidate="$WORK_DIR/windows-media-manifest.sha256"
         find . -type f ! -name manifest.sha256 -print0 | LC_ALL=C sort -z \
-            | xargs -0 shasum -a 256 > manifest.sha256
+            | xargs -0 shasum -a 256 > "$manifest_candidate"
+        mv "$manifest_candidate" manifest.sha256
         shasum -a 256 -c manifest.sha256
     )
 fi

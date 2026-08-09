@@ -53,6 +53,12 @@ curl --proto '=https' --tlsv1.2 -fsSL \
 El instalador es auditable, transaccional y conserva rollback. Antes de sustituir una instalación
 comprueba la firma, el SHA-256 y el contenido del runtime descargado.
 
+Después de la primera instalación, Regression detecta nuevas releases estables al arrancar y cada
+seis horas. La actualización automática está activada por defecto: espera a que Steam de Regression
+quede en reposo, descarga y verifica el instalador oficial, conserva botella y perfiles, reemplaza
+la app de forma transaccional y la reinicia. Todo el flujo se controla desde **Mantenimiento**;
+no hace falta volver a GitHub. [Detalles y garantías](docs/automatic-updates.md).
+
 **Requisitos**
 
 - Mac con Apple Silicon.

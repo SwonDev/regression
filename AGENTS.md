@@ -294,6 +294,18 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
     cambiadas/restauradas y cierre sobre el runtime general. No crear una excepción mientras el
     baseline pase. Sigue siendo la puerta Unity obligatoria ante cualquier cambio común de Wine;
     ver `docs/games/moonlighter-2.md`.
+38. **La autoactualización usa un único canal estable y nunca interrumpe Regression.** La app
+    consulta `SwonDev/regression/releases/latest` al arrancar y cada seis horas, acepta solo una
+    versión semántica posterior que no sea draft/prerelease y exige el asset exacto
+    `install_regression.sh` del repositorio oficial con digest SHA-256 de GitHub. Está activada por
+    defecto, pero solo instala desde `/Applications/Regression.app` y cuando Steam de Regression y
+    las operaciones críticas están en reposo. El staging no sigue symlinks y usa permisos privados;
+    el modelo cierra primero SQLite y sus tareas y solo después pide a AppKit la terminación; el
+    instalador espera el cierre limpio del PID, verifica el release completo, conserva botella y
+    GPTK autorizado, archiva rollback y relanza. Si el instalador falla, restaura y vuelve a abrir la
+    app anterior; la misma release no se reintenta automáticamente en bucle. Nunca terminar un juego
+    para actualizar, aceptar un asset de otro repositorio ni sustituir este flujo por comandos aprendidos; ver
+    `docs/automatic-updates.md`.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 

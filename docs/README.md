@@ -13,6 +13,7 @@ corresponda a tu objetivo y consulta `AGENTS.md` antes de cambiar runtime, perfi
 | Entender datos, perfiles y certificaciones | [Plataforma de compatibilidad](compatibility-platform.md) |
 | Revisar runtimes y autorreparación | [Evolución tecnológica](runtime-evolution.md) |
 | Auditar la aplicación Swift/macOS | [Auditoría nativa](native-app-audit.md) |
+| Entender el canal de autoactualización | [Actualizaciones automáticas](automatic-updates.md) |
 | Aplicar las reglas operativas | [AGENTS.md](../AGENTS.md) |
 | Consultar el contrato visual | [DESIGN.md](../DESIGN.md) |
 
@@ -26,6 +27,7 @@ corresponda a tu objetivo y consulta `AGENTS.md` antes de cambiar runtime, perfi
 | Perfiles compilados | [`GameRuntimeProfileCatalog.swift`](../Sources/RegressionCore/GameRuntimeProfileCatalog.swift) |
 | Estado local y evidencia | `~/Library/Application Support/Regression/Compatibility/compatibility.sqlite` |
 | Distribución pública | [Última release](https://github.com/SwonDev/regression/releases/latest) |
+| Política de actualización | [`automatic-updates.md`](automatic-updates.md) |
 
 Un documento de investigación no sustituye a la certificación local. Un proceso con código cero
 tampoco crea un veredicto perfecto.

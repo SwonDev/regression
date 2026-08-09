@@ -606,6 +606,17 @@ struct MenuBarView: View {
 
                     Divider()
 
+                    Toggle("Actualizar Regression automáticamente", isOn: Binding(
+                        get: { model.automaticRegressionUpdatesEnabled },
+                        set: { model.toggleAutomaticRegressionUpdates($0) }
+                    ))
+                    Text(model.automaticRegressionUpdatesEnabled
+                         ? "Regression comprueba GitHub al iniciar y cada seis horas; instala en reposo y reinicia sola."
+                         : "Las nuevas versiones se detectan, pero esperan tu confirmación dentro de Regression.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
                     regressionUpdateSection
 
                     Divider()
@@ -705,6 +716,18 @@ struct MenuBarView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                if model.automaticRegressionUpdatesEnabled && model.runningState.regressionIsRunning {
+                    Text("La actualización se instalará automáticamente al cerrar Steam de Regression.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if model.automaticRegressionUpdatesEnabled && model.regressionUpdateNeedsManualRetry {
+                    Text("El último intento no terminó; Regression no repetirá el ciclo automáticamente.")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Button("Actualizar y reiniciar") {
                     Task { await model.installAvailableRegressionUpdate() }
                 }

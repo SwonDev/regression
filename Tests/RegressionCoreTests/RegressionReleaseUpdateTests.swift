@@ -4,6 +4,115 @@ import Foundation
 import XCTest
 
 final class RegressionReleaseUpdateTests: XCTestCase {
+    func testAutomaticUpdateInstallsOnlyFromCanonicalIdleApplication() {
+        let status = RegressionReleaseUpdateStatus.available(
+            installedVersion: "1.9.0",
+            release: Self.release(version: "1.9.1")
+        )
+
+        XCTAssertEqual(
+            RegressionAutomaticUpdatePolicy.decision(
+                enabled: true,
+                canonicalInstallation: true,
+                regressionIsRunning: false,
+                applicationIsBusy: false,
+                status: status
+            ),
+            .installNow
+        )
+        XCTAssertEqual(
+            RegressionAutomaticUpdatePolicy.decision(
+                enabled: true,
+                canonicalInstallation: false,
+                regressionIsRunning: false,
+                applicationIsBusy: false,
+                status: status
+            ),
+            .requiresCanonicalInstallation
+        )
+        XCTAssertEqual(
+            RegressionAutomaticUpdatePolicy.decision(
+                enabled: false,
+                canonicalInstallation: true,
+                regressionIsRunning: false,
+                applicationIsBusy: false,
+                status: status
+            ),
+            .disabled
+        )
+    }
+
+    func testAutomaticUpdateWaitsForRegressionAndBusyOperationsToFinish() {
+        let status = RegressionReleaseUpdateStatus.available(
+            installedVersion: "1.9.0",
+            release: Self.release(version: "1.9.1")
+        )
+
+        XCTAssertEqual(
+            RegressionAutomaticUpdatePolicy.decision(
+                enabled: true,
+                canonicalInstallation: true,
+                regressionIsRunning: true,
+                applicationIsBusy: false,
+                status: status
+            ),
+            .waitForIdle
+        )
+        XCTAssertEqual(
+            RegressionAutomaticUpdatePolicy.decision(
+                enabled: true,
+                canonicalInstallation: true,
+                regressionIsRunning: false,
+                applicationIsBusy: true,
+                status: status
+            ),
+            .waitForIdle
+        )
+    }
+
+    func testAutomaticUpdateDoesNothingWithoutANewerRelease() {
+        XCTAssertEqual(
+            RegressionAutomaticUpdatePolicy.decision(
+                enabled: true,
+                canonicalInstallation: true,
+                regressionIsRunning: false,
+                applicationIsBusy: false,
+                status: .upToDate(installedVersion: "1.9.0", checkedAt: Date())
+            ),
+            .noUpdate
+        )
+    }
+
+    func testAutomaticUpdateDoesNotLoopAfterAttemptingTheSameRelease() {
+        let status = RegressionReleaseUpdateStatus.available(
+            installedVersion: "1.9.0",
+            release: Self.release(version: "1.9.1")
+        )
+
+        XCTAssertEqual(
+            RegressionAutomaticUpdatePolicy.decision(
+                enabled: true,
+                canonicalInstallation: true,
+                regressionIsRunning: false,
+                applicationIsBusy: false,
+                lastAttemptedVersion: "1.9.1",
+                status: status
+            ),
+            .manualRetryRequired
+        )
+        XCTAssertEqual(
+            RegressionAutomaticUpdatePolicy.decision(
+                enabled: true,
+                canonicalInstallation: true,
+                regressionIsRunning: false,
+                applicationIsBusy: false,
+                lastAttemptedVersion: "1.9.0",
+                status: status
+            ),
+            .installNow
+        )
+    }
+
     func testStableNewerReleaseIsOfferedWithVerifiedInstallerMetadata() async throws {
         let installer = Data("#!/bin/bash\nexit 0\n".utf8)
         let digest = SHA256.hash(data: installer).map { String(format: "%02x", $0) }.joined()
@@ -73,6 +182,84 @@ final class RegressionReleaseUpdateTests: XCTestCase {
         }
     }
 
+    func testInstallerFromAnotherGitHubRepositoryIsRejected() async {
+        let service = RegressionReleaseUpdateService(fetch: { request in
+            (
+                Self.releaseJSON(
+                    version: "1.9.1",
+                    downloadURL: "https://github.com/otro/proyecto/releases/download/v1.9.1/install_regression.sh"
+                ),
+                Self.response(url: request.url!)
+            )
+        })
+
+        do {
+            _ = try await service.check(installedVersion: "1.9.0")
+            XCTFail("Un asset de otro repositorio no debía aceptarse como actualizador oficial.")
+        } catch {
+            XCTAssertEqual(error as? RegressionReleaseUpdateError, .unsupportedDownloadURL)
+        }
+    }
+
+    func testLookalikeOfficialReleasePathsAreRejected() async {
+        for downloadURL in [
+            "https://github.com/SwonDev/regression/releases/download-evil/v1.9.1/install_regression.sh",
+            "https://github.com/SwonDev/regression/releases/download/v1.9.1/nested/install_regression.sh",
+        ] {
+            let service = RegressionReleaseUpdateService(fetch: { request in
+                (
+                    Self.releaseJSON(version: "1.9.1", downloadURL: downloadURL),
+                    Self.response(url: request.url!)
+                )
+            })
+
+            do {
+                _ = try await service.check(installedVersion: "1.9.0")
+                XCTFail("Una ruta parecida al canal oficial no debía aceptarse: \(downloadURL)")
+            } catch {
+                XCTAssertEqual(error as? RegressionReleaseUpdateError, .unsupportedDownloadURL)
+            }
+        }
+    }
+
+    func testInstallerStagingRejectsSymbolicLinkAndRepairsDirectoryPermissions() async throws {
+        let installer = Data("#!/bin/bash\nexit 0\n".utf8)
+        let digest = SHA256.hash(data: installer).map { String(format: "%02x", $0) }.joined()
+        let release = Self.release(
+            version: "1.9.1",
+            digest: digest,
+            size: installer.count
+        )
+        let service = RegressionReleaseUpdateService(fetch: { request in
+            (installer, Self.response(url: request.url!))
+        })
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-update-test-\(UUID().uuidString)", isDirectory: true)
+        let target = root.appendingPathComponent("target", isDirectory: true)
+        let linked = root.appendingPathComponent("linked", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: linked, withDestinationURL: target)
+
+        do {
+            _ = try await service.downloadInstaller(for: release, to: linked)
+            XCTFail("El staging de una actualización no debe seguir enlaces simbólicos.")
+        } catch {
+            XCTAssertEqual(error as? RegressionReleaseUpdateError, .unsafeUpdateDirectory)
+            XCTAssertFalse(
+                FileManager.default.fileExists(
+                    atPath: target.appendingPathComponent("install_regression.sh").path
+                )
+            )
+        }
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: target.path)
+        _ = try await service.downloadInstaller(for: release, to: target)
+        let permissions = try FileManager.default.attributesOfItem(atPath: target.path)[.posixPermissions]
+            as? NSNumber
+        XCTAssertEqual((permissions?.intValue ?? 0) & 0o777, 0o700)
+    }
+
     func testCurrentOrOlderReleaseLeavesInstallationUpToDate() async throws {
         for candidate in ["1.7.3", "1.6.9"] {
             let service = RegressionReleaseUpdateService(fetch: { request in
@@ -94,9 +281,12 @@ final class RegressionReleaseUpdateTests: XCTestCase {
         draft: Bool = false,
         prerelease: Bool = false,
         digest: String = String(repeating: "b", count: 64),
-        size: Int = 22
+        size: Int = 22,
+        downloadURL: String? = nil
     ) -> Data {
-        Data(#"""
+        let resolvedDownloadURL = downloadURL
+            ?? "https://github.com/SwonDev/regression/releases/download/\(version)/install_regression.sh"
+        return Data(#"""
         {
           "tag_name": "\#(version)",
           "html_url": "https://github.com/SwonDev/regression/releases/tag/\#(version)",
@@ -104,12 +294,28 @@ final class RegressionReleaseUpdateTests: XCTestCase {
           "prerelease": \#(prerelease),
           "assets": [{
             "name": "install_regression.sh",
-            "browser_download_url": "https://github.com/SwonDev/regression/releases/download/\#(version)/install_regression.sh",
+            "browser_download_url": "\#(resolvedDownloadURL)",
             "digest": "sha256:\#(digest)",
             "size": \#(size)
           }]
         }
         """#.utf8)
+    }
+
+    private static func release(
+        version: String,
+        digest: String = String(repeating: "a", count: 64),
+        size: Int = 22
+    ) -> RegressionRelease {
+        RegressionRelease(
+            version: version,
+            pageURL: URL(string: "https://github.com/SwonDev/regression/releases/tag/v\(version)")!,
+            installerURL: URL(
+                string: "https://github.com/SwonDev/regression/releases/download/v\(version)/install_regression.sh"
+            )!,
+            installerSHA256: digest,
+            installerSize: size
+        )
     }
 
     private static func response(url: URL) -> HTTPURLResponse {

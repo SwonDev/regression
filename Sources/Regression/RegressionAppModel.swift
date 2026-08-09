@@ -75,6 +75,8 @@ final class RegressionAppModel {
     var failure: UserFacingFailure?
     var statusDetail = "Preparando el motor y la biblioteca de Steam…"
     var autoLaunchEnabled: Bool
+    var automaticRegressionUpdatesEnabled: Bool
+    private(set) var shutdownIsComplete = false
 
     @ObservationIgnored private let processRunner: ProcessRunner
     @ObservationIgnored private let processLauncher: ProcessLauncher
@@ -99,10 +101,13 @@ final class RegressionAppModel {
     @ObservationIgnored private var monitoringTask: Task<Void, Never>?
     @ObservationIgnored private var externalCatalogTask: Task<Void, Never>?
     @ObservationIgnored private var regressionUpdateTask: Task<Void, Never>?
+    @ObservationIgnored private var automaticRegressionUpdateTask: Task<Void, Never>?
     @ObservationIgnored private var externalCatalogSyncID: UUID?
     @ObservationIgnored private var didBootstrap = false
     @ObservationIgnored private var periodicRefreshCount = 0
     @ObservationIgnored private let regressionUpdateCheckCycle = 10_800
+    @ObservationIgnored private let lastAttemptedRegressionReleaseKey =
+        "lastAttemptedRegressionRelease"
     @ObservationIgnored private var profilesByAppID: [String: [CompatibilityProfile]] = [:]
     @ObservationIgnored private var certificationsByAppID = Dictionary(
         grouping: VerifiedGameCatalog.all,
@@ -120,6 +125,12 @@ final class RegressionAppModel {
             defaults.set(true, forKey: "autoLaunchEnabled")
         }
         autoLaunchEnabled = defaults.bool(forKey: "autoLaunchEnabled")
+        if defaults.object(forKey: "automaticRegressionUpdatesEnabled") == nil {
+            defaults.set(true, forKey: "automaticRegressionUpdatesEnabled")
+        }
+        automaticRegressionUpdatesEnabled = defaults.bool(
+            forKey: "automaticRegressionUpdatesEnabled"
+        )
         if defaults.object(forKey: "publicCatalogEnabled") == nil {
             defaults.set(true, forKey: "publicCatalogEnabled")
         }
@@ -248,6 +259,10 @@ final class RegressionAppModel {
         }
     }
 
+    var regressionUpdateNeedsManualRetry: Bool {
+        automaticRegressionUpdateDecision == .manualRetryRequired
+    }
+
     func bootstrap() async {
         guard !didBootstrap else { return }
         didBootstrap = true
@@ -266,6 +281,10 @@ final class RegressionAppModel {
             present(error)
         }
 
+        // La detección de release empieza cuanto antes y corre en paralelo al bootstrap local.
+        // Antes del autoarranque se concede una ventana corta para que una actualización ya
+        // publicada tenga prioridad sobre abrir Steam, sin bloquear indefinidamente por red.
+        scheduleRegressionReleaseCheck()
         await refreshDiscovery()
         LifecycleDiagnostics.write("Detección completada")
         logger.info("Detección terminada; CrossOver disponible: \(self.installations?.crossOver != nil)")
@@ -282,8 +301,6 @@ final class RegressionAppModel {
         Task { [weak self] in
             await self?.refreshUpdateStatus()
         }
-        scheduleRegressionReleaseCheck()
-
         monitoringTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(2))
@@ -299,6 +316,23 @@ final class RegressionAppModel {
         } else if let active = runningState.activeBackend {
             operation = .running(active)
             statusDetail = "Se ha adoptado la instancia de Steam que ya estaba abierta."
+        } else if automaticRegressionUpdatesEnabled && isCanonicalApplicationInstallation {
+            await waitBrieflyForInitialRegressionReleaseCheck()
+            if case let .available(_, release) = regressionReleaseStatus,
+               automaticRegressionUpdateDecision == .installNow {
+                operation = .ready
+                statusDetail = "Preparando la actualización automática a Regression \(release.version)…"
+                scheduleAutomaticRegressionUpdateIfPossible()
+                return
+            }
+            if autoLaunchEnabled {
+                LifecycleDiagnostics.write("Inicio automático en ejecución")
+                logger.info("Inicio automático solicitado con \(self.selectedBackend.rawValue)")
+                await startSteam()
+            } else if failure == nil {
+                operation = .ready
+                statusDetail = "El inicio automático está desactivado."
+            }
         } else if autoLaunchEnabled {
             LifecycleDiagnostics.write("Inicio automático en ejecución")
             logger.info("Inicio automático solicitado con \(self.selectedBackend.rawValue)")
@@ -673,6 +707,7 @@ final class RegressionAppModel {
     }
 
     func shutdown() async {
+        guard !shutdownIsComplete else { return }
         logger.notice("Cancelando tareas de monitorización y catálogo")
         let monitoring = monitoringTask
         monitoringTask = nil
@@ -685,6 +720,8 @@ final class RegressionAppModel {
 
         regressionUpdateTask?.cancel()
         regressionUpdateTask = nil
+        automaticRegressionUpdateTask?.cancel()
+        automaticRegressionUpdateTask = nil
 
         // No esperar indefinidamente a tareas de red ya canceladas. Las operaciones SQLite
         // pendientes se serializan en el actor del repositorio antes del cierre; al terminar
@@ -701,6 +738,7 @@ final class RegressionAppModel {
                 "No se pudo cerrar limpiamente la base local: \(error.localizedDescription, privacy: .public)"
             )
         }
+        shutdownIsComplete = true
     }
 
     func openPublicCatalog() {
@@ -711,8 +749,22 @@ final class RegressionAppModel {
         scheduleRegressionReleaseCheck(force: true)
     }
 
+    func toggleAutomaticRegressionUpdates(_ enabled: Bool) {
+        automaticRegressionUpdatesEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: "automaticRegressionUpdatesEnabled")
+        if enabled {
+            scheduleAutomaticRegressionUpdateIfPossible()
+        }
+    }
+
     func installAvailableRegressionUpdate() async {
         guard case let .available(_, release) = regressionReleaseStatus else { return }
+        guard !operation.isBusy else {
+            regressionReleaseStatus = .failed(
+                message: "Espera a que termine la operación activa antes de actualizar Regression."
+            )
+            return
+        }
         guard !runningState.regressionIsRunning else {
             regressionReleaseStatus = .failed(
                 message: "Cierra Steam del motor Regression antes de actualizar la aplicación."
@@ -731,7 +783,12 @@ final class RegressionAppModel {
             )
             let logURL = updateDirectory.appendingPathComponent("install.log")
             FileManager.default.createFile(atPath: logURL.path, contents: nil)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: logURL.path
+            )
             let log = try FileHandle(forWritingTo: logURL)
+            try log.truncate(atOffset: 0)
 
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/bin/bash")
@@ -744,14 +801,21 @@ final class RegressionAppModel {
             ]
             process.standardOutput = log
             process.standardError = log
+            UserDefaults.standard.set(release.version, forKey: lastAttemptedRegressionReleaseKey)
             do {
                 try process.run()
             } catch {
+                UserDefaults.standard.removeObject(forKey: lastAttemptedRegressionReleaseKey)
                 try? log.close()
                 throw error
             }
             try? log.close()
             regressionReleaseStatus = .installing(version: release.version)
+            // AppKit no puede esperar una tarea MainActor de cierre mientras terminate(_:) se
+            // ejecuta desde esta misma tarea. Cerramos el estado antes y el delegate puede
+            // responder .terminateNow sin entrar en el ciclo reentrante de terminateLater.
+            automaticRegressionUpdateTask = nil
+            await shutdown()
             NSApplication.shared.terminate(nil)
         } catch {
             regressionReleaseStatus = .failed(message: error.localizedDescription)
@@ -861,6 +925,7 @@ final class RegressionAppModel {
             statusDetail = "Steam se ha cerrado. Regression permanece disponible en la barra de menús."
             await refreshStoredData()
         }
+        scheduleAutomaticRegressionUpdateIfPossible()
     }
 
     private func refreshGames() async {
@@ -1133,7 +1198,16 @@ final class RegressionAppModel {
                 guard !Task.isCancelled else { return }
                 regressionReleaseStatus = status
                 if case let .available(_, release) = status {
-                    await notifyAboutAvailableRegressionRelease(release)
+                    let decision = automaticRegressionUpdateDecision
+                    scheduleAutomaticRegressionUpdateIfPossible()
+                    if decision != .installNow {
+                        await notifyAboutAvailableRegressionRelease(
+                            release,
+                            automaticDecision: decision
+                        )
+                    }
+                } else if case .upToDate = status {
+                    UserDefaults.standard.removeObject(forKey: lastAttemptedRegressionReleaseKey)
                 }
             } catch is CancellationError {
                 return
@@ -1145,7 +1219,47 @@ final class RegressionAppModel {
         }
     }
 
-    private func notifyAboutAvailableRegressionRelease(_ release: RegressionRelease) async {
+    private var automaticRegressionUpdateDecision: RegressionAutomaticUpdateDecision {
+        RegressionAutomaticUpdatePolicy.decision(
+            enabled: automaticRegressionUpdatesEnabled,
+            canonicalInstallation: isCanonicalApplicationInstallation,
+            regressionIsRunning: runningState.regressionIsRunning,
+            applicationIsBusy: operation.isBusy,
+            lastAttemptedVersion: UserDefaults.standard.string(
+                forKey: lastAttemptedRegressionReleaseKey
+            ),
+            status: regressionReleaseStatus
+        )
+    }
+
+    private var isCanonicalApplicationInstallation: Bool {
+        Bundle.main.bundleURL.standardizedFileURL.path == "/Applications/Regression.app"
+    }
+
+    private func scheduleAutomaticRegressionUpdateIfPossible() {
+        guard automaticRegressionUpdateDecision == .installNow,
+              automaticRegressionUpdateTask == nil else { return }
+        automaticRegressionUpdateTask = Task { [weak self] in
+            guard let self else { return }
+            await installAvailableRegressionUpdate()
+            automaticRegressionUpdateTask = nil
+        }
+    }
+
+    private func waitBrieflyForInitialRegressionReleaseCheck() async {
+        guard regressionUpdateTask != nil else { return }
+        for _ in 0..<20 {
+            guard regressionUpdateTask != nil,
+                  case .checking = regressionReleaseStatus,
+                  !Task.isCancelled else { return }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+    }
+
+    private func notifyAboutAvailableRegressionRelease(
+        _ release: RegressionRelease,
+        automaticDecision: RegressionAutomaticUpdateDecision
+    ) async {
         let defaultsKey = "lastNotifiedRegressionRelease"
         guard UserDefaults.standard.string(forKey: defaultsKey) != release.version else { return }
 
@@ -1166,7 +1280,16 @@ final class RegressionAppModel {
 
         let content = UNMutableNotificationContent()
         content.title = "Regression \(release.version) disponible"
-        content.body = "Abre Regression para actualizar sin perder tu botella, juegos ni Switch2Bridge."
+        switch automaticDecision {
+        case .waitForIdle:
+            content.body = "Se instalará automáticamente cuando Steam de Regression quede en reposo."
+        case .requiresCanonicalInstallation:
+            content.body = "Abre la instalación canónica de Regression para completar la actualización."
+        case .manualRetryRequired:
+            content.body = "La actualización anterior no terminó. Reinténtala desde Mantenimiento."
+        case .disabled, .noUpdate, .installNow:
+            content.body = "Abre Regression para actualizar sin perder tu botella, juegos ni Switch2Bridge."
+        }
         content.sound = .default
         let request = UNNotificationRequest(
             identifier: "regression-release-v\(release.version)",

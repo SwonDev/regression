@@ -94,6 +94,10 @@ final class RegressionAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if model.shutdownIsComplete {
+            LifecycleDiagnostics.write("Estado local ya cerrado; terminación inmediata autorizada")
+            return .terminateNow
+        }
         guard terminationTask == nil else {
             LifecycleDiagnostics.write("Terminación ya solicitada; esperando respuesta pendiente")
             return .terminateLater
