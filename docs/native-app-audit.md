@@ -9,8 +9,10 @@ botella ni los perfiles de juegos blindados, y no lanzó ningún juego.
 
 Antes y después de empaquetar se ejecutó `build/verify-protected-state.sh --include-bottle`.
 Quedaron intactos los hashes del runtime, la pareja DXMT, D3D9, el perfil relativo de Grim Dawn,
-el launcher propio y la botella canónica. `/Applications/Regression.app` continúa siendo un
-symlink al bundle del proyecto porque el prefijo de Wine está horneado en esa ruta.
+el launcher propio y la botella canónica. En esta auditoría histórica de julio,
+`/Applications/Regression.app` todavía era un symlink al bundle del proyecto. Ese modelo ya no
+está vigente: la distribución actual instala un bundle físico único recompilado para
+`/Applications`; ver `canonical-installation.md`.
 
 El trabajo se limitó a la capa nativa y a su base de evidencia. El backend CrossOver continúa
 usando únicamente su CLI oficial; el motor propio no incorporó ni enlazó binarios propietarios.

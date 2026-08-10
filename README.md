@@ -238,10 +238,11 @@ El verificador extrae el mismo tar que recibirá el usuario, audita dependencias
 redistribuibles y rutas, y ejecuta además un arranque mínimo de Wine. Un asset cuyo wrapper no
 pueda localizar y cargar su `ntdll.so` se rechaza antes de poder publicarse o instalarse.
 
-La app canónica vive en `Regression.app/` y `/Applications/Regression.app` apunta a ella durante
-el desarrollo. El Wine público se recompila para
-`/Applications/Regression.app/Contents/SharedSupport/wine-root`; mover el bundle sin recompilar
-rompe sus rutas horneadas.
+`Regression.app/` es el artefacto local de desarrollo y no debe aparecer como instalación. La
+única app canónica es el bundle físico `/Applications/Regression.app`; el Wine público se
+recompila para `/Applications/Regression.app/Contents/SharedSupport/wine-root`. Mover el bundle
+sin recompilar rompe sus rutas horneadas. Antes de entregar una build, ejecuta
+`bash build/verify-canonical-installation.sh` para comprobar firma, Spotlight y LaunchServices.
 
 ## Licencia y límites
 

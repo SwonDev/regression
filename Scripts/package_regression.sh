@@ -367,7 +367,9 @@ verify_protected_state
 
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 if [[ -x "$LSREGISTER" ]]; then
-    "$LSREGISTER" -f "$APP"
+    # Este es un artefacto de desarrollo, no la instalación canónica. Registrarlo hacía que
+    # Finder/Spotlight ofrecieran builds antiguos junto a /Applications/Regression.app.
+    "$LSREGISTER" -u "$APP" >/dev/null 2>&1 || true
 fi
 
 find "$ROLLBACK_DIR" -depth -delete

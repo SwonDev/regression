@@ -25,10 +25,10 @@
   parche propio de presentación cross-process IOSurface en DXMT + consumer en winemac.drv).
 - Palworld completo (personaje + mundo + HUD), Moonlighter 2 (Unity IL2CPP), Grim Dawn,
   Romestead. D3D9 vía DXVK 1.10.3.
-- App autocontenida y firmada con identidad de desarrollo estable, instalada en
-  `/Applications/Regression.app`
-  (symlink a la del proyecto — el `--prefix` del wine va horneado a la ruta del proyecto;
-  NO mover la app sin recompilar wine).
+- App autocontenida y firmada con identidad de desarrollo estable. La única instalación
+  descubrible es el bundle físico `/Applications/Regression.app`; `Regression.app/` en el
+  checkout es solo un artefacto de desarrollo desregistrado. El runtime público lleva el
+  `--prefix` horneado para `/Applications`, por lo que no se mueve sin recompilar Wine.
 - Repo privado en GitHub: `SwonDev/regression` (docs + scripts + parches propios; sin
   binarios de Apple ni fuentes de CrossOver, ver `NOTICE.md`).
 - Icono oficial del usuario integrado (`assets/icon/oficial/`).
@@ -118,6 +118,11 @@
 18. **Toda prueba de juego empieza con el preflight canónico.** Un bloqueo detiene el lanzamiento;
     un aviso se conserva con el run. El diagnóstico solo observa: no termina procesos, elimina
     archivos, modifica botellas ni concede por sí mismo una certificación.
+19. **Solo `/Applications/Regression.app` puede ser una aplicación descubrible.** Los artefactos
+    de desarrollo se desregistran y los rollbacks se conservan en directorios `.noindex`. La
+    sesión no termina hasta que `build/verify-canonical-installation.sh` confirma firma,
+    Spotlight, LaunchServices y ausencia de otras instalaciones. Ver
+    `docs/canonical-installation.md`.
 
 ---
 
@@ -151,7 +156,8 @@ bash build/install-game-profiles.sh  # verifica/fija Grim Dawn y firma el bundle
 bash build/verify-protected-state.sh --include-bottle  # comprueba todos los PIN sin lanzar juegos
 # DXMT: meson compile -C build/toolchain/dxmt72  (fuente: build/toolchain/dxmt-src, v0.72 + parches)
 Scripts/sign_regression.sh Regression.app  # SIEMPRE tras instalar
-open -a Regression            # validación visual obligatoria
+open /Applications/Regression.app          # validación visual obligatoria
+bash build/verify-canonical-installation.sh # una única app descubrible
 ```
 
 - Toolchain ya compilado en `toolchain/x86/` — no recompilar salvo cambio de versiones.
@@ -178,7 +184,7 @@ open -a Regression            # validación visual obligatoria
 ## 6. Verificación rápida del estado bueno
 
 ```bash
-open -a Regression   # debe abrir Steam y renderizar la tienda
+open /Applications/Regression.app   # debe abrir Steam y renderizar la tienda
 swift -e 'import CoreGraphics
 let l = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as! [[String: Any]]
 for w in l { if let n = w[kCGWindowName as String] as? String, !n.isEmpty { print("\(w[kCGWindowNumber as String]!)  \(w[kCGWindowOwnerName as String]!)  \(n)") } }'

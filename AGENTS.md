@@ -340,6 +340,14 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
     `a2ec1490…`/`d7172135…` posteriores al aislamiento de CEF y respaldada por confirmación
     explícita de gameplay, HUD, cámara, entrada y rendimiento perfectos; ver
     `docs/games/borderlands-4.md`.
+43. **Solo `/Applications/Regression.app` puede ser una aplicación descubrible.** La instalación
+    estable es un bundle físico, firmado y compilado para esa ruta; nunca un enlace al checkout.
+    Los bundles de desarrollo pueden existir mientras se compila o valida, pero no se registran en
+    LaunchServices y deben salir de cualquier ruta indexada antes de cerrar el trabajo. Los
+    rollbacks se conservan bajo directorios `.noindex`, sin borrarlos ni confundirlos con apps
+    instaladas. La puerta final es `build/verify-canonical-installation.sh`: Spotlight,
+    LaunchServices y las carpetas de aplicaciones deben resolver únicamente la canónica. Ver
+    `docs/canonical-installation.md`.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 
@@ -428,9 +436,13 @@ pruebas; sustituir un PIN global requiere validar toda la matriz correspondiente
 
 ### 5. Instalación y rutas (no improvisar)
 
-- La **app canónica vive en el proyecto** (`Regression.app/`) porque el `--prefix` del wine va
-  horneado a esa ruta absoluta. `/Applications/Regression.app` es un **symlink** a ella.
-- **No copies la app a otro sitio ni la muevas** sin recompilar wine con el nuevo `--prefix`.
+- `Regression.app/` es únicamente el artefacto de desarrollo ignorado por Git. Puede existir
+  durante un build, pero no se registra ni se considera una instalación.
+- La **única app canónica instalada** es el bundle físico `/Applications/Regression.app`. El
+  runtime público se recompila con el `--prefix` de esa ruta; no crear symlinks ni copias con
+  extensión `.app` en ubicaciones indexables.
+- **No copies la app canónica a otro sitio ni la muevas** sin recompilar Wine con el nuevo
+  `--prefix`. Los laboratorios y rollbacks acabados se conservan en `.noindex`.
 - Tras cualquier `make install` o cambio en el bundle:
   `Scripts/sign_regression.sh Regression.app`. El script selecciona una identidad de desarrollo
   válida sin guardar su nombre en el repo, aplica las capacidades públicas requeridas por el host
@@ -600,17 +612,18 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
 - Revisión de almacenamiento 2026-07-27: quedan solo las fuentes fijadas 26.3.0. El árbol ocupa
   ~6,0 GiB, incluidos ~1,8 GiB de app local y ~1,5 GiB de backups/evidencia. El expediente final
   de Grim Dawn explica el crecimiento posterior a la limpieza; no hay otra Regression instalada.
-- **Instalación**: `/Applications/Regression.app` → symlink a la app del proyecto (canónica).
-  Lanzar con `open -a Regression` desde cualquier sitio.
+- **Instalación**: bundle físico `/Applications/Regression.app`, única app que Spotlight y
+  LaunchServices pueden descubrir. Lanzar con `open /Applications/Regression.app`.
 
 ## Verificación rápida
 
 ```bash
-open -a "$PWD/Regression.app"            # debe abrir Steam y renderizar la tienda
+open /Applications/Regression.app        # debe abrir Steam y renderizar la tienda
 swift tools/diagnostics/list-windows.swift steam
 screencapture -x -l <id> /tmp/check.png  # captura y revisar visualmente
 bash build/install-game-profiles.sh      # verifica perfiles Grim Dawn/DD2/DragonSword/HWR2 y firma
 bash build/verify-protected-state.sh --include-bottle  # verifica PINs sin lanzar juegos
+bash build/verify-canonical-installation.sh             # solo una app en Finder/Spotlight
 ```
 
 ## Build

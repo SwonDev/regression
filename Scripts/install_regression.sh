@@ -30,6 +30,7 @@ BRIDGE_APP_BACKUP=""
 BRIDGE_AGENT_BACKUP=""
 BRIDGE_CHANGED=0
 BOTTLE_REGISTRY_BACKUP=""
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
 usage() {
     sed -n '2,4p' "$0"
@@ -662,6 +663,9 @@ for cached_ntdll in "${cached_ntdll_paths[@]}"; do
 done
 
 codesign --verify --deep --strict "$DESTINATION"
+if [[ -x "$LSREGISTER" ]]; then
+    "$LSREGISTER" -f "$DESTINATION"
+fi
 
 EMBEDDED_BRIDGE="$DESTINATION/Contents/SharedSupport/Switch2Bridge/Switch2Bridge.app"
 if [[ $INSTALL_SWITCH2BRIDGE -eq 1 && "$MACOS_MAJOR" -ge 15 && -d "$EMBEDDED_BRIDGE" ]]; then
@@ -703,10 +707,15 @@ elif [[ $INSTALL_SWITCH2BRIDGE -eq 1 && "$MACOS_MAJOR" -lt 15 ]]; then
 fi
 
 if [[ -n "$BACKUP_PATH" ]]; then
-    ROLLBACK_DIR="$APP_SUPPORT/Backups/App"
+    # Los rollbacks son evidencia recuperable, no aplicaciones instaladas. El sufijo .noindex
+    # evita que Spotlight los ofrezca como alternativas a la versión canónica.
+    ROLLBACK_DIR="$APP_SUPPORT/Backups/App.noindex"
     mkdir -p "$ROLLBACK_DIR"
     OLD_VERSION="$(plutil -extract CFBundleShortVersionString raw "$BACKUP_PATH/Contents/Info.plist" 2>/dev/null || echo anterior)"
     ARCHIVED_BACKUP="$ROLLBACK_DIR/Regression-${OLD_VERSION}-$(date +%Y%m%d-%H%M%S).app"
+    if [[ -x "$LSREGISTER" ]]; then
+        "$LSREGISTER" -u "$BACKUP_PATH" >/dev/null 2>&1 || true
+    fi
     mv "$BACKUP_PATH" "$ARCHIVED_BACKUP"
     BACKUP_PATH="$ARCHIVED_BACKUP"
     ok "Rollback conservado en $ARCHIVED_BACKUP"
