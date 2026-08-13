@@ -32,9 +32,101 @@ public struct SharedLibraryAssessment: Equatable, Sendable {
 
 public enum PhysicalLibraryCustodyStatus: Equatable, Sendable {
     case eligibleForTransfer
-    case migrationPlanned
-    case alreadyOwned
+    case preparing
+    case preCutover
+    case cutover
+    case verifying
+    case pendingValidation
+    case validating
+    case rollingBack
+    case independent
     case blocked(String)
+}
+
+public enum PhysicalLibraryCustodyMutationPolicy: Equatable, Sendable {
+    case unrestricted
+    case blocked
+    case regressionValidationOnly
+}
+
+public struct PhysicalLibraryCustodyInterlockSnapshot: Equatable, Sendable {
+    public let status: PhysicalLibraryCustodyStatus
+    public let mutationPolicy: PhysicalLibraryCustodyMutationPolicy
+
+    public init(
+        status: PhysicalLibraryCustodyStatus,
+        mutationPolicy: PhysicalLibraryCustodyMutationPolicy
+    ) {
+        self.status = status
+        self.mutationPolicy = mutationPolicy
+    }
+
+    public var crossOverUnavailable: Bool {
+        switch status {
+        case .cutover, .verifying, .pendingValidation, .validating, .rollingBack, .independent,
+             .blocked:
+            true
+        case .eligibleForTransfer, .preparing, .preCutover:
+            false
+        }
+    }
+}
+
+public struct PhysicalLibraryCustodyValidationLease: Equatable, Sendable {
+    fileprivate let transactionID: UUID
+    fileprivate let nonce: UUID
+}
+
+public final class PhysicalLibraryCustodyMutationPermit: @unchecked Sendable {
+    private let lock = NSLock()
+    private var descriptor: Int32?
+    private var onRelease: (@Sendable () -> Void)?
+
+    init(descriptor: Int32, onRelease: (@Sendable () -> Void)? = nil) {
+        self.descriptor = descriptor
+        self.onRelease = onRelease
+    }
+
+    public func release() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let descriptor else { return }
+        _ = flock(descriptor, LOCK_UN)
+        close(descriptor)
+        self.descriptor = nil
+        let callback = onRelease
+        onRelease = nil
+        callback?()
+    }
+
+    deinit { release() }
+}
+
+public protocol PhysicalLibraryCustodyInterlocking: Sendable {
+    func currentPhysicalLibraryCustodyInterlock() async -> PhysicalLibraryCustodyInterlockSnapshot
+    func authorizePhysicalLibraryCustodyMutation(
+        backend: BackendKind,
+        validationLease: PhysicalLibraryCustodyValidationLease?
+    ) async -> Bool
+    func acquirePhysicalLibraryCustodyMutationPermit(
+        backend: BackendKind,
+        validationLease: PhysicalLibraryCustodyValidationLease?
+    ) async throws -> PhysicalLibraryCustodyMutationPermit
+    func registerPhysicalLibraryLaunchIntent(
+        backend: BackendKind
+    ) async throws -> PhysicalLibraryCustodyLaunchIntent
+    func attachPhysicalLibraryLaunch(
+        _ launch: BackendLaunch,
+        to intent: PhysicalLibraryCustodyLaunchIntent
+    ) async throws
+    func resolvePhysicalLibraryLaunchIntent(
+        _ intent: PhysicalLibraryCustodyLaunchIntent
+    ) async throws
+}
+
+public struct PhysicalLibraryCustodyLaunchIntent: Equatable, Sendable {
+    fileprivate let id: UUID
+    init(id: UUID = UUID()) { self.id = id }
 }
 
 /// Ruta heredada que identifica la biblioteca compartida aunque CrossOver ya no esté instalado.
@@ -131,11 +223,26 @@ public struct PhysicalLibraryCustodyAssessment: Equatable, Sendable {
 }
 
 enum PhysicalLibraryCustodyPhase: String, Codable, Equatable, Sendable {
-    case planned
+    case prepared
+    case willStageDestination
+    case destinationStaged
+    case willCommitCutover
+    case cutoverCommitted
+    case verifyingDestination
+    case awaitingRuntimeValidation
+    case validatingRuntime
+    case validationAccepted
+    case willFinalize
+    case completed
+    case willRollback
+    case rolledBack
+    case needsManualRecovery
 }
 
-/// Plan durable de una futura transferencia. No ejecuta ni autoriza el cutover: la huella del
-/// inventario es estructural y no demuestra que cada byte de los juegos sea idéntico.
+/// Write-ahead log durable del traslado físico. Registra intención, identidades de filesystem,
+/// inventario y fase antes de cada mutación para recuperar o revertir sin crear otra biblioteca.
+/// La huella estructural detecta cambios durante el cutover, pero no certifica cada byte: esa
+/// verificación y la prueba funcional se exigen antes de aceptar y finalizar la custodia.
 struct PhysicalLibraryCustodyPlan: Codable, Equatable, Sendable {
     let schemaVersion: Int
     let planID: UUID
@@ -143,17 +250,37 @@ struct PhysicalLibraryCustodyPlan: Codable, Equatable, Sendable {
     let phase: PhysicalLibraryCustodyPhase
     let sourceSteamAppsURL: URL
     let destinationSteamAppsURL: URL
-    let transitionalLinks: [URL: URL]
+    let stagedRegressionLinkURL: URL
+    let originalRegressionLinkTarget: String
+    let sourceDevice: UInt64
+    let sourceInode: UInt64
+    let sourceParentDevice: UInt64
+    let sourceParentInode: UInt64
+    let destinationParentDevice: UInt64
+    let destinationParentInode: UInt64
+    let regressionLinkDevice: UInt64
+    let regressionLinkInode: UInt64
+    let validationEvidence: String?
     let inventory: PhysicalLibraryInventory
 
     init(
-        schemaVersion: Int = 2,
+        schemaVersion: Int = 3,
         planID: UUID,
         createdAt: Date,
         phase: PhysicalLibraryCustodyPhase,
         sourceSteamAppsURL: URL,
         destinationSteamAppsURL: URL,
-        transitionalLinks: [URL: URL],
+        stagedRegressionLinkURL: URL,
+        originalRegressionLinkTarget: String,
+        sourceDevice: UInt64,
+        sourceInode: UInt64,
+        sourceParentDevice: UInt64,
+        sourceParentInode: UInt64,
+        destinationParentDevice: UInt64,
+        destinationParentInode: UInt64,
+        regressionLinkDevice: UInt64,
+        regressionLinkInode: UInt64,
+        validationEvidence: String? = nil,
         inventory: PhysicalLibraryInventory
     ) {
         self.schemaVersion = schemaVersion
@@ -162,12 +289,46 @@ struct PhysicalLibraryCustodyPlan: Codable, Equatable, Sendable {
         self.phase = phase
         self.sourceSteamAppsURL = sourceSteamAppsURL
         self.destinationSteamAppsURL = destinationSteamAppsURL
-        self.transitionalLinks = transitionalLinks
+        self.stagedRegressionLinkURL = stagedRegressionLinkURL
+        self.originalRegressionLinkTarget = originalRegressionLinkTarget
+        self.sourceDevice = sourceDevice
+        self.sourceInode = sourceInode
+        self.sourceParentDevice = sourceParentDevice
+        self.sourceParentInode = sourceParentInode
+        self.destinationParentDevice = destinationParentDevice
+        self.destinationParentInode = destinationParentInode
+        self.regressionLinkDevice = regressionLinkDevice
+        self.regressionLinkInode = regressionLinkInode
+        self.validationEvidence = validationEvidence
         self.inventory = inventory
     }
 }
 
-public actor SharedSteamLibraryManager {
+enum PhysicalLibraryCustodyFaultPoint: Sendable {
+    case afterPrepared
+    case afterWillStageDestination
+    case afterDestinationStagedRename
+    case afterDestinationStagedJournal
+    case afterWillCommitCutover
+    case afterCutoverRename
+    case afterCutoverJournal
+    case afterVerifyingJournal
+    case afterWillFinalizeJournal
+    case afterFinalizeReceipt
+    case beforeFinalizeMarkerQuarantine
+    case afterFinalizeMarkerQuarantine
+    case afterFinalizeMarkerUnlink
+    case afterCompletedJournal
+    case beforeFinalJournalUnlink
+    case afterJournalQuarantine
+    case afterWillRollback
+    case afterRollbackSourceRename
+    case afterRollbackLinkRename
+    case afterRollbackStartedMarkerUnlink
+    case afterStartedMarkerQuarantine
+}
+
+public actor SharedSteamLibraryManager: PhysicalLibraryCustodyInterlocking {
     public typealias VolumeIdentityProvider = @Sendable (URL) -> String?
     typealias DirectoryEnumeratorProvider = @Sendable (
         URL,
@@ -182,6 +343,8 @@ public actor SharedSteamLibraryManager {
     private let inventoryLimits: PhysicalLibraryInventoryLimits
     private let directoryEnumeratorProvider: DirectoryEnumeratorProvider
     private let beforeJournalUnlink: @Sendable () -> Void
+    private let custodyFault: @Sendable (PhysicalLibraryCustodyFaultPoint) throws -> Void
+    private var activeValidationLease: PhysicalLibraryCustodyValidationLease?
 
     public init(
         fileManager: FileManager = .default,
@@ -208,6 +371,8 @@ public actor SharedSteamLibraryManager {
             )
         }
         self.beforeJournalUnlink = {}
+        self.custodyFault = { _ in }
+        self.activeValidationLease = nil
     }
 
     init(
@@ -216,7 +381,8 @@ public actor SharedSteamLibraryManager {
         volumeIdentityProvider: VolumeIdentityProvider? = nil,
         inventoryLimits: PhysicalLibraryInventoryLimits = .standard,
         directoryEnumeratorProvider: @escaping DirectoryEnumeratorProvider,
-        beforeJournalUnlink: @escaping @Sendable () -> Void = {}
+        beforeJournalUnlink: @escaping @Sendable () -> Void = {},
+        custodyFault: @escaping @Sendable (PhysicalLibraryCustodyFaultPoint) throws -> Void = { _ in }
     ) {
         self.fileManager = fileManager
         self.backupRootURL = backupRootURL.standardizedFileURL
@@ -226,10 +392,28 @@ public actor SharedSteamLibraryManager {
         self.inventoryLimits = inventoryLimits
         self.directoryEnumeratorProvider = directoryEnumeratorProvider
         self.beforeJournalUnlink = beforeJournalUnlink
+        self.custodyFault = custodyFault
+        self.activeValidationLease = nil
     }
 
     nonisolated var physicalCustodyJournalURL: URL {
         backupRootURL.appendingPathComponent("physical-custody-journal.json")
+    }
+
+    nonisolated var physicalCustodyReceiptURL: URL {
+        backupRootURL.appendingPathComponent("physical-custody-receipt.json")
+    }
+
+    nonisolated var physicalCustodyReceiptMirrorURL: URL {
+        backupRootURL.appendingPathComponent("physical-custody-receipt.mirror.json")
+    }
+
+    nonisolated var physicalCustodyStartedMarkerURL: URL {
+        backupRootURL.appendingPathComponent("physical-custody-started.json")
+    }
+
+    nonisolated var physicalCustodyLaunchIntentURL: URL {
+        backupRootURL.appendingPathComponent("physical-custody-launch-intent.json")
     }
 
     public func assess(
@@ -278,37 +462,13 @@ public actor SharedSteamLibraryManager {
         )
     }
 
-    /// Wrapper compatible para el comparador opcional mientras siga disponible.
-    public func assessPhysicalCustody(
-        regression: RegressionInstallation,
-        crossOver: CrossOverInstallation,
-        regressionOwnedSteamAppsURL: URL,
-        runningState: RunningBackendState
-    ) -> PhysicalLibraryCustodyAssessment {
-        assessPhysicalCustody(
-            regression: regression,
-            legacyIdentity: PhysicalLibraryCustodyIdentity(
-                legacySteamAppsURL: crossOver.steamRootURL
-                    .appendingPathComponent("steamapps", isDirectory: true)
-            ),
-            regressionOwnedSteamAppsURL: regressionOwnedSteamAppsURL,
-            runningState: runningState
-        )
-    }
-
-    /// Evalúa la custodia física sin modificar bibliotecas ni enlaces y sin requerir CrossOver.
     public func assessPhysicalCustody(
         regression: RegressionInstallation,
         legacyIdentity: PhysicalLibraryCustodyIdentity,
-        regressionOwnedSteamAppsURL: URL,
         runningState: RunningBackendState
     ) -> PhysicalLibraryCustodyAssessment {
         let source = legacyIdentity.legacySteamAppsURL.standardizedFileURL
-        let destination = regressionOwnedSteamAppsURL.standardizedFileURL
-        let regressionLink = regression.steamRootURL
-            .appendingPathComponent("steamapps", isDirectory: true)
-            .standardizedFileURL
-
+        let destination = custodyDestination(for: regression)
         func blocked(_ reason: String, inventory: PhysicalLibraryInventory = .empty)
             -> PhysicalLibraryCustodyAssessment
         {
@@ -320,367 +480,1323 @@ public actor SharedSteamLibraryManager {
             )
         }
 
-        guard !runningState.crossOverIsRunning, !runningState.regressionIsRunning else {
-            return blocked("Steam debe estar completamente cerrado")
-        }
-
         do {
-            try validateNoLinkedAncestors(at: source, includeFinalItem: false, role: "fuente heredada")
-            try validateNoLinkedAncestors(at: destination, includeFinalItem: true, role: "destino")
-            try validateNoLinkedAncestors(at: regressionLink, includeFinalItem: false, role: "enlace de Regression")
-
-            let destinationCanonical = try canonicalPath(for: destination)
-            if let sourceLink = symbolicLinkDestination(at: source) {
-                guard let regressionLinkDestination = symbolicLinkDestination(at: regressionLink),
-                      try canonicalPath(for: sourceLink) == destinationCanonical,
-                      try canonicalPath(for: regressionLinkDestination) == destinationCanonical,
-                      directoryExistsWithoutSymbolicLink(at: destination) else {
-                    return blocked("La fuente steamapps heredada es un enlace simbólico inesperado")
-                }
-                do {
-                    return PhysicalLibraryCustodyAssessment(
-                        status: .alreadyOwned,
-                        sourceSteamAppsURL: source,
-                        destinationSteamAppsURL: destination,
-                        inventory: try inventory(at: destination)
-                    )
-                } catch {
-                    return blocked(
-                        "No se pudo verificar la biblioteca bajo custodia de Regression: "
-                            + error.localizedDescription
-                    )
-                }
+            try withCustodyLockSync {
+                try recoverLaunchIntentQuarantine()
+                try reconcileLaunchIntent(runningState: runningState)
             }
-
-            try validateNoLinkedAncestors(at: source, includeFinalItem: true, role: "fuente heredada")
-            let sourceCanonical = try canonicalPath(for: source)
-            guard !sourceCanonical.overlaps(destinationCanonical) else {
-                return blocked("El destino de Regression se solapa con la biblioteca de origen")
-            }
-            if pathExistsWithoutFollowingSymbolicLinks(destination) {
-                return blocked("El destino de Regression ya está ocupado")
-            }
-            guard directoryExistsWithoutSymbolicLink(at: source) else {
-                return blocked("La ruta heredada no contiene una carpeta steamapps física")
-            }
-            guard let regressionDestination = symbolicLinkDestination(at: regressionLink),
-                  try canonicalPath(for: regressionDestination) == sourceCanonical else {
-                return blocked("steamapps de Regression no apunta exactamente a la biblioteca compartida actual")
-            }
-            guard let sourceVolume = volumeIdentityProvider(source),
-                  let destinationVolume = volumeIdentityProvider(destination),
-                  sourceVolume == destinationVolume else {
-                return blocked("La transferencia cruza volúmenes distintos y no puede ser atómica")
-            }
-
-            let inventory = try inventory(at: source)
-            try validateJournalParent()
-            let status: PhysicalLibraryCustodyStatus
             if pathExistsWithoutFollowingSymbolicLinks(physicalCustodyJournalURL) {
-                do {
-                    _ = try validatedPendingPhysicalCustodyPlan(
-                        source: source,
-                        destination: destination,
-                        regressionLink: regressionLink,
-                        inventory: inventory
-                    )
-                    status = .migrationPlanned
-                } catch let RegressionCoreError.unsafeLibraryState(detail) {
-                    return blocked("El journal de custodia no es válido: \(detail)", inventory: inventory)
-                } catch {
-                    return blocked(
-                        "El journal de custodia no es válido: \(error.localizedDescription)",
-                        inventory: inventory
-                    )
-                }
-            } else {
-                status = .eligibleForTransfer
+                let plan = try readPhysicalCustodyPlan()
+                try validatePlanIdentity(plan, source: source, destination: destination)
+                return PhysicalLibraryCustodyAssessment(
+                    status: status(for: plan.phase),
+                    sourceSteamAppsURL: source,
+                    destinationSteamAppsURL: destination,
+                    inventory: plan.inventory
+                )
             }
+            if pathExistsWithoutFollowingSymbolicLinks(physicalCustodyReceiptURL) {
+                let receipt = try readPhysicalCustodyReceipt()
+                guard receipt.sourceSteamAppsURL == source,
+                      receipt.destinationSteamAppsURL == destination,
+                      !pathExistsWithoutFollowingSymbolicLinks(source),
+                      try directoryIdentity(at: destination) == receipt.identity else {
+                    return blocked("El recibo de custodia no coincide con la topología actual")
+                }
+                return PhysicalLibraryCustodyAssessment(
+                    status: .independent,
+                    sourceSteamAppsURL: source,
+                    destinationSteamAppsURL: destination,
+                    inventory: receipt.inventory
+                )
+            }
+            if pathExistsWithoutFollowingSymbolicLinks(physicalCustodyReceiptMirrorURL) {
+                let receipt = try readPhysicalCustodyReceipt(at: physicalCustodyReceiptMirrorURL)
+                guard receipt.sourceSteamAppsURL == source,
+                      receipt.destinationSteamAppsURL == destination,
+                      !pathExistsWithoutFollowingSymbolicLinks(source),
+                      try directoryIdentity(at: destination) == receipt.identity else {
+                    return blocked("El recibo redundante no coincide con la topología actual")
+                }
+                return PhysicalLibraryCustodyAssessment(
+                    status: .independent,
+                    sourceSteamAppsURL: source,
+                    destinationSteamAppsURL: destination,
+                    inventory: receipt.inventory
+                )
+            }
+            if pathExistsWithoutFollowingSymbolicLinks(physicalCustodyStartedMarkerURL) {
+                return blocked(
+                    "Existe una custodia previa sin recibo final; se bloquean mutaciones hasta recuperar"
+                )
+            }
+            guard !runningState.crossOverIsRunning, !runningState.regressionIsRunning else {
+                return blocked("Steam debe estar completamente cerrado")
+            }
+            try validateInitialTopology(source: source, destination: destination)
             return PhysicalLibraryCustodyAssessment(
-                status: status,
+                status: .eligibleForTransfer,
                 sourceSteamAppsURL: source,
                 destinationSteamAppsURL: destination,
-                inventory: inventory
+                inventory: try inventory(at: source)
             )
         } catch is CancellationError {
             return blocked("El inventario de steamapps fue cancelado")
         } catch {
-            return blocked("No se pudo inventariar steamapps de forma segura: \(error.localizedDescription)")
+            return blocked("No se pudo verificar la custodia: \(error.localizedDescription)")
         }
     }
 
-    /// Wrapper compatible para el comparador opcional mientras siga disponible.
-    @discardableResult
-    func preparePhysicalCustodyPlan(
+    /// Compatibilidad temporal: el destino proporcionado nunca gobierna el traslado.
+    public func assessPhysicalCustody(
+        regression: RegressionInstallation,
+        legacyIdentity: PhysicalLibraryCustodyIdentity,
+        regressionOwnedSteamAppsURL: URL,
+        runningState: RunningBackendState
+    ) -> PhysicalLibraryCustodyAssessment {
+        let derived = custodyDestination(for: regression)
+        guard regressionOwnedSteamAppsURL.standardizedFileURL == derived else {
+            return PhysicalLibraryCustodyAssessment(
+                status: .blocked("El destino debe ser steamapps dentro de la botella de Regression"),
+                sourceSteamAppsURL: legacyIdentity.legacySteamAppsURL,
+                destinationSteamAppsURL: derived,
+                inventory: .empty
+            )
+        }
+        return assessPhysicalCustody(
+            regression: regression,
+            legacyIdentity: legacyIdentity,
+            runningState: runningState
+        )
+    }
+
+    public func assessPhysicalCustody(
         regression: RegressionInstallation,
         crossOver: CrossOverInstallation,
         regressionOwnedSteamAppsURL: URL,
         runningState: RunningBackendState
-    ) throws -> PhysicalLibraryCustodyPlan {
-        try preparePhysicalCustodyPlan(
+    ) -> PhysicalLibraryCustodyAssessment {
+        assessPhysicalCustody(
             regression: regression,
-            legacyIdentity: PhysicalLibraryCustodyIdentity(
-                legacySteamAppsURL: crossOver.steamRootURL
-                    .appendingPathComponent("steamapps", isDirectory: true)
+            legacyIdentity: .init(
+                legacySteamAppsURL: crossOver.steamRootURL.appendingPathComponent("steamapps")
             ),
             regressionOwnedSteamAppsURL: regressionOwnedSteamAppsURL,
             runningState: runningState
         )
     }
 
-    /// Persiste un journal privado e idempotente. No mueve archivos ni cambia enlaces.
     @discardableResult
-    func preparePhysicalCustodyPlan(
+    public func migratePhysicalCustody(
         regression: RegressionInstallation,
         legacyIdentity: PhysicalLibraryCustodyIdentity,
-        regressionOwnedSteamAppsURL: URL,
-        runningState: RunningBackendState
-    ) throws -> PhysicalLibraryCustodyPlan {
-        try validateJournalParent()
-        if pathExistsWithoutFollowingSymbolicLinks(physicalCustodyJournalURL) {
-            return try recoverPhysicalCustodyPlan(
-                regression: regression,
-                legacyIdentity: legacyIdentity,
-                regressionOwnedSteamAppsURL: regressionOwnedSteamAppsURL,
-                runningState: runningState
+        runningStateProvider: @escaping @Sendable () async -> RunningBackendState
+    ) async throws -> PhysicalLibraryCustodyAssessment {
+        try await withCustodyLock {
+            let source = legacyIdentity.legacySteamAppsURL.standardizedFileURL
+            let destination = custodyDestination(for: regression)
+            let initialRunningState = await runningStateProvider()
+            try reconcileLaunchIntent(runningState: initialRunningState)
+            if !pathExistsWithoutFollowingSymbolicLinks(physicalCustodyJournalURL),
+               let recoveredPlan = try recoverDeterministicJournalQuarantine() {
+                try write(plan: recoveredPlan)
+            }
+            if !pathExistsWithoutFollowingSymbolicLinks(physicalCustodyJournalURL),
+               pathExistsWithoutFollowingSymbolicLinks(physicalCustodyReceiptURL) {
+                let receipt = try readPhysicalCustodyReceipt()
+                guard receipt.sourceSteamAppsURL == source,
+                      receipt.destinationSteamAppsURL == destination,
+                      !pathExistsWithoutFollowingSymbolicLinks(source),
+                      try directoryIdentity(at: destination) == receipt.identity else {
+                    throw RegressionCoreError.unsafeLibraryState(
+                        "El recibo de custodia no coincide con la topología actual"
+                    )
+                }
+                return PhysicalLibraryCustodyAssessment(
+                    status: .independent,
+                    sourceSteamAppsURL: source,
+                    destinationSteamAppsURL: destination,
+                    inventory: receipt.inventory
+                )
+            }
+            var plan: PhysicalLibraryCustodyPlan
+            if pathExistsWithoutFollowingSymbolicLinks(physicalCustodyJournalURL) {
+                plan = try readPhysicalCustodyPlan()
+                try recoverStartedMarkerQuarantine(planID: plan.planID)
+                try recoverDeterministicMarkerQuarantine(plan: plan)
+                try validatePlanIdentity(plan, source: source, destination: destination)
+                if plan.phase == .rolledBack {
+                    try validateInitialTopology(source: source, destination: destination)
+                    if pathExistsWithoutFollowingSymbolicLinks(physicalCustodyStartedMarkerURL) {
+                        try unlinkStartedMarker(planID: plan.planID)
+                    }
+                    try unlinkJournal(expectedPlan: plan)
+                    return PhysicalLibraryCustodyAssessment(
+                        status: .eligibleForTransfer,
+                        sourceSteamAppsURL: source,
+                        destinationSteamAppsURL: destination,
+                        inventory: plan.inventory
+                    )
+                }
+            } else {
+                try ensureSteamStopped(initialRunningState)
+                try validateInitialTopology(source: source, destination: destination)
+                let identity = try directoryIdentity(at: source)
+                let linkTarget = try readRawSymbolicLink(at: destination)
+                let sourceParentIdentity = try directoryIdentity(at: source.deletingLastPathComponent())
+                let destinationParentIdentity = try directoryIdentity(at: destination.deletingLastPathComponent())
+                let regressionLinkIdentity = try symbolicLinkIdentity(at: destination)
+                let initialInventory = try inventory(at: source)
+                let staged = destination.deletingLastPathComponent().appendingPathComponent(
+                    ".steamapps-custody-\(UUID().uuidString).rollback"
+                )
+                plan = PhysicalLibraryCustodyPlan(
+                    planID: UUID(),
+                    createdAt: Date(),
+                    phase: .prepared,
+                    sourceSteamAppsURL: source,
+                    destinationSteamAppsURL: destination,
+                    stagedRegressionLinkURL: staged,
+                    originalRegressionLinkTarget: linkTarget,
+                    sourceDevice: identity.device,
+                    sourceInode: identity.inode,
+                    sourceParentDevice: sourceParentIdentity.device,
+                    sourceParentInode: sourceParentIdentity.inode,
+                    destinationParentDevice: destinationParentIdentity.device,
+                    destinationParentInode: destinationParentIdentity.inode,
+                    regressionLinkDevice: regressionLinkIdentity.device,
+                    regressionLinkInode: regressionLinkIdentity.inode,
+                    validationEvidence: nil,
+                    inventory: initialInventory
+                )
+                try writeCustodyStartedMarker(planID: plan.planID)
+                try write(plan: plan)
+                try custodyFault(.afterPrepared)
+            }
+            plan = try await advanceCutover(
+                plan: plan,
+                runningStateProvider: runningStateProvider
+            )
+            return PhysicalLibraryCustodyAssessment(
+                status: plan.phase == .completed
+                    && !pathExistsWithoutFollowingSymbolicLinks(physicalCustodyJournalURL)
+                    ? .independent
+                    : status(for: plan.phase),
+                sourceSteamAppsURL: source,
+                destinationSteamAppsURL: destination,
+                inventory: plan.inventory
             )
         }
+    }
 
-        let assessment = assessPhysicalCustody(
-            regression: regression,
-            legacyIdentity: legacyIdentity,
-            regressionOwnedSteamAppsURL: regressionOwnedSteamAppsURL,
-            runningState: runningState
-        )
-        guard case .eligibleForTransfer = assessment.status else {
-            throw RegressionCoreError.unsafeLibraryState(assessment.status.blockingReason)
+    public func beginPhysicalCustodyValidation(
+        regression: RegressionInstallation,
+        legacyIdentity: PhysicalLibraryCustodyIdentity,
+        runningState: RunningBackendState
+    ) throws -> PhysicalLibraryCustodyValidationLease {
+        try withCustodyLockSync {
+            try ensureSteamStopped(runningState)
+            var plan = try readPhysicalCustodyPlan()
+            try recoverDeterministicMarkerQuarantine(plan: plan)
+            try validatePlanIdentity(
+                plan,
+                source: legacyIdentity.legacySteamAppsURL,
+                destination: custodyDestination(for: regression)
+            )
+            guard plan.phase == .awaitingRuntimeValidation || plan.phase == .validatingRuntime else {
+                throw RegressionCoreError.unsafeLibraryState("La migración todavía no espera validación")
+            }
+            let lease = activeValidationLease ?? PhysicalLibraryCustodyValidationLease(
+                transactionID: plan.planID,
+                nonce: UUID()
+            )
+            activeValidationLease = lease
+            if plan.phase != .validatingRuntime {
+                plan = replacingPhase(of: plan, with: .validatingRuntime)
+                try write(plan: plan)
+            }
+            return lease
         }
+    }
 
-        let regressionLink = regression.steamRootURL
-            .appendingPathComponent("steamapps", isDirectory: true)
-            .standardizedFileURL
-        let plan = PhysicalLibraryCustodyPlan(
-            planID: UUID(),
-            createdAt: Date(),
-            phase: .planned,
-            sourceSteamAppsURL: assessment.sourceSteamAppsURL,
-            destinationSteamAppsURL: assessment.destinationSteamAppsURL,
-            transitionalLinks: [
-                assessment.sourceSteamAppsURL: assessment.destinationSteamAppsURL,
-                regressionLink: assessment.destinationSteamAppsURL
-            ],
-            inventory: assessment.inventory
+    @discardableResult
+    public func finalizePhysicalCustody(
+        regression: RegressionInstallation,
+        legacyIdentity: PhysicalLibraryCustodyIdentity,
+        validationLease: PhysicalLibraryCustodyValidationLease,
+        validationPassed: Bool,
+        runningState: RunningBackendState
+    ) async throws -> PhysicalLibraryCustodyAssessment {
+        try await withCustodyLock {
+            try ensureSteamStopped(runningState)
+            var plan = try readPhysicalCustodyPlan()
+            try recoverDeterministicMarkerQuarantine(plan: plan)
+            try validatePlanIdentity(
+                plan,
+                source: legacyIdentity.legacySteamAppsURL,
+                destination: custodyDestination(for: regression)
+            )
+            guard activeValidationLease == validationLease,
+                  validationLease.transactionID == plan.planID,
+                  plan.phase == .validatingRuntime else {
+                throw RegressionCoreError.unsafeLibraryState("La autorización de validación no es válida")
+            }
+            activeValidationLease = nil
+            if !validationPassed {
+                plan = try rollback(plan: plan)
+                return PhysicalLibraryCustodyAssessment(
+                    status: .eligibleForTransfer,
+                    sourceSteamAppsURL: plan.sourceSteamAppsURL,
+                    destinationSteamAppsURL: plan.destinationSteamAppsURL,
+                    inventory: plan.inventory
+                )
+            }
+            plan = try finishValidatedCustody(
+                plan,
+                validationEvidence: "Validación interactiva confirmada en Regression"
+            )
+            return PhysicalLibraryCustodyAssessment(
+                status: .independent,
+                sourceSteamAppsURL: plan.sourceSteamAppsURL,
+                destinationSteamAppsURL: plan.destinationSteamAppsURL,
+                inventory: plan.inventory
+            )
+        }
+    }
+
+    /// Cierre explícito para automatización en un proceso distinto al que realizó la prueba.
+    /// `validationConfirmed` debe proceder de una confirmación humana inequívoca; el Core nunca
+    /// deduce compatibilidad de un exit code ni de la mera existencia de procesos.
+    @discardableResult
+    public func finalizePhysicalCustodyValidated(
+        regression: RegressionInstallation,
+        legacyIdentity: PhysicalLibraryCustodyIdentity,
+        validationConfirmed: Bool,
+        validationEvidence: String,
+        runningState: RunningBackendState
+    ) async throws -> PhysicalLibraryCustodyAssessment {
+        guard validationConfirmed else {
+            throw RegressionCoreError.unsafeLibraryState(
+                "La validación visual y funcional debe confirmarse explícitamente"
+            )
+        }
+        return try await withCustodyLock {
+            try ensureSteamStopped(runningState)
+            var plan = try readPhysicalCustodyPlan()
+            try recoverDeterministicMarkerQuarantine(plan: plan)
+            try validatePlanIdentity(
+                plan,
+                source: legacyIdentity.legacySteamAppsURL,
+                destination: custodyDestination(for: regression)
+            )
+            guard plan.phase == .awaitingRuntimeValidation
+                    || plan.phase == .validatingRuntime
+                    || plan.phase == .validationAccepted
+                    || plan.phase == .willFinalize
+                    || plan.phase == .completed else {
+                throw RegressionCoreError.unsafeLibraryState("La migración todavía no espera validación")
+            }
+            activeValidationLease = nil
+            plan = try finishValidatedCustody(
+                plan,
+                validationEvidence: plan.validationEvidence
+                    ?? (try validatedEvidence(validationEvidence))
+            )
+            return PhysicalLibraryCustodyAssessment(
+                status: .independent,
+                sourceSteamAppsURL: plan.sourceSteamAppsURL,
+                destinationSteamAppsURL: plan.destinationSteamAppsURL,
+                inventory: plan.inventory
+            )
+        }
+    }
+
+    @discardableResult
+    public func rollbackPhysicalCustody(
+        regression: RegressionInstallation,
+        legacyIdentity: PhysicalLibraryCustodyIdentity,
+        runningState: RunningBackendState
+    ) async throws -> PhysicalLibraryCustodyAssessment {
+        try await withCustodyLock {
+            try ensureSteamStopped(runningState)
+            let plan = try readPhysicalCustodyPlan()
+            try recoverDeterministicMarkerQuarantine(plan: plan)
+            try validatePlanIdentity(
+                plan,
+                source: legacyIdentity.legacySteamAppsURL,
+                destination: custodyDestination(for: regression)
+            )
+            activeValidationLease = nil
+            let rolledBack = try rollback(plan: plan)
+            return PhysicalLibraryCustodyAssessment(
+                status: status(for: rolledBack.phase),
+                sourceSteamAppsURL: rolledBack.sourceSteamAppsURL,
+                destinationSteamAppsURL: rolledBack.destinationSteamAppsURL,
+                inventory: rolledBack.inventory
+            )
+        }
+    }
+
+    public func currentPhysicalLibraryCustodyInterlock() -> PhysicalLibraryCustodyInterlockSnapshot {
+        do {
+            try recoverLaunchIntentQuarantine()
+            if pathExistsWithoutFollowingSymbolicLinks(physicalCustodyLaunchIntentURL) {
+                _ = try readLaunchIntent()
+                return .init(
+                    status: .blocked("Hay un lanzamiento de Steam todavía no reconciliado"),
+                    mutationPolicy: .blocked
+                )
+            }
+            if pathExistsWithoutFollowingSymbolicLinks(physicalCustodyJournalURL) {
+                let plan = try readPhysicalCustodyPlan()
+                let currentStatus = status(for: plan.phase)
+                let policy: PhysicalLibraryCustodyMutationPolicy =
+                    plan.phase == .validatingRuntime ? .regressionValidationOnly : .blocked
+                return .init(status: currentStatus, mutationPolicy: policy)
+            }
+            if pathExistsWithoutFollowingSymbolicLinks(physicalCustodyReceiptURL) {
+                let receipt = try readPhysicalCustodyReceipt()
+                guard !pathExistsWithoutFollowingSymbolicLinks(receipt.sourceSteamAppsURL),
+                      try directoryIdentity(at: receipt.destinationSteamAppsURL) == receipt.identity else {
+                    throw RegressionCoreError.unsafeLibraryState(
+                        "El recibo de custodia no coincide con la topología actual"
+                    )
+                }
+                return .init(status: .independent, mutationPolicy: .unrestricted)
+            }
+            if pathExistsWithoutFollowingSymbolicLinks(physicalCustodyReceiptMirrorURL) {
+                let receipt = try readPhysicalCustodyReceipt(at: physicalCustodyReceiptMirrorURL)
+                guard !pathExistsWithoutFollowingSymbolicLinks(receipt.sourceSteamAppsURL),
+                      try directoryIdentity(at: receipt.destinationSteamAppsURL) == receipt.identity else {
+                    throw RegressionCoreError.unsafeLibraryState(
+                        "El recibo redundante no coincide con la topología actual"
+                    )
+                }
+                return .init(status: .independent, mutationPolicy: .unrestricted)
+            }
+            if pathExistsWithoutFollowingSymbolicLinks(physicalCustodyStartedMarkerURL) {
+                return .init(
+                    status: .blocked("La custodia previa carece de recibo final recuperable"),
+                    mutationPolicy: .blocked
+                )
+            }
+            return .init(status: .eligibleForTransfer, mutationPolicy: .unrestricted)
+        } catch {
+            return .init(
+                status: .blocked("El journal de custodia no es válido"),
+                mutationPolicy: .blocked
+            )
+        }
+    }
+
+    public func authorizePhysicalLibraryCustodyMutation(
+        backend: BackendKind,
+        validationLease: PhysicalLibraryCustodyValidationLease?
+    ) -> Bool {
+        let snapshot = currentPhysicalLibraryCustodyInterlock()
+        switch snapshot.mutationPolicy {
+        case .unrestricted:
+            return backend == .regression || !snapshot.crossOverUnavailable
+        case .blocked:
+            return false
+        case .regressionValidationOnly:
+            return backend == .regression
+                && validationLease != nil
+                && validationLease == activeValidationLease
+        }
+    }
+
+    public func acquirePhysicalLibraryCustodyMutationPermit(
+        backend: BackendKind,
+        validationLease: PhysicalLibraryCustodyValidationLease?
+    ) throws -> PhysicalLibraryCustodyMutationPermit {
+        try PrivateStorage.ensureDirectory(at: backupRootURL, fileManager: fileManager)
+        let lockURL = backupRootURL.appendingPathComponent("physical-custody.lock")
+        let descriptor = open(
+            lockURL.path,
+            O_CREAT | O_RDWR | O_NOFOLLOW_ANY | O_CLOEXEC,
+            0o600
         )
+        guard descriptor >= 0 else {
+            throw RegressionCoreError.unsafeLibraryState("No se pudo abrir el lock de custodia")
+        }
+        guard flock(descriptor, LOCK_SH | LOCK_NB) == 0 else {
+            close(descriptor)
+            throw RegressionCoreError.unsafeLibraryState("Hay una migración de biblioteca en curso")
+        }
+        guard authorizePhysicalLibraryCustodyMutation(
+            backend: backend,
+            validationLease: validationLease
+        ) else {
+            _ = flock(descriptor, LOCK_UN)
+            close(descriptor)
+            throw RegressionCoreError.unsafeLibraryState(
+                "La custodia de la biblioteca bloquea esta operación de Steam"
+            )
+        }
+        return PhysicalLibraryCustodyMutationPermit(descriptor: descriptor)
+    }
+
+    public func registerPhysicalLibraryLaunchIntent(
+        backend: BackendKind
+    ) throws -> PhysicalLibraryCustodyLaunchIntent {
+        guard backend == .regression else {
+            throw RegressionCoreError.unsafeLibraryState("CrossOver no es un backend operativo")
+        }
+        try recoverLaunchIntentQuarantine()
+        guard !pathExistsWithoutFollowingSymbolicLinks(physicalCustodyLaunchIntentURL) else {
+            throw RegressionCoreError.unsafeLibraryState("Ya existe un lanzamiento de Steam en curso")
+        }
+        let token = PhysicalLibraryCustodyLaunchIntent()
+        try createLaunchIntentExclusive(.init(
+            schemaVersion: 1,
+            id: token.id,
+            backend: backend,
+            startedAt: Date(),
+            processID: nil
+        ))
+        return token
+    }
+
+    public func attachPhysicalLibraryLaunch(
+        _ launch: BackendLaunch,
+        to intent: PhysicalLibraryCustodyLaunchIntent
+    ) throws {
+        let stored = try readLaunchIntent()
+        guard stored.id == intent.id, stored.backend == launch.backend else {
+            throw RegressionCoreError.unsafeLibraryState("La intención de lanzamiento no coincide")
+        }
+        try writeLaunchIntent(.init(
+            schemaVersion: stored.schemaVersion,
+            id: stored.id,
+            backend: stored.backend,
+            startedAt: stored.startedAt,
+            processID: launch.processID
+        ))
+    }
+
+    public func resolvePhysicalLibraryLaunchIntent(
+        _ intent: PhysicalLibraryCustodyLaunchIntent
+    ) throws {
+        let stored = try readLaunchIntent()
+        guard stored.id == intent.id else {
+            throw RegressionCoreError.unsafeLibraryState("La intención de lanzamiento no coincide")
+        }
+        try unlinkLaunchIntent(expected: stored)
+    }
+
+    private struct CustodyDirectoryIdentity: Codable, Equatable, Sendable {
+        let device: UInt64
+        let inode: UInt64
+    }
+
+    private struct PhysicalLibraryCustodyReceipt: Codable, Sendable {
+        let schemaVersion: Int
+        let completedAt: Date
+        let transactionID: UUID
+        let sourceSteamAppsURL: URL
+        let destinationSteamAppsURL: URL
+        let identity: CustodyDirectoryIdentity
+        let validationEvidence: String
+        let inventory: PhysicalLibraryInventory
+    }
+
+    private struct PhysicalLibraryCustodyLaunchIntentRecord: Codable, Equatable, Sendable {
+        let schemaVersion: Int
+        let id: UUID
+        let backend: BackendKind
+        let startedAt: Date
+        let processID: Int32?
+    }
+
+    private func custodyDestination(for regression: RegressionInstallation) -> URL {
+        regression.steamRootURL.appendingPathComponent("steamapps", isDirectory: true)
+            .standardizedFileURL
+    }
+
+    private func ensureSteamStopped(_ state: RunningBackendState) throws {
+        guard !state.crossOverIsRunning, !state.regressionIsRunning else {
+            throw RegressionCoreError.unsafeLibraryState("Steam debe estar completamente cerrado")
+        }
+    }
+
+    private func writeLaunchIntent(_ intent: PhysicalLibraryCustodyLaunchIntentRecord) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        try writeDurableRegularFile(try encoder.encode(intent), to: physicalCustodyLaunchIntentURL)
+    }
+
+    private func createLaunchIntentExclusive(
+        _ intent: PhysicalLibraryCustodyLaunchIntentRecord
+    ) throws {
+        try PrivateStorage.ensureDirectory(at: backupRootURL, fileManager: fileManager)
+        let parent = open(backupRootURL.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC)
+        guard parent >= 0 else {
+            throw RegressionCoreError.unsafeLibraryState("No se pudo anclar la intención")
+        }
+        defer { close(parent) }
+        let descriptor = openat(
+            parent,
+            physicalCustodyLaunchIntentURL.lastPathComponent,
+            O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+            0o600
+        )
+        guard descriptor >= 0 else {
+            throw RegressionCoreError.unsafeLibraryState("Ya existe un lanzamiento de Steam en curso")
+        }
+        var succeeded = false
+        defer {
+            close(descriptor)
+            if !succeeded {
+                _ = unlinkat(parent, physicalCustodyLaunchIntentURL.lastPathComponent, 0)
+            }
+        }
+        let data = try JSONEncoder().encode(intent)
+        let written = data.withUnsafeBytes { buffer in
+            Darwin.write(descriptor, buffer.baseAddress, buffer.count)
+        }
+        guard written == data.count else {
+            throw RegressionCoreError.unsafeLibraryState("No se pudo persistir la intención")
+        }
+        try fullSync(descriptor)
+        succeeded = true
+        try syncDirectory(parent)
+    }
+
+    private func readLaunchIntent() throws -> PhysicalLibraryCustodyLaunchIntentRecord {
+        let data = try readBoundedRegularFile(
+            at: physicalCustodyLaunchIntentURL,
+            maxBytes: 16 * 1_024,
+            role: "intención de lanzamiento"
+        )
+        let value = try JSONDecoder().decode(PhysicalLibraryCustodyLaunchIntentRecord.self, from: data)
+        guard value.schemaVersion == 1, value.backend == .regression else {
+            throw RegressionCoreError.unsafeLibraryState("La intención de lanzamiento no es válida")
+        }
+        return value
+    }
+
+    private func unlinkLaunchIntent(expected: PhysicalLibraryCustodyLaunchIntentRecord) throws {
+        let parent = open(backupRootURL.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC)
+        guard parent >= 0 else {
+            throw RegressionCoreError.unsafeLibraryState("No se pudo sincronizar la intención eliminada")
+        }
+        defer { close(parent) }
+        let source = physicalCustodyLaunchIntentURL.lastPathComponent
+        var metadata = stat()
+        guard fstatat(parent, source, &metadata, AT_SYMLINK_NOFOLLOW) == 0,
+              (metadata.st_mode & S_IFMT) == S_IFREG else {
+            throw RegressionCoreError.unsafeLibraryState("La intención de lanzamiento no es regular")
+        }
+        let quarantine = ".physical-custody-launch-\(expected.id.uuidString.lowercased()).quarantine"
+        try quarantineLeaf(parent: parent, sourceName: source, quarantineName: quarantine, role: "intención")
+        do {
+            var quarantined = stat()
+            let data = try readAnchoredRegularData(parent: parent, name: quarantine, maxBytes: 16 * 1_024)
+            guard fstatat(parent, quarantine, &quarantined, AT_SYMLINK_NOFOLLOW) == 0,
+                  quarantined.st_dev == metadata.st_dev,
+                  quarantined.st_ino == metadata.st_ino,
+                  try JSONDecoder().decode(PhysicalLibraryCustodyLaunchIntentRecord.self, from: data) == expected else {
+                throw RegressionCoreError.unsafeLibraryState("La intención de lanzamiento fue sustituida")
+            }
+        } catch {
+            try restoreQuarantinedLeaf(parent: parent, quarantineName: quarantine, originalName: source, role: "intención")
+            throw error
+        }
+        guard unlinkat(parent, quarantine, 0) == 0 else {
+            try restoreQuarantinedLeaf(parent: parent, quarantineName: quarantine, originalName: source, role: "intención")
+            throw RegressionCoreError.unsafeLibraryState("No se pudo retirar la intención")
+        }
+        try syncDirectory(parent)
+    }
+
+    private func readAnchoredRegularData(parent: Int32, name: String, maxBytes: Int) throws -> Data {
+        let descriptor = openat(parent, name, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else {
+            throw RegressionCoreError.unsafeLibraryState("No se pudo abrir el archivo anclado")
+        }
+        defer { close(descriptor) }
+        var metadata = stat()
+        guard fstat(descriptor, &metadata) == 0,
+              (metadata.st_mode & S_IFMT) == S_IFREG,
+              metadata.st_size >= 0,
+              metadata.st_size <= maxBytes else {
+            throw RegressionCoreError.unsafeLibraryState("El archivo anclado no es regular y acotado")
+        }
+        var data = Data(count: Int(metadata.st_size))
+        let count = data.withUnsafeMutableBytes { buffer in
+            Darwin.read(descriptor, buffer.baseAddress, buffer.count)
+        }
+        guard count == data.count else {
+            throw RegressionCoreError.unsafeLibraryState("No se pudo leer el archivo anclado")
+        }
+        return data
+    }
+
+    private func reconcileLaunchIntent(runningState: RunningBackendState) throws {
+        try recoverLaunchIntentQuarantine()
+        guard pathExistsWithoutFollowingSymbolicLinks(physicalCustodyLaunchIntentURL) else { return }
+        let intent = try readLaunchIntent()
+        guard !runningState.crossOverIsRunning, !runningState.regressionIsRunning else {
+            throw RegressionCoreError.unsafeLibraryState("Existe un lanzamiento de Steam todavía activo")
+        }
+        if let processID = intent.processID {
+            errno = 0
+            if kill(processID, 0) == 0 || errno == EPERM {
+                throw RegressionCoreError.unsafeLibraryState(
+                    "El proceso lanzador de Steam todavía no ha terminado"
+                )
+            }
+            guard errno == ESRCH else {
+                throw RegressionCoreError.unsafeLibraryState(
+                    "No se pudo demostrar que el proceso lanzador terminó"
+                )
+            }
+        }
+        guard Date().timeIntervalSince(intent.startedAt) >= 30 else {
+            throw RegressionCoreError.unsafeLibraryState(
+                "El lanzamiento sigue dentro de su ventana durable de observabilidad"
+            )
+        }
+        try unlinkLaunchIntent(expected: intent)
+    }
+
+    private func recoverLaunchIntentQuarantine() throws {
+        guard fileManager.fileExists(atPath: backupRootURL.path) else { return }
+        let candidates = try fileManager.contentsOfDirectory(
+            at: backupRootURL,
+            includingPropertiesForKeys: nil,
+            options: []
+        ).filter {
+            $0.lastPathComponent.hasPrefix(".physical-custody-launch-")
+                && $0.lastPathComponent.hasSuffix(".quarantine")
+        }
+        guard candidates.count <= 1 else {
+            throw RegressionCoreError.unsafeLibraryState("Hay múltiples intenciones en cuarentena")
+        }
+        guard let candidate = candidates.first else { return }
+        guard !pathExistsWithoutFollowingSymbolicLinks(physicalCustodyLaunchIntentURL) else {
+            throw RegressionCoreError.unsafeLibraryState("La intención y su cuarentena coexisten")
+        }
+        let parent = open(backupRootURL.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC)
+        guard parent >= 0 else {
+            throw RegressionCoreError.unsafeLibraryState("No se pudo anclar la intención en cuarentena")
+        }
+        defer { close(parent) }
+        let data = try readAnchoredRegularData(
+            parent: parent,
+            name: candidate.lastPathComponent,
+            maxBytes: 16 * 1_024
+        )
+        let intent = try JSONDecoder().decode(PhysicalLibraryCustodyLaunchIntentRecord.self, from: data)
+        guard candidate.lastPathComponent
+            == ".physical-custody-launch-\(intent.id.uuidString.lowercased()).quarantine" else {
+            throw RegressionCoreError.unsafeLibraryState("La cuarentena de lanzamiento tiene otra identidad")
+        }
+        try restoreQuarantinedLeaf(
+            parent: parent,
+            quarantineName: candidate.lastPathComponent,
+            originalName: physicalCustodyLaunchIntentURL.lastPathComponent,
+            role: "intención"
+        )
+    }
+
+    private func status(for phase: PhysicalLibraryCustodyPhase) -> PhysicalLibraryCustodyStatus {
+        switch phase {
+        case .prepared: .preparing
+        case .willStageDestination, .destinationStaged: .preCutover
+        case .willCommitCutover, .cutoverCommitted: .cutover
+        case .verifyingDestination: .verifying
+        case .awaitingRuntimeValidation: .pendingValidation
+        case .validatingRuntime: .validating
+        case .validationAccepted, .willFinalize, .completed: .verifying
+        case .willRollback: .rollingBack
+        case .rolledBack: .rollingBack
+        case .needsManualRecovery: .blocked("La custodia necesita recuperación manual")
+        }
+    }
+
+    private func replacingPhase(
+        of plan: PhysicalLibraryCustodyPlan,
+        with phase: PhysicalLibraryCustodyPhase
+    ) -> PhysicalLibraryCustodyPlan {
+        PhysicalLibraryCustodyPlan(
+            schemaVersion: plan.schemaVersion,
+            planID: plan.planID,
+            createdAt: plan.createdAt,
+            phase: phase,
+            sourceSteamAppsURL: plan.sourceSteamAppsURL,
+            destinationSteamAppsURL: plan.destinationSteamAppsURL,
+            stagedRegressionLinkURL: plan.stagedRegressionLinkURL,
+            originalRegressionLinkTarget: plan.originalRegressionLinkTarget,
+            sourceDevice: plan.sourceDevice,
+            sourceInode: plan.sourceInode,
+            sourceParentDevice: plan.sourceParentDevice,
+            sourceParentInode: plan.sourceParentInode,
+            destinationParentDevice: plan.destinationParentDevice,
+            destinationParentInode: plan.destinationParentInode,
+            regressionLinkDevice: plan.regressionLinkDevice,
+            regressionLinkInode: plan.regressionLinkInode,
+            validationEvidence: plan.validationEvidence,
+            inventory: plan.inventory
+        )
+    }
+
+    private func validatePlanIdentity(
+        _ plan: PhysicalLibraryCustodyPlan,
+        source: URL,
+        destination: URL
+    ) throws {
+        guard plan.schemaVersion == 3,
+              plan.sourceSteamAppsURL.standardizedFileURL == source.standardizedFileURL,
+              plan.destinationSteamAppsURL.standardizedFileURL == destination.standardizedFileURL,
+              plan.stagedRegressionLinkURL.deletingLastPathComponent().standardizedFileURL
+                == destination.deletingLastPathComponent().standardizedFileURL,
+              plan.stagedRegressionLinkURL.lastPathComponent.hasPrefix(".steamapps-custody-"),
+              plan.stagedRegressionLinkURL.lastPathComponent.hasSuffix(".rollback") else {
+            throw RegressionCoreError.unsafeLibraryState(
+                "El journal de custodia no corresponde a estas instalaciones"
+            )
+        }
+        try verifyParentIdentities(plan)
+    }
+
+    private func validateInitialTopology(source: URL, destination: URL) throws {
+        try validateNoLinkedAncestors(at: source, includeFinalItem: true, role: "fuente heredada")
+        try validateNoLinkedAncestors(at: destination, includeFinalItem: false, role: "destino Regression")
+        guard directoryExistsWithoutSymbolicLink(at: source) else {
+            throw RegressionCoreError.unsafeLibraryState(
+                "La ruta heredada no contiene una carpeta steamapps física"
+            )
+        }
+        guard let target = symbolicLinkDestination(at: destination),
+              try canonicalPath(for: target) == canonicalPath(for: source) else {
+            if pathExistsWithoutFollowingSymbolicLinks(destination) {
+                throw RegressionCoreError.unsafeLibraryState("El destino de Regression ya está ocupado")
+            }
+            throw RegressionCoreError.unsafeLibraryState(
+                "steamapps de Regression no apunta exactamente a la biblioteca compartida actual"
+            )
+        }
+        guard let sourceVolume = volumeIdentityProvider(source),
+              let destinationVolume = volumeIdentityProvider(destination),
+              sourceVolume == destinationVolume else {
+            throw RegressionCoreError.unsafeLibraryState(
+                "La transferencia cruza volúmenes distintos y no puede ser atómica"
+            )
+        }
+    }
+
+    private func directoryIdentity(at url: URL) throws -> CustodyDirectoryIdentity {
+        let descriptor = open(
+            url.path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC
+        )
+        guard descriptor >= 0 else {
+            throw RegressionCoreError.unsafeLibraryState(
+                "No se pudo anclar steamapps: \(String(cString: strerror(errno)))"
+            )
+        }
+        defer { close(descriptor) }
+        var metadata = stat()
+        guard fstat(descriptor, &metadata) == 0, (metadata.st_mode & S_IFMT) == S_IFDIR else {
+            throw RegressionCoreError.unsafeLibraryState("steamapps dejó de ser un directorio físico")
+        }
+        return CustodyDirectoryIdentity(
+            device: UInt64(metadata.st_dev),
+            inode: UInt64(metadata.st_ino)
+        )
+    }
+
+    private func expectedIdentity(of plan: PhysicalLibraryCustodyPlan) -> CustodyDirectoryIdentity {
+        CustodyDirectoryIdentity(device: plan.sourceDevice, inode: plan.sourceInode)
+    }
+
+    private func sourceParentIdentity(of plan: PhysicalLibraryCustodyPlan) -> CustodyDirectoryIdentity {
+        .init(device: plan.sourceParentDevice, inode: plan.sourceParentInode)
+    }
+
+    private func destinationParentIdentity(of plan: PhysicalLibraryCustodyPlan) -> CustodyDirectoryIdentity {
+        .init(device: plan.destinationParentDevice, inode: plan.destinationParentInode)
+    }
+
+    private func regressionLinkIdentity(of plan: PhysicalLibraryCustodyPlan) -> CustodyDirectoryIdentity {
+        .init(device: plan.regressionLinkDevice, inode: plan.regressionLinkInode)
+    }
+
+    private func verifyParentIdentities(_ plan: PhysicalLibraryCustodyPlan) throws {
+        guard try directoryIdentity(at: plan.sourceSteamAppsURL.deletingLastPathComponent())
+                == sourceParentIdentity(of: plan),
+              try directoryIdentity(at: plan.destinationSteamAppsURL.deletingLastPathComponent())
+                == destinationParentIdentity(of: plan) else {
+            throw RegressionCoreError.unsafeLibraryState(
+                "Un directorio padre de custodia fue sustituido"
+            )
+        }
+    }
+
+    private func symbolicLinkIdentity(at url: URL) throws -> CustodyDirectoryIdentity {
+        let parent = open(
+            url.deletingLastPathComponent().path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC
+        )
+        guard parent >= 0 else {
+            throw RegressionCoreError.unsafeLibraryState("No se pudo anclar el enlace steamapps")
+        }
+        defer { close(parent) }
+        var metadata = stat()
+        guard fstatat(parent, url.lastPathComponent, &metadata, AT_SYMLINK_NOFOLLOW) == 0,
+              (metadata.st_mode & S_IFMT) == S_IFLNK else {
+            throw RegressionCoreError.unsafeLibraryState("steamapps de Regression no es el enlace esperado")
+        }
+        return .init(device: UInt64(metadata.st_dev), inode: UInt64(metadata.st_ino))
+    }
+
+    private func readRawSymbolicLink(at url: URL) throws -> String {
+        let parent = open(
+            url.deletingLastPathComponent().path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC
+        )
+        guard parent >= 0 else {
+            throw RegressionCoreError.unsafeLibraryState("No se pudo anclar el enlace steamapps")
+        }
+        defer { close(parent) }
+        return try readRawSymbolicLink(parent: parent, name: url.lastPathComponent)
+    }
+
+    private func readRawSymbolicLink(parent: Int32, name: String) throws -> String {
+        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
+        let count = readlinkat(parent, name, &buffer, Int(PATH_MAX))
+        guard count >= 0, count < Int(PATH_MAX) else {
+            throw RegressionCoreError.unsafeLibraryState("steamapps de Regression no es el enlace esperado")
+        }
+        return String(decoding: buffer.prefix(Int(count)).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    }
+
+    private func symbolicLinkIdentity(
+        parent: Int32,
+        name: String
+    ) throws -> CustodyDirectoryIdentity {
+        var metadata = stat()
+        guard fstatat(parent, name, &metadata, AT_SYMLINK_NOFOLLOW) == 0,
+              (metadata.st_mode & S_IFMT) == S_IFLNK else {
+            throw RegressionCoreError.unsafeLibraryState("steamapps de Regression no es el enlace esperado")
+        }
+        return .init(device: UInt64(metadata.st_dev), inode: UInt64(metadata.st_ino))
+    }
+
+    private func advanceCutover(
+        plan initialPlan: PhysicalLibraryCustodyPlan,
+        runningStateProvider: @escaping @Sendable () async -> RunningBackendState
+    ) async throws -> PhysicalLibraryCustodyPlan {
+        var plan = initialPlan
+        let source = plan.sourceSteamAppsURL
+        let destination = plan.destinationSteamAppsURL
+        switch plan.phase {
+        case .prepared:
+            try ensureSteamStopped(await runningStateProvider())
+            try validateInitialTopology(source: source, destination: destination)
+            guard try directoryIdentity(at: source) == expectedIdentity(of: plan),
+                  try inventory(at: source) == plan.inventory,
+                  try readRawSymbolicLink(at: destination) == plan.originalRegressionLinkTarget,
+                  try symbolicLinkIdentity(at: destination) == regressionLinkIdentity(of: plan) else {
+                throw RegressionCoreError.unsafeLibraryState("La topología cambió antes del traslado")
+            }
+            plan = replacingPhase(of: plan, with: .willStageDestination)
+            try write(plan: plan)
+            try custodyFault(.afterWillStageDestination)
+            fallthrough
+        case .willStageDestination:
+            if pathExistsWithoutFollowingSymbolicLinks(destination) {
+                try anchoredRenameExclusive(
+                    from: destination,
+                    to: plan.stagedRegressionLinkURL,
+                    expectedSourceParent: destinationParentIdentity(of: plan),
+                    expectedDestinationParent: destinationParentIdentity(of: plan),
+                    expectedItem: regressionLinkIdentity(of: plan),
+                    expectedItemType: S_IFLNK
+                )
+                try custodyFault(.afterDestinationStagedRename)
+            } else {
+                try verifyStagedLink(plan)
+            }
+            plan = replacingPhase(of: plan, with: .destinationStaged)
+            try write(plan: plan)
+            try custodyFault(.afterDestinationStagedJournal)
+            fallthrough
+        case .destinationStaged:
+            try verifyStagedLink(plan)
+            try await ensureSteamRemainsStopped(runningStateProvider)
+            guard try directoryIdentity(at: source) == expectedIdentity(of: plan),
+                  try inventory(at: source) == plan.inventory else {
+                throw RegressionCoreError.unsafeLibraryState(
+                    "La biblioteca de origen cambió antes del cutover"
+                )
+            }
+            plan = replacingPhase(of: plan, with: .willCommitCutover)
+            try write(plan: plan)
+            try custodyFault(.afterWillCommitCutover)
+            fallthrough
+        case .willCommitCutover:
+            let sourceExists = directoryExistsWithoutSymbolicLink(at: source)
+            let destinationExists = directoryExistsWithoutSymbolicLink(at: destination)
+            if sourceExists && !destinationExists {
+                try anchoredRenameExclusive(
+                    from: source,
+                    to: destination,
+                    expectedSourceParent: sourceParentIdentity(of: plan),
+                    expectedDestinationParent: destinationParentIdentity(of: plan),
+                    expectedItem: expectedIdentity(of: plan),
+                    expectedItemType: S_IFDIR
+                )
+                try custodyFault(.afterCutoverRename)
+            } else if !sourceExists && destinationExists {
+                guard try directoryIdentity(at: destination) == expectedIdentity(of: plan) else {
+                    throw RegressionCoreError.unsafeLibraryState("El destino no conserva la biblioteca original")
+                }
+            } else {
+                throw RegressionCoreError.unsafeLibraryState("Topología ambigua durante el cutover")
+            }
+            plan = replacingPhase(of: plan, with: .cutoverCommitted)
+            try write(plan: plan)
+            try custodyFault(.afterCutoverJournal)
+            fallthrough
+        case .cutoverCommitted:
+            try verifyCommittedTopology(plan)
+            plan = replacingPhase(of: plan, with: .verifyingDestination)
+            try write(plan: plan)
+            try custodyFault(.afterVerifyingJournal)
+            fallthrough
+        case .verifyingDestination:
+            try verifyCommittedTopology(plan)
+            guard try inventory(at: destination) == plan.inventory else {
+                throw RegressionCoreError.unsafeLibraryState("El inventario cambió durante el traslado")
+            }
+            plan = replacingPhase(of: plan, with: .awaitingRuntimeValidation)
+            try write(plan: plan)
+            return plan
+        case .awaitingRuntimeValidation, .validatingRuntime:
+            try verifyCommittedTopology(plan)
+            return plan
+        case .validationAccepted, .willFinalize, .completed:
+            return try finishValidatedCustody(plan)
+        case .willRollback, .rolledBack:
+            throw RegressionCoreError.unsafeLibraryState("La custodia está en rollback")
+        case .needsManualRecovery:
+            throw RegressionCoreError.unsafeLibraryState("La custodia necesita recuperación manual")
+        }
+    }
+
+    private func verifyStagedLink(_ plan: PhysicalLibraryCustodyPlan) throws {
+        guard !pathExistsWithoutFollowingSymbolicLinks(plan.destinationSteamAppsURL),
+              try readRawSymbolicLink(at: plan.stagedRegressionLinkURL)
+                == plan.originalRegressionLinkTarget,
+              try symbolicLinkIdentity(at: plan.stagedRegressionLinkURL)
+                == regressionLinkIdentity(of: plan),
+              try directoryIdentity(at: plan.sourceSteamAppsURL) == expectedIdentity(of: plan) else {
+            throw RegressionCoreError.unsafeLibraryState("La fase preparada no coincide con la topología")
+        }
+    }
+
+    private func verifyCommittedTopology(_ plan: PhysicalLibraryCustodyPlan) throws {
+        try verifyOwnedTree(plan)
+        guard
+              try readRawSymbolicLink(at: plan.stagedRegressionLinkURL)
+                == plan.originalRegressionLinkTarget,
+              try symbolicLinkIdentity(at: plan.stagedRegressionLinkURL)
+                == regressionLinkIdentity(of: plan) else {
+            throw RegressionCoreError.unsafeLibraryState(
+                "El cutover no conserva una única biblioteca física verificable"
+            )
+        }
+    }
+
+    private func verifyOwnedTree(_ plan: PhysicalLibraryCustodyPlan) throws {
+        try verifyParentIdentities(plan)
+        guard !pathExistsWithoutFollowingSymbolicLinks(plan.sourceSteamAppsURL),
+              try directoryIdentity(at: plan.destinationSteamAppsURL) == expectedIdentity(of: plan) else {
+            throw RegressionCoreError.unsafeLibraryState(
+                "El cutover no conserva la biblioteca física original"
+            )
+        }
+    }
+
+    private func finishValidatedCustody(
+        _ initialPlan: PhysicalLibraryCustodyPlan,
+        validationEvidence: String? = nil
+    ) throws -> PhysicalLibraryCustodyPlan {
+        var plan = initialPlan
+        try verifyOwnedTree(plan)
+        if let validationEvidence {
+            plan = replacingValidationEvidence(of: plan, with: validationEvidence)
+        }
+        guard plan.validationEvidence != nil else {
+            throw RegressionCoreError.unsafeLibraryState("Falta la evidencia de validación")
+        }
+        if plan.phase != .validationAccepted && plan.phase != .willFinalize && plan.phase != .completed {
+            plan = replacingPhase(of: plan, with: .validationAccepted)
+            try write(plan: plan)
+        }
+        if plan.phase == .validationAccepted {
+            plan = replacingPhase(of: plan, with: .willFinalize)
+            try write(plan: plan)
+            try custodyFault(.afterWillFinalizeJournal)
+        }
+        if !pathExistsWithoutFollowingSymbolicLinks(physicalCustodyReceiptURL) {
+            try writePhysicalCustodyReceipt(for: plan)
+        } else {
+            try validatePhysicalCustodyReceipt(for: plan)
+        }
+        try custodyFault(.afterFinalizeReceipt)
+        if pathExistsWithoutFollowingSymbolicLinks(plan.stagedRegressionLinkURL) {
+            try unlinkExpectedSymlink(at: plan.stagedRegressionLinkURL, plan: plan)
+        }
+        try custodyFault(.afterFinalizeMarkerUnlink)
+        plan = replacingPhase(of: plan, with: .completed)
         try write(plan: plan)
+        try custodyFault(.afterCompletedJournal)
+        try custodyFault(.beforeFinalJournalUnlink)
+        try unlinkJournal(expectedPlan: plan)
         return plan
     }
 
-    /// Wrapper compatible para el comparador opcional mientras siga disponible.
-    func recoverPhysicalCustodyPlan(
-        regression: RegressionInstallation,
-        crossOver: CrossOverInstallation,
-        regressionOwnedSteamAppsURL: URL,
-        runningState: RunningBackendState
-    ) throws -> PhysicalLibraryCustodyPlan {
-        try recoverPhysicalCustodyPlan(
-            regression: regression,
-            legacyIdentity: PhysicalLibraryCustodyIdentity(
-                legacySteamAppsURL: crossOver.steamRootURL
-                    .appendingPathComponent("steamapps", isDirectory: true)
-            ),
-            regressionOwnedSteamAppsURL: regressionOwnedSteamAppsURL,
-            runningState: runningState
+    private func replacingValidationEvidence(
+        of plan: PhysicalLibraryCustodyPlan,
+        with evidence: String
+    ) -> PhysicalLibraryCustodyPlan {
+        PhysicalLibraryCustodyPlan(
+            schemaVersion: plan.schemaVersion,
+            planID: plan.planID,
+            createdAt: plan.createdAt,
+            phase: plan.phase,
+            sourceSteamAppsURL: plan.sourceSteamAppsURL,
+            destinationSteamAppsURL: plan.destinationSteamAppsURL,
+            stagedRegressionLinkURL: plan.stagedRegressionLinkURL,
+            originalRegressionLinkTarget: plan.originalRegressionLinkTarget,
+            sourceDevice: plan.sourceDevice,
+            sourceInode: plan.sourceInode,
+            sourceParentDevice: plan.sourceParentDevice,
+            sourceParentInode: plan.sourceParentInode,
+            destinationParentDevice: plan.destinationParentDevice,
+            destinationParentInode: plan.destinationParentInode,
+            regressionLinkDevice: plan.regressionLinkDevice,
+            regressionLinkInode: plan.regressionLinkInode,
+            validationEvidence: evidence,
+            inventory: plan.inventory
         )
     }
 
-    /// Recupera una planificación interrumpida solo si rutas, estado e inventario siguen idénticos.
-    func recoverPhysicalCustodyPlan(
-        regression: RegressionInstallation,
-        legacyIdentity: PhysicalLibraryCustodyIdentity,
-        regressionOwnedSteamAppsURL: URL,
-        runningState: RunningBackendState
-    ) throws -> PhysicalLibraryCustodyPlan {
-        guard !runningState.crossOverIsRunning, !runningState.regressionIsRunning else {
-            throw RegressionCoreError.unsafeLibraryState("Steam debe estar completamente cerrado")
+    private func validatedEvidence(_ raw: String) throws -> String {
+        let evidence = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !evidence.isEmpty, evidence.utf8.count <= 4_096,
+              evidence.unicodeScalars.allSatisfy({
+                  !CharacterSet.controlCharacters.contains($0) || $0.value == 0x0A
+              }) else {
+            throw RegressionCoreError.unsafeLibraryState(
+                "La evidencia debe contener entre 1 y 4096 bytes de texto seguro"
+            )
         }
-        let plan = try readPhysicalCustodyPlan()
-        let expectedSource = legacyIdentity.legacySteamAppsURL.standardizedFileURL
-        let expectedDestination = regressionOwnedSteamAppsURL.standardizedFileURL
-        let expectedRegressionLink = regression.steamRootURL
-            .appendingPathComponent("steamapps", isDirectory: true)
-            .standardizedFileURL
-        let current = assessPhysicalCustody(
-            regression: regression,
-            legacyIdentity: legacyIdentity,
-            regressionOwnedSteamAppsURL: regressionOwnedSteamAppsURL,
-            runningState: runningState
-        )
-        guard current.status == .migrationPlanned else {
-            throw RegressionCoreError.unsafeLibraryState(current.status.blockingReason)
-        }
-        return try validatePendingPhysicalCustodyPlan(
-            plan,
-            source: expectedSource,
-            destination: expectedDestination,
-            regressionLink: expectedRegressionLink,
-            inventory: current.inventory
-        )
+        return evidence
     }
 
-    /// Rollback de la fase de planificación: elimina únicamente el journal, nunca la biblioteca.
-    func cancelPhysicalCustodyPlan() throws {
-        try validateJournalParent()
-        let parentDescriptor = open(
-            backupRootURL.path,
-            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
-        )
-        guard parentDescriptor >= 0 else {
-            if errno == ENOENT { return }
+    private func rollback(plan initialPlan: PhysicalLibraryCustodyPlan) throws -> PhysicalLibraryCustodyPlan {
+        guard initialPlan.phase != .validationAccepted,
+              initialPlan.phase != .willFinalize,
+              initialPlan.phase != .completed else {
             throw RegressionCoreError.unsafeLibraryState(
-                "No se pudo anclar el directorio privado del journal: "
-                    + String(cString: strerror(errno))
+                "La validación ya fue aceptada; solo puede completarse la finalización durable"
             )
         }
-        defer { close(parentDescriptor) }
+        var plan = replacingPhase(of: initialPlan, with: .willRollback)
+        try write(plan: plan)
+        try custodyFault(.afterWillRollback)
 
-        let journalName = physicalCustodyJournalURL.lastPathComponent
-        var metadata = stat()
-        guard fstatat(parentDescriptor, journalName, &metadata, AT_SYMLINK_NOFOLLOW) == 0 else {
-            if errno == ENOENT { return }
-            throw RegressionCoreError.unsafeLibraryState(
-                "No se pudo inspeccionar el journal de custodia: "
-                    + String(cString: strerror(errno))
-            )
-        }
-        guard (metadata.st_mode & S_IFMT) == S_IFREG else {
-            throw RegressionCoreError.unsafeLibraryState("El journal de custodia no es un archivo regular")
-        }
-
-        beforeJournalUnlink()
-        guard unlinkat(parentDescriptor, journalName, 0) == 0 else {
-            throw RegressionCoreError.unsafeLibraryState(
-                "No se pudo cancelar el journal de custodia de forma segura: "
-                    + String(cString: strerror(errno))
-            )
-        }
-    }
-
-    @discardableResult
-    public func configure(
-        regression: RegressionInstallation,
-        crossOver: CrossOverInstallation,
-        runningState: RunningBackendState
-    ) throws -> URL {
-        guard !runningState.crossOverIsRunning, !runningState.regressionIsRunning else {
-            throw RegressionCoreError.unsafeLibraryState("Steam debe estar completamente cerrado")
-        }
-        let assessment = assess(regression: regression, crossOver: crossOver)
-        if case .ready = assessment.status { return assessment.regressionSteamAppsURL }
-        if case let .blocked(reason) = assessment.status {
-            throw RegressionCoreError.unsafeLibraryState(reason)
-        }
-        guard assessment.onlyInRegression.isEmpty else {
-            throw RegressionCoreError.unsafeLibraryState(
-                "Hay juegos instalados solo en Regression: \(assessment.onlyInRegression.joined(separator: ", "))"
-            )
-        }
-
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
-        let backupURL = backupRootURL.appendingPathComponent(
-            "steamapps-regression-\(formatter.string(from: Date()))-\(UUID().uuidString.prefix(8))",
-            isDirectory: true
-        )
-        try PrivateStorage.ensureDirectory(at: backupRootURL, fileManager: fileManager)
-
-        let sourceExists = fileManager.fileExists(atPath: assessment.regressionSteamAppsURL.path)
-        if sourceExists {
-            try fileManager.moveItem(at: assessment.regressionSteamAppsURL, to: backupURL)
-        }
-
-        var linkCreated = false
-        do {
-            try fileManager.createSymbolicLink(
-                at: assessment.regressionSteamAppsURL,
-                withDestinationURL: assessment.crossOverSteamAppsURL
-            )
-            linkCreated = true
-            let receipt = SharedLibraryReceipt(
-                configuredAt: Date(),
-                regressionSteamApps: PrivacySanitizer.normalizedPath(assessment.regressionSteamAppsURL.path),
-                crossOverSteamApps: PrivacySanitizer.normalizedPath(assessment.crossOverSteamAppsURL.path),
-                backup: sourceExists ? PrivacySanitizer.normalizedPath(backupURL.path) : nil
-            )
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            encoder.dateEncodingStrategy = .iso8601
-            try PrivateStorage.write(
-                encoder.encode(receipt),
-                atomicallyTo: backupRootURL.appendingPathComponent("shared-library-receipt.json"),
-                fileManager: fileManager
-            )
-            return assessment.regressionSteamAppsURL
-        } catch {
-            var rollbackFailures: [String] = []
-            if linkCreated {
-                do {
-                    try fileManager.removeItem(at: assessment.regressionSteamAppsURL)
-                } catch {
-                    rollbackFailures.append("no se pudo retirar el enlace incompleto: \(error.localizedDescription)")
-                }
+        let source = plan.sourceSteamAppsURL
+        let destination = plan.destinationSteamAppsURL
+        if directoryExistsWithoutSymbolicLink(at: destination) {
+            guard !pathExistsWithoutFollowingSymbolicLinks(source),
+                  try directoryIdentity(at: destination) == expectedIdentity(of: plan) else {
+                throw RegressionCoreError.unsafeLibraryState("No se puede restaurar la biblioteca con seguridad")
             }
-
-            if sourceExists {
-                let destinationStillExists = fileManager.fileExists(
-                    atPath: assessment.regressionSteamAppsURL.path
-                ) || (try? fileManager.destinationOfSymbolicLink(
-                    atPath: assessment.regressionSteamAppsURL.path
-                )) != nil
-                if destinationStillExists {
-                    rollbackFailures.append("steamapps sigue ocupado y no puede restaurarse la copia")
-                } else if fileManager.fileExists(atPath: backupURL.path) {
-                    do {
-                        try fileManager.moveItem(
-                            at: backupURL,
-                            to: assessment.regressionSteamAppsURL
-                        )
-                    } catch {
-                        rollbackFailures.append("no se pudo restaurar steamapps: \(error.localizedDescription)")
-                    }
-                } else {
-                    rollbackFailures.append("no se encontró la copia temporal de steamapps")
-                }
+            try anchoredRenameExclusive(
+                from: destination,
+                to: source,
+                expectedSourceParent: destinationParentIdentity(of: plan),
+                expectedDestinationParent: sourceParentIdentity(of: plan),
+                expectedItem: expectedIdentity(of: plan),
+                expectedItemType: S_IFDIR
+            )
+            try custodyFault(.afterRollbackSourceRename)
+        } else {
+            guard try directoryIdentity(at: source) == expectedIdentity(of: plan) else {
+                throw RegressionCoreError.unsafeLibraryState("No se encuentra la biblioteca original")
             }
-
-            if !rollbackFailures.isEmpty {
-                let original = error.localizedDescription
+        }
+        if pathExistsWithoutFollowingSymbolicLinks(plan.stagedRegressionLinkURL) {
+            guard !pathExistsWithoutFollowingSymbolicLinks(destination) else {
+                throw RegressionCoreError.unsafeLibraryState("El destino está ocupado durante el rollback")
+            }
+            guard try readRawSymbolicLink(at: plan.stagedRegressionLinkURL)
+                    == plan.originalRegressionLinkTarget,
+                  try symbolicLinkIdentity(at: plan.stagedRegressionLinkURL)
+                    == regressionLinkIdentity(of: plan) else {
                 throw RegressionCoreError.unsafeLibraryState(
-                    "Falló la unificación (\(original)) y el rollback necesita atención: "
-                        + rollbackFailures.joined(separator: "; ")
+                    "El enlace de rollback fue sustituido y no se restaurará"
                 )
             }
-            throw error
+            try anchoredRenameExclusive(
+                from: plan.stagedRegressionLinkURL,
+                to: destination,
+                expectedSourceParent: destinationParentIdentity(of: plan),
+                expectedDestinationParent: destinationParentIdentity(of: plan),
+                expectedItem: regressionLinkIdentity(of: plan),
+                expectedItemType: S_IFLNK
+            )
+            try custodyFault(.afterRollbackLinkRename)
         }
+        try validateInitialTopology(source: source, destination: destination)
+        plan = replacingPhase(of: plan, with: .rolledBack)
+        try write(plan: plan)
+        try unlinkStartedMarker(planID: plan.planID)
+        try custodyFault(.afterRollbackStartedMarkerUnlink)
+        try unlinkJournal(expectedPlan: plan)
+        return plan
+    }
+
+    private func anchoredRenameExclusive(
+        from source: URL,
+        to destination: URL,
+        expectedSourceParent: CustodyDirectoryIdentity,
+        expectedDestinationParent: CustodyDirectoryIdentity,
+        expectedItem: CustodyDirectoryIdentity,
+        expectedItemType: mode_t
+    ) throws {
+        let sourceParent = open(
+            source.deletingLastPathComponent().path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC
+        )
+        guard sourceParent >= 0 else {
+            throw RegressionCoreError.unsafeLibraryState("No se pudo anclar el origen del rename")
+        }
+        defer { close(sourceParent) }
+        let destinationParent = open(
+            destination.deletingLastPathComponent().path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC
+        )
+        guard destinationParent >= 0 else {
+            throw RegressionCoreError.unsafeLibraryState("No se pudo anclar el destino del rename")
+        }
+        defer { close(destinationParent) }
+        guard try descriptorIdentity(sourceParent) == expectedSourceParent,
+              try descriptorIdentity(destinationParent) == expectedDestinationParent else {
+            throw RegressionCoreError.unsafeLibraryState(
+                "Un directorio padre fue sustituido durante el rename"
+            )
+        }
+        var itemMetadata = stat()
+        guard fstatat(sourceParent, source.lastPathComponent, &itemMetadata, AT_SYMLINK_NOFOLLOW) == 0,
+              (itemMetadata.st_mode & S_IFMT) == expectedItemType,
+              CustodyDirectoryIdentity(
+                  device: UInt64(itemMetadata.st_dev),
+                  inode: UInt64(itemMetadata.st_ino)
+              ) == expectedItem else {
+            throw RegressionCoreError.unsafeLibraryState(
+                "El elemento que se iba a trasladar fue sustituido"
+            )
+        }
+        var destinationMetadata = stat()
+        guard fstatat(
+            destinationParent,
+            destination.lastPathComponent,
+            &destinationMetadata,
+            AT_SYMLINK_NOFOLLOW
+        ) != 0, errno == ENOENT else {
+            throw RegressionCoreError.unsafeLibraryState("El destino del rename ya está ocupado")
+        }
+        guard renameatx_np(
+            sourceParent,
+            source.lastPathComponent,
+            destinationParent,
+            destination.lastPathComponent,
+            UInt32(RENAME_EXCL)
+        ) == 0 else {
+            let code = errno
+            let detail = code == EXDEV ? "volúmenes distintos (EXDEV)" : String(cString: strerror(code))
+            throw RegressionCoreError.unsafeLibraryState("El rename atómico fue rechazado: \(detail)")
+        }
+        try syncDirectory(sourceParent)
+        if destinationParent != sourceParent { try syncDirectory(destinationParent) }
+    }
+
+    private func descriptorIdentity(_ descriptor: Int32) throws -> CustodyDirectoryIdentity {
+        var metadata = stat()
+        guard fstat(descriptor, &metadata) == 0, (metadata.st_mode & S_IFMT) == S_IFDIR else {
+            throw RegressionCoreError.unsafeLibraryState("El descriptor padre dejó de ser un directorio")
+        }
+        return .init(device: UInt64(metadata.st_dev), inode: UInt64(metadata.st_ino))
+    }
+
+    private func ensureSteamRemainsStopped(
+        _ runningStateProvider: @escaping @Sendable () async -> RunningBackendState
+    ) async throws {
+        for sample in 0..<3 {
+            try ensureSteamStopped(await runningStateProvider())
+            guard sample < 2 else { break }
+            try await Task.sleep(for: .seconds(1))
+            try Task.checkCancellation()
+        }
+    }
+
+    private func withCustodyLock<T>(
+        _ operation: () async throws -> T
+    ) async throws -> T {
+        try PrivateStorage.ensureDirectory(at: backupRootURL, fileManager: fileManager)
+        try validateJournalParent()
+        let lockURL = backupRootURL.appendingPathComponent("physical-custody.lock")
+        let descriptor = open(
+            lockURL.path,
+            O_CREAT | O_RDWR | O_NOFOLLOW_ANY | O_CLOEXEC,
+            0o600
+        )
+        guard descriptor >= 0 else {
+            throw RegressionCoreError.unsafeLibraryState("No se pudo abrir el lock de custodia")
+        }
+        defer { close(descriptor) }
+        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+            throw RegressionCoreError.unsafeLibraryState("Ya hay otra operación de custodia en curso")
+        }
+        defer { _ = flock(descriptor, LOCK_UN) }
+        return try await operation()
+    }
+
+    private func withCustodyLockSync<T>(_ operation: () throws -> T) throws -> T {
+        try PrivateStorage.ensureDirectory(at: backupRootURL, fileManager: fileManager)
+        try validateJournalParent()
+        let lockURL = backupRootURL.appendingPathComponent("physical-custody.lock")
+        let descriptor = open(
+            lockURL.path,
+            O_CREAT | O_RDWR | O_NOFOLLOW_ANY | O_CLOEXEC,
+            0o600
+        )
+        guard descriptor >= 0 else {
+            throw RegressionCoreError.unsafeLibraryState("No se pudo abrir el lock de custodia")
+        }
+        defer { close(descriptor) }
+        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+            throw RegressionCoreError.unsafeLibraryState("Ya hay otra operación de custodia en curso")
+        }
+        defer { _ = flock(descriptor, LOCK_UN) }
+        return try operation()
     }
 
     private func write(plan: PhysicalLibraryCustodyPlan) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let encoded = try encoder.encode(plan)
-        guard encoded.count <= inventoryLimits.maxJournalBytes else {
-            throw RegressionCoreError.unsafeLibraryState(
-                "El journal de custodia supera el límite seguro"
-            )
+        let data = try encoder.encode(plan)
+        guard data.count <= inventoryLimits.maxJournalBytes else {
+            throw RegressionCoreError.unsafeLibraryState("El journal de custodia supera el límite seguro")
         }
-        try validateJournalParent()
-        try PrivateStorage.ensureDirectory(at: backupRootURL, fileManager: fileManager)
-        try validateJournalParent()
-        try PrivateStorage.write(
-            encoded,
-            atomicallyTo: physicalCustodyJournalURL,
-            fileManager: fileManager
-        )
+        try writeDurableRegularFile(data, to: physicalCustodyJournalURL)
     }
 
     private func readPhysicalCustodyPlan() throws -> PhysicalLibraryCustodyPlan {
@@ -691,8 +1807,7 @@ public actor SharedSteamLibraryManager {
                 maxBytes: inventoryLimits.maxJournalBytes,
                 role: "journal de custodia"
             )
-            let decoder = JSONDecoder()
-            return try decoder.decode(PhysicalLibraryCustodyPlan.self, from: data)
+            return try JSONDecoder().decode(PhysicalLibraryCustodyPlan.self, from: data)
         } catch let error as RegressionCoreError {
             throw error
         } catch {
@@ -702,48 +1817,474 @@ public actor SharedSteamLibraryManager {
         }
     }
 
-    private func validatedPendingPhysicalCustodyPlan(
-        source: URL,
-        destination: URL,
-        regressionLink: URL,
-        inventory: PhysicalLibraryInventory
+    private func readPhysicalCustodyPlan(
+        parent: Int32,
+        name: String
     ) throws -> PhysicalLibraryCustodyPlan {
-        let plan = try readPhysicalCustodyPlan()
-        return try validatePendingPhysicalCustodyPlan(
-            plan,
-            source: source,
-            destination: destination,
-            regressionLink: regressionLink,
-            inventory: inventory
+        let descriptor = openat(
+            parent,
+            name,
+            O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC
+        )
+        guard descriptor >= 0 else {
+            throw RegressionCoreError.unsafeLibraryState(
+                "No se pudo abrir el journal en cuarentena"
+            )
+        }
+        defer { close(descriptor) }
+        var metadata = stat()
+        guard fstat(descriptor, &metadata) == 0,
+              (metadata.st_mode & S_IFMT) == S_IFREG,
+              metadata.st_size >= 0,
+              UInt64(metadata.st_size) <= UInt64(inventoryLimits.maxJournalBytes) else {
+            throw RegressionCoreError.unsafeLibraryState(
+                "El journal en cuarentena no es un archivo regular acotado"
+            )
+        }
+        var data = Data()
+        while data.count <= inventoryLimits.maxJournalBytes {
+            var buffer = [UInt8](repeating: 0, count: 64 * 1_024)
+            let count = Darwin.read(descriptor, &buffer, buffer.count)
+            if count == 0 { break }
+            guard count > 0 else {
+                if errno == EINTR { continue }
+                throw RegressionCoreError.unsafeLibraryState(
+                    "No se pudo leer el journal en cuarentena"
+                )
+            }
+            data.append(contentsOf: buffer.prefix(count))
+        }
+        guard data.count <= inventoryLimits.maxJournalBytes else {
+            throw RegressionCoreError.unsafeLibraryState(
+                "El journal en cuarentena supera el límite seguro"
+            )
+        }
+        return try JSONDecoder().decode(PhysicalLibraryCustodyPlan.self, from: data)
+    }
+
+    private func writePhysicalCustodyReceipt(for plan: PhysicalLibraryCustodyPlan) throws {
+        let receipt = PhysicalLibraryCustodyReceipt(
+            schemaVersion: 2,
+            completedAt: Date(),
+            transactionID: plan.planID,
+            sourceSteamAppsURL: plan.sourceSteamAppsURL,
+            destinationSteamAppsURL: plan.destinationSteamAppsURL,
+            identity: expectedIdentity(of: plan),
+            validationEvidence: try validatedEvidence(plan.validationEvidence ?? ""),
+            inventory: plan.inventory
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(receipt)
+        try writeDurableRegularFile(data, to: physicalCustodyReceiptMirrorURL)
+        try writeDurableRegularFile(data, to: physicalCustodyReceiptURL)
+    }
+
+    private func readPhysicalCustodyReceipt() throws -> PhysicalLibraryCustodyReceipt {
+        try readPhysicalCustodyReceipt(at: physicalCustodyReceiptURL)
+    }
+
+    private func readPhysicalCustodyReceipt(at url: URL) throws -> PhysicalLibraryCustodyReceipt {
+        let data = try readBoundedRegularFile(
+            at: url,
+            maxBytes: inventoryLimits.maxJournalBytes,
+            role: "recibo de custodia"
+        )
+        let receipt = try JSONDecoder().decode(PhysicalLibraryCustodyReceipt.self, from: data)
+        guard receipt.schemaVersion == 2 else {
+            throw RegressionCoreError.unsafeLibraryState("El recibo de custodia tiene otra versión")
+        }
+        return receipt
+    }
+
+    private func writeCustodyStartedMarker(planID: UUID) throws {
+        let data = try JSONEncoder().encode(["schemaVersion": "1", "transactionID": planID.uuidString])
+        try writeDurableRegularFile(data, to: physicalCustodyStartedMarkerURL)
+    }
+
+    private func unlinkStartedMarker(planID: UUID) throws {
+        guard pathExistsWithoutFollowingSymbolicLinks(physicalCustodyStartedMarkerURL) else { return }
+        let parent = open(
+            backupRootURL.path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC
+        )
+        guard parent >= 0 else {
+            throw RegressionCoreError.unsafeLibraryState("No se pudo anclar el marcador de custodia")
+        }
+        defer { close(parent) }
+        let source = physicalCustodyStartedMarkerURL.lastPathComponent
+        var metadata = stat()
+        guard fstatat(parent, source, &metadata, AT_SYMLINK_NOFOLLOW) == 0,
+              (metadata.st_mode & S_IFMT) == S_IFREG else {
+            throw RegressionCoreError.unsafeLibraryState("El marcador de custodia no es regular")
+        }
+        let quarantine = ".physical-custody-started-\(planID.uuidString.lowercased()).quarantine"
+        try quarantineLeaf(parent: parent, sourceName: source, quarantineName: quarantine, role: "marcador")
+        try custodyFault(.afterStartedMarkerQuarantine)
+        do {
+            var quarantined = stat()
+            let data = try readAnchoredRegularData(parent: parent, name: quarantine, maxBytes: 16 * 1_024)
+            let marker = try JSONDecoder().decode([String: String].self, from: data)
+            guard fstatat(parent, quarantine, &quarantined, AT_SYMLINK_NOFOLLOW) == 0,
+                  quarantined.st_dev == metadata.st_dev,
+                  quarantined.st_ino == metadata.st_ino,
+                  marker["schemaVersion"] == "1",
+                  marker["transactionID"] == planID.uuidString else {
+                throw RegressionCoreError.unsafeLibraryState("El marcador de custodia fue sustituido")
+            }
+        } catch {
+            try restoreQuarantinedLeaf(parent: parent, quarantineName: quarantine, originalName: source, role: "marcador")
+            throw error
+        }
+        guard unlinkat(parent, quarantine, 0) == 0 else {
+            try restoreQuarantinedLeaf(parent: parent, quarantineName: quarantine, originalName: source, role: "marcador")
+            throw RegressionCoreError.unsafeLibraryState("No se pudo retirar el marcador de custodia")
+        }
+        try syncDirectory(parent)
+    }
+
+    private func recoverStartedMarkerQuarantine(planID: UUID) throws {
+        let name = ".physical-custody-started-\(planID.uuidString.lowercased()).quarantine"
+        let url = backupRootURL.appendingPathComponent(name)
+        guard pathExistsWithoutFollowingSymbolicLinks(url) else { return }
+        guard !pathExistsWithoutFollowingSymbolicLinks(physicalCustodyStartedMarkerURL) else {
+            throw RegressionCoreError.unsafeLibraryState("El marcador y su cuarentena coexisten")
+        }
+        let parent = open(backupRootURL.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC)
+        guard parent >= 0 else {
+            throw RegressionCoreError.unsafeLibraryState("No se pudo anclar el marcador en cuarentena")
+        }
+        defer { close(parent) }
+        let data = try readAnchoredRegularData(parent: parent, name: name, maxBytes: 16 * 1_024)
+        let marker = try JSONDecoder().decode([String: String].self, from: data)
+        guard marker["schemaVersion"] == "1", marker["transactionID"] == planID.uuidString else {
+            throw RegressionCoreError.unsafeLibraryState("La cuarentena del marcador tiene otra identidad")
+        }
+        try restoreQuarantinedLeaf(
+            parent: parent,
+            quarantineName: name,
+            originalName: physicalCustodyStartedMarkerURL.lastPathComponent,
+            role: "marcador"
         )
     }
 
-    private func validatePendingPhysicalCustodyPlan(
-        _ plan: PhysicalLibraryCustodyPlan,
-        source: URL,
-        destination: URL,
-        regressionLink: URL,
-        inventory: PhysicalLibraryInventory
-    ) throws -> PhysicalLibraryCustodyPlan {
-        guard plan.schemaVersion == 2,
-              plan.phase == .planned,
-              try canonicalPath(for: plan.sourceSteamAppsURL) == canonicalPath(for: source),
-              try canonicalPath(for: plan.destinationSteamAppsURL) == canonicalPath(for: destination),
-              try transitionalLinksAreExpected(
-                  plan.transitionalLinks,
-                  source: source,
-                  regressionLink: regressionLink,
-                  destination: destination
-              ) else {
+    private func validatePhysicalCustodyReceipt(for plan: PhysicalLibraryCustodyPlan) throws {
+        let receipt = try readPhysicalCustodyReceipt()
+        guard receipt.transactionID == plan.planID,
+              receipt.sourceSteamAppsURL == plan.sourceSteamAppsURL,
+              receipt.destinationSteamAppsURL == plan.destinationSteamAppsURL,
+              receipt.identity == expectedIdentity(of: plan),
+              receipt.inventory == plan.inventory,
+              receipt.validationEvidence == plan.validationEvidence else {
+            throw RegressionCoreError.unsafeLibraryState("El recibo durable de custodia no coincide")
+        }
+    }
+
+    private func writeDurableRegularFile(_ data: Data, to url: URL) throws {
+        try PrivateStorage.ensureDirectory(at: url.deletingLastPathComponent(), fileManager: fileManager)
+        try validateJournalParent()
+        let parent = open(
+            url.deletingLastPathComponent().path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC
+        )
+        guard parent >= 0 else {
+            throw RegressionCoreError.unsafeLibraryState("No se pudo anclar el journal")
+        }
+        defer { close(parent) }
+        let temporaryName = ".\(url.lastPathComponent).\(UUID().uuidString).tmp"
+        let descriptor = openat(parent, temporaryName, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else {
+            throw RegressionCoreError.unsafeLibraryState("No se pudo crear el journal temporal")
+        }
+        var shouldUnlink = true
+        defer {
+            close(descriptor)
+            if shouldUnlink { _ = unlinkat(parent, temporaryName, 0) }
+        }
+        try data.withUnsafeBytes { rawBuffer in
+            guard let base = rawBuffer.baseAddress else { return }
+            var offset = 0
+            while offset < rawBuffer.count {
+                let count = Darwin.write(descriptor, base.advanced(by: offset), rawBuffer.count - offset)
+                guard count > 0 else {
+                    if errno == EINTR { continue }
+                    throw RegressionCoreError.unsafeLibraryState("No se pudo persistir el journal")
+                }
+                offset += count
+            }
+        }
+        try fullSync(descriptor)
+        guard renameat(parent, temporaryName, parent, url.lastPathComponent) == 0 else {
+            throw RegressionCoreError.unsafeLibraryState("No se pudo publicar el journal atómicamente")
+        }
+        shouldUnlink = false
+        try syncDirectory(parent)
+    }
+
+    private func fullSync(_ descriptor: Int32) throws {
+        if fcntl(descriptor, F_FULLFSYNC) == 0 { return }
+        guard fsync(descriptor) == 0 else {
+            throw RegressionCoreError.unsafeLibraryState("No se pudo sincronizar el estado durable")
+        }
+    }
+
+    private func syncDirectory(_ descriptor: Int32) throws {
+        guard fsync(descriptor) == 0 else {
+            throw RegressionCoreError.unsafeLibraryState("No se pudo sincronizar el directorio")
+        }
+    }
+
+    private func unlinkExpectedSymlink(
+        at url: URL,
+        plan: PhysicalLibraryCustodyPlan
+    ) throws {
+        let parent = open(
+            url.deletingLastPathComponent().path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC
+        )
+        guard parent >= 0 else {
             throw RegressionCoreError.unsafeLibraryState(
-                "El journal de custodia no corresponde a estas instalaciones"
+                "No se pudo anclar el enlace de rollback"
             )
         }
-        guard plan.inventory == inventory else {
+        defer { close(parent) }
+        guard try descriptorIdentity(parent) == destinationParentIdentity(of: plan) else {
             throw RegressionCoreError.unsafeLibraryState(
-                "El inventario cambió desde que se preparó la transferencia"
+                "El padre del enlace de rollback fue sustituido"
             )
         }
+        try custodyFault(.beforeFinalizeMarkerQuarantine)
+        let quarantine = markerQuarantineName(planID: plan.planID)
+        try quarantineLeaf(
+            parent: parent,
+            sourceName: url.lastPathComponent,
+            quarantineName: quarantine,
+            role: "enlace de rollback"
+        )
+        try custodyFault(.afterFinalizeMarkerQuarantine)
+        do {
+            guard try symbolicLinkIdentity(parent: parent, name: quarantine)
+                    == regressionLinkIdentity(of: plan),
+                  try readRawSymbolicLink(parent: parent, name: quarantine)
+                    == plan.originalRegressionLinkTarget else {
+                throw RegressionCoreError.unsafeLibraryState(
+                    "El enlace de rollback fue sustituido y no se retirará"
+                )
+            }
+        } catch {
+            try restoreQuarantinedLeaf(
+                parent: parent,
+                quarantineName: quarantine,
+                originalName: url.lastPathComponent,
+                role: "enlace de rollback"
+            )
+            throw error
+        }
+        guard unlinkat(parent, quarantine, 0) == 0 else {
+            try restoreQuarantinedLeaf(
+                parent: parent,
+                quarantineName: quarantine,
+                originalName: url.lastPathComponent,
+                role: "enlace de rollback"
+            )
+            throw RegressionCoreError.unsafeLibraryState(
+                "No se pudo retirar el enlace de rollback en cuarentena"
+            )
+        }
+        try syncDirectory(parent)
+    }
+
+    private func unlinkJournal(expectedPlan: PhysicalLibraryCustodyPlan) throws {
+        try validateJournalParent()
+        let parent = open(
+            backupRootURL.path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC
+        )
+        guard parent >= 0 else {
+            throw RegressionCoreError.unsafeLibraryState("No se pudo anclar el directorio del journal")
+        }
+        defer { close(parent) }
+        let journalName = physicalCustodyJournalURL.lastPathComponent
+        var expectedMetadata = stat()
+        guard fstatat(parent, journalName, &expectedMetadata, AT_SYMLINK_NOFOLLOW) == 0,
+              (expectedMetadata.st_mode & S_IFMT) == S_IFREG else {
+            throw RegressionCoreError.unsafeLibraryState("El journal de custodia no es un archivo regular")
+        }
+        beforeJournalUnlink()
+        let quarantine = journalQuarantineName(planID: expectedPlan.planID)
+        try quarantineLeaf(
+            parent: parent,
+            sourceName: journalName,
+            quarantineName: quarantine,
+            role: "journal de custodia"
+        )
+        try custodyFault(.afterJournalQuarantine)
+        do {
+            var quarantinedMetadata = stat()
+            guard fstatat(parent, quarantine, &quarantinedMetadata, AT_SYMLINK_NOFOLLOW) == 0,
+                  (quarantinedMetadata.st_mode & S_IFMT) == S_IFREG,
+                  quarantinedMetadata.st_dev == expectedMetadata.st_dev,
+                  quarantinedMetadata.st_ino == expectedMetadata.st_ino,
+                  try readPhysicalCustodyPlan(parent: parent, name: quarantine) == expectedPlan else {
+                throw RegressionCoreError.unsafeLibraryState(
+                    "El journal de custodia fue sustituido y no se retirará"
+                )
+            }
+        } catch {
+            try restoreQuarantinedLeaf(
+                parent: parent,
+                quarantineName: quarantine,
+                originalName: journalName,
+                role: "journal de custodia"
+            )
+            throw error
+        }
+        guard unlinkat(parent, quarantine, 0) == 0 else {
+            try restoreQuarantinedLeaf(
+                parent: parent,
+                quarantineName: quarantine,
+                originalName: journalName,
+                role: "journal de custodia"
+            )
+            throw RegressionCoreError.unsafeLibraryState(
+                "No se pudo retirar el journal de custodia en cuarentena"
+            )
+        }
+        try syncDirectory(parent)
+    }
+
+    private func quarantineLeaf(
+        parent: Int32,
+        sourceName: String,
+        quarantineName: String,
+        role: String
+    ) throws {
+        guard renameatx_np(
+            parent,
+            sourceName,
+            parent,
+            quarantineName,
+            UInt32(RENAME_EXCL)
+        ) == 0 else {
+            throw RegressionCoreError.unsafeLibraryState(
+                "No se pudo aislar \(role) antes de retirarlo: \(String(cString: strerror(errno)))"
+            )
+        }
+        try syncDirectory(parent)
+    }
+
+    private func markerQuarantineName(planID: UUID) -> String {
+        ".regression-custody-marker-\(planID.uuidString).quarantine"
+    }
+
+    private func journalQuarantineName(planID: UUID) -> String {
+        ".physical-custody-journal-\(planID.uuidString).quarantine"
+    }
+
+    private func restoreQuarantinedLeaf(
+        parent: Int32,
+        quarantineName: String,
+        originalName: String,
+        role: String
+    ) throws {
+        guard renameatx_np(
+            parent,
+            quarantineName,
+            parent,
+            originalName,
+            UInt32(RENAME_EXCL)
+        ) == 0 else {
+            throw RegressionCoreError.unsafeLibraryState(
+                "\(role.capitalized) quedó preservado en cuarentena; la ruta original fue ocupada"
+            )
+        }
+        try syncDirectory(parent)
+    }
+
+    private func recoverDeterministicMarkerQuarantine(
+        plan: PhysicalLibraryCustodyPlan
+    ) throws {
+        let marker = plan.stagedRegressionLinkURL
+        let quarantineURL = marker.deletingLastPathComponent().appendingPathComponent(
+            markerQuarantineName(planID: plan.planID)
+        )
+        guard pathExistsWithoutFollowingSymbolicLinks(quarantineURL) else { return }
+        let parent = open(
+            marker.deletingLastPathComponent().path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC
+        )
+        guard parent >= 0 else {
+            throw RegressionCoreError.unsafeLibraryState("No se pudo anclar la cuarentena del marcador")
+        }
+        defer { close(parent) }
+        let quarantineName = quarantineURL.lastPathComponent
+        guard try symbolicLinkIdentity(parent: parent, name: quarantineName)
+                == regressionLinkIdentity(of: plan),
+              try readRawSymbolicLink(parent: parent, name: quarantineName)
+                == plan.originalRegressionLinkTarget else {
+            throw RegressionCoreError.unsafeLibraryState(
+                "La cuarentena del enlace de rollback fue sustituida"
+            )
+        }
+        guard pathExistsWithoutFollowingSymbolicLinks(physicalCustodyReceiptURL),
+              pathExistsWithoutFollowingSymbolicLinks(physicalCustodyReceiptMirrorURL) else {
+            try restoreQuarantinedLeaf(
+                parent: parent,
+                quarantineName: quarantineName,
+                originalName: marker.lastPathComponent,
+                role: "enlace de rollback"
+            )
+            return
+        }
+        guard unlinkat(parent, quarantineName, 0) == 0 else {
+            throw RegressionCoreError.unsafeLibraryState(
+                "No se pudo retirar la cuarentena validada del marcador"
+            )
+        }
+        try syncDirectory(parent)
+    }
+
+    private func recoverDeterministicJournalQuarantine() throws -> PhysicalLibraryCustodyPlan? {
+        guard fileManager.fileExists(atPath: backupRootURL.path) else { return nil }
+        let candidates = try fileManager.contentsOfDirectory(
+            at: backupRootURL,
+            includingPropertiesForKeys: nil,
+            options: []
+        ).filter {
+            $0.lastPathComponent.hasPrefix(".physical-custody-journal-")
+                && $0.lastPathComponent.hasSuffix(".quarantine")
+        }
+        guard candidates.count <= 1 else {
+            throw RegressionCoreError.unsafeLibraryState("Hay múltiples journals en cuarentena")
+        }
+        guard let candidate = candidates.first else { return nil }
+        let parent = open(
+            backupRootURL.path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC
+        )
+        guard parent >= 0 else {
+            throw RegressionCoreError.unsafeLibraryState("No se pudo anclar el journal en cuarentena")
+        }
+        defer { close(parent) }
+        let plan = try readPhysicalCustodyPlan(parent: parent, name: candidate.lastPathComponent)
+        guard candidate.lastPathComponent == journalQuarantineName(planID: plan.planID) else {
+            throw RegressionCoreError.unsafeLibraryState("El journal en cuarentena tiene otra identidad")
+        }
+        if plan.phase == .rolledBack || plan.phase == .completed {
+            guard unlinkat(parent, candidate.lastPathComponent, 0) == 0 else {
+                throw RegressionCoreError.unsafeLibraryState(
+                    "No se pudo retirar el journal terminal en cuarentena"
+                )
+            }
+            try syncDirectory(parent)
+            return nil
+        }
+        try restoreQuarantinedLeaf(
+            parent: parent,
+            quarantineName: candidate.lastPathComponent,
+            originalName: physicalCustodyJournalURL.lastPathComponent,
+            role: "journal de custodia"
+        )
         return plan
     }
 
@@ -936,33 +2477,14 @@ public actor SharedSteamLibraryManager {
         return CanonicalFilePath(components: normalized)
     }
 
-    private func transitionalLinksAreExpected(
-        _ links: [URL: URL],
-        source: URL,
-        regressionLink: URL,
-        destination: URL
-    ) throws -> Bool {
-        guard links.count == 2 else { return false }
-        let expectedKeys = [
-            try canonicalPath(for: source, resolvingFinalItem: false),
-            try canonicalPath(for: regressionLink, resolvingFinalItem: false)
-        ]
-        let expectedDestination = try canonicalPath(for: destination, resolvingFinalItem: false)
-        var observedKeys: [CanonicalFilePath] = []
-        for (key, value) in links {
-            guard try canonicalPath(for: value, resolvingFinalItem: false) == expectedDestination else {
-                return false
-            }
-            observedKeys.append(try canonicalPath(for: key, resolvingFinalItem: false))
-        }
-        return observedKeys.sorted() == expectedKeys.sorted()
-    }
-
     private func readBoundedRegularFile(at url: URL, maxBytes: Int, role: String) throws -> Data {
         guard maxBytes >= 0 else {
             throw RegressionCoreError.unsafeLibraryState("El límite de \(role) no es válido")
         }
-        let descriptor = open(url.path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+        let descriptor = open(
+            url.path,
+            O_RDONLY | O_NONBLOCK | O_NOFOLLOW_ANY | O_CLOEXEC
+        )
         guard descriptor >= 0 else {
             throw RegressionCoreError.unsafeLibraryState(
                 "No se pudo abrir \(role) de forma segura: \(String(cString: strerror(errno)))"
@@ -1113,22 +2635,4 @@ private struct StreamingStructuralDigest {
         )
         return SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined()
     }
-}
-
-private extension PhysicalLibraryCustodyStatus {
-    var blockingReason: String {
-        switch self {
-        case let .blocked(reason): reason
-        case .eligibleForTransfer: "La transferencia todavía no tiene autorización de ejecución"
-        case .migrationPlanned: "La transferencia ya tiene un journal pendiente de recuperación"
-        case .alreadyOwned: "La biblioteca ya está bajo custodia física de Regression"
-        }
-    }
-}
-
-private struct SharedLibraryReceipt: Codable {
-    let configuredAt: Date
-    let regressionSteamApps: String
-    let crossOverSteamApps: String
-    let backup: String?
 }

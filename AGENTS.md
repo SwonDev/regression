@@ -6,16 +6,16 @@ Este archivo es la fuente de verdad de reglas y protocolo (Codex lo lee nativame
 
 ## Lo que es este proyecto
 
-`Regression.app` es el punto de entrada nativo para ejecutar Steam de Windows en macOS. Desde
-2026-07-27 tiene dos backends aislados: **CrossOver es el motor predeterminado temporal** y el
-motor Windows→macOS propio sigue íntegro y seleccionable para desarrollo y perfiles verificados.
-La app vive en la barra de menús, no en el Dock; la ventana general de CrossOver solo se muestra
-para instalar, actualizar, reparar o validar la licencia.
+`Regression.app` es el punto de entrada nativo e independiente para ejecutar Steam de Windows en
+macOS. Regression es el único backend operativo, usa su propio runtime, su propia botella y la
+única carpeta física `steamapps`, ubicada dentro de esa botella. La app vive en la barra de menús,
+no en el Dock, y no requiere instalar, abrir, actualizar ni licenciar CrossOver.
 
-La botella `Steam` de CrossOver es canónica para los archivos de juegos. El `steamapps` del motor
-propio es un enlace a esa misma carpeta, pero cada botella conserva por separado credenciales,
-registro, saves fuera de Steam Cloud y configuración de Steam. Nunca se ejecutan ambos Steam a la
-vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles automáticamente.
+CrossOver se conserva exclusivamente como referencia histórica de investigación y como procedencia
+de observaciones antiguas. No es un selector, una ruta de ejecución ni un propietario alternativo
+de juegos. La migración de custodia mueve la carpeta física sin copiar sus aproximadamente 110 GB,
+deja ausente el antiguo `steamapps` de CrossOver y no mantiene enlaces compartidos. La base local de
+aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
 
 ## Reglas inviolables
 
@@ -25,17 +25,17 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
    no es un arreglo: se revierte al instante y se repiensa. No se negocia ni "de momento".
    Lo que decide es la matriz de validación (ver Protocolo), no las intenciones. Si al
    validar algo que antes funcionaba falla → revertir primero, preguntar después.
-2. **La referencia es CrossOver: se copia literalmente cómo lo hace CrossOver.** Si en
+2. **CrossOver es una referencia de investigación, nunca una dependencia.** Si en
    CrossOver funciona y en Regression no, la respuesta está en su stack: versiones exactas
    de cada componente, convenciones de build (prefix horneado en la app), wiring de DLLs
    (qué va en system32, qué va en lib, qué es builtin y qué es native), configuración de
    botella y crossties. Se estudia y se replica ESO antes de inventar nada. La paridad se
    consigue igualando, no improvisando. Ir juego por juego sin este método está prohibido.
-3. **Separación estricta de backends.** El backend CrossOver depende deliberadamente de la
-   instalación y licencia del usuario y se invoca solo mediante su CLI oficial. El motor propio
-   debe seguir siendo independiente: no se copian DLLs, dylibs ni binarios propietarios desde
-   CrossOver. Las observaciones de CrossOver se trasladan al motor propio únicamente mediante
-   fuentes públicas o reimplementación legal, nunca copiando `cxcompatdb` ni forks privados.
+3. **Autonomía operativa estricta.** CrossOver no se invoca desde la aplicación ni desde el CLI,
+   no comparte botella, biblioteca o credenciales y no puede ser necesario para lanzar o reparar.
+   No se copian DLLs, dylibs ni binarios propietarios desde CrossOver. Sus observaciones históricas
+   se trasladan al motor propio únicamente mediante fuentes públicas o reimplementación legal,
+   nunca copiando `cxcompatdb` ni forks privados.
 4. **Legalidad limpia.** Solo fuentes open-source oficiales (Wine/DXMT/DXVK/MoltenVK LGPL,
    Apache, zlib…). Nada de descompilar ni extraer código de binarios propietarios (GUI de
    CrossOver, sistema de licencias, forks privados de DXMT/SPIRV-Cross). Los binarios de
@@ -266,9 +266,9 @@ vez. La base local de aprendizaje **observa y compara**, pero no aplica perfiles
     laboratorio y un arranque real `wine --version` que debe cargar `ntdll.so`. Nunca copiar
     `loader/wine` a `bin/wine`: el primero pertenece en `lib/wine/x86_64-unix/wine`; el wrapper
     contiene `BINDIR/LIBDIR` y es el único punto de entrada instalado. El tar debe conservar
-    xattrs para no perder las firmas de scripts. Una
-    instalación nueva elige Regression; el comparador opcional se conserva para desarrollo,
-    pero nunca es requisito del release. No publicar ni instalar una versión que no supere este
+    xattrs para no perder las firmas de scripts. Una instalación nueva y una actualización
+    conservan Regression como único backend operativo; las comparaciones históricas viven en la
+    documentación y la base local, no en el producto. No publicar ni instalar una versión que no supere este
     verificador sobre el mismo asset que se subirá a GitHub.
 34. **El README raíz es la portada del producto, no el diario de laboratorio.** Debe conservar
     la R oficial, el branding definido en `DESIGN.md`, instalación mediante `releases/latest`,
@@ -456,11 +456,12 @@ validación de su fila pasa entera con capturas, (3) hay backup del estado nuevo
 (4) README/AGENTS reflejan el cambio. Si solo cumples el punto 1, has arreglado una cosa y
 quizá roto otra — que es exactamente lo que este protocolo existe para evitar.
 
-## Estado rápido (2026-07-29)
+## Estado rápido (2026-08-13)
 
-- **Arquitectura operativa actual**: app nativa `LSUIElement` en barra de menús, CrossOver 26.3
-  como backend predeterminado, motor propio seleccionable, conmutación con cierre limpio y una
-  sola biblioteca física de juegos. El lanzador propio original está intacto en
+- **Arquitectura operativa actual**: app nativa `LSUIElement` en barra de menús, Regression como
+  único backend, una botella propia y una sola biblioteca física de juegos dentro de ella. La
+  transferencia desde la ubicación heredada usa un WAL durable, renombres exclusivos, validación
+  funcional y rollback antes de finalizar; no copia juegos ni deja enlaces en CrossOver. El lanzador propio está en
   `Regression.app/Contents/MacOS/regression-engine`.
 - **Aprendizaje local**: SQLite v12 normalizada en
   `~/Library/Application Support/Regression/Compatibility/compatibility.sqlite`; registra

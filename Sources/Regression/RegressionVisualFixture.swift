@@ -82,6 +82,15 @@
     case working
     case empty
     case error
+    case custodyEligible = "custody-eligible"
+    case custodyPreparing = "custody-preparing"
+    case custodyPreCutover = "custody-pre-cutover"
+    case custodyCutover = "custody-cutover"
+    case custodyVerifying = "custody-verifying"
+    case custodyPendingValidation = "custody-pending-validation"
+    case custodyValidating = "custody-validating"
+    case custodyRollingBack = "custody-rolling-back"
+    case custodyIndependent = "custody-independent"
 
     private static let argumentPrefix = "--regression-visual-fixture="
 
@@ -139,9 +148,9 @@
       publicCatalogOperation = .disabled
       automaticRegressionUpdatesEnabled = false
       autoLaunchEnabled = false
-      regressionReleaseStatus = .upToDate(installedVersion: "1.10.0", checkedAt: Date())
-      updateStatus = nil
+      regressionReleaseStatus = .upToDate(installedVersion: "1.10.1", checkedAt: Date())
       failure = nil
+      libraryIndependenceState = .independent
 
       switch state {
       case .ready:
@@ -172,6 +181,55 @@
           message: "Regression no modificó ningún archivo.",
           recovery: .refresh
         )
+        games = fixtureGames()
+        libraryIndependenceState = .error(
+          "El enlace no coincide con la ruta protegida esperada. No se ha movido ningún archivo."
+        )
+      case .custodyEligible:
+        operation = .ready
+        statusDetail = "Regression está listo para tomar custodia de la biblioteca."
+        libraryIndependenceState = .eligible
+        games = fixtureGames()
+      case .custodyPreparing:
+        operation = .preparing("Comprobando la biblioteca")
+        statusDetail = "Inventariando sin modificar los juegos."
+        libraryIndependenceState = .preparing
+        games = fixtureGames()
+      case .custodyPreCutover:
+        operation = .ready
+        statusDetail = "Esperando confirmación antes del traslado."
+        libraryIndependenceState = .preCutover
+        games = fixtureGames()
+      case .custodyCutover:
+        operation = .preparing("Trasladando la biblioteca")
+        statusDetail = "El traslado atómico está en curso."
+        libraryIndependenceState = .cutover
+        games = fixtureGames()
+      case .custodyVerifying:
+        operation = .preparing("Verificando la integridad")
+        statusDetail = "Comprobando manifiestos e identidad física."
+        libraryIndependenceState = .verifying
+        games = fixtureGames()
+      case .custodyPendingValidation:
+        operation = .ready
+        statusDetail = "La biblioteca espera su validación funcional."
+        libraryIndependenceState = .pendingValidation
+        games = fixtureGames()
+      case .custodyValidating:
+        operation = .running(.regression)
+        runningState = RunningBackendState(regressionPIDs: [42])
+        statusDetail = "Steam está abierto únicamente con Regression."
+        libraryIndependenceState = .validating
+        games = fixtureGames()
+      case .custodyRollingBack:
+        operation = .preparing("Restaurando la biblioteca")
+        statusDetail = "Regression está recuperando el estado anterior."
+        libraryIndependenceState = .rollingBack
+        games = fixtureGames()
+      case .custodyIndependent:
+        operation = .ready
+        statusDetail = "Motor y biblioteca propios preparados."
+        libraryIndependenceState = .independent
         games = fixtureGames()
       }
     }

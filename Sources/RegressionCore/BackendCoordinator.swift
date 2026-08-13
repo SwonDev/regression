@@ -37,22 +37,91 @@ public enum BackendCommandFactory {
     }
 }
 
+/// Regla única para las rutas operativas que todavía aceptan un backend explícito.
+/// La ausencia de opción significa Regression, incluso si un Steam heredado sigue vivo.
+public enum BackendLaunchPolicy {
+    public static func cliSelection(
+        requestedRawValue: String?,
+        activeBackend _: BackendKind?
+    ) throws -> BackendKind {
+        guard let requestedRawValue else { return .regression }
+        guard let backend = BackendKind(rawValue: requestedRawValue), backend == .regression else {
+            throw RegressionCoreError.launchFailed("Usa --backend regression")
+        }
+        return backend
+    }
+}
+
+public enum PhysicalLibraryCustodyCommandPolicy {
+    public static func authorizeMigration(arguments: [String]) throws {
+        let required = [
+            "--confirm-single-library",
+            "--confirm-crossover-games-removed",
+        ]
+        guard required.allSatisfy(arguments.contains) else {
+            throw RegressionCoreError.unsafeLibraryState(
+                "Confirma el traslado único con --confirm-single-library "
+                    + "--confirm-crossover-games-removed"
+            )
+        }
+    }
+
+    public static func authorizeFinalization(arguments: [String]) throws -> String {
+        guard arguments.contains("--validated"),
+              let evidenceIndex = arguments.firstIndex(of: "--evidence"),
+              arguments.indices.contains(evidenceIndex + 1) else {
+            throw RegressionCoreError.unsafeLibraryState(
+                "Finalizar exige --validated --evidence REFERENCIA"
+            )
+        }
+        let evidence = arguments[evidenceIndex + 1].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !evidence.isEmpty, evidence.count <= 2_048 else {
+            throw RegressionCoreError.unsafeLibraryState(
+                "La referencia de evidencia no es válida"
+            )
+        }
+        return evidence
+    }
+
+    public static func authorizeRollback(arguments: [String]) throws {
+        guard arguments.contains("--confirm-rollback") else {
+            throw RegressionCoreError.unsafeLibraryState(
+                "Confirma la restauración con --confirm-rollback"
+            )
+        }
+    }
+
+    public static func validationAppID(arguments: [String]) throws -> String? {
+        guard arguments.count <= 2 else {
+            throw RegressionCoreError.launchFailed("Usa validate-library [APP_ID]")
+        }
+        guard let rawValue = arguments.dropFirst().first else { return nil }
+        guard let appID = SteamAppID.normalized(rawValue) else {
+            throw RegressionCoreError.launchFailed("Usa validate-library [APP_ID]")
+        }
+        return appID
+    }
+}
+
 public actor BackendCoordinator {
     private let processRunner: any ProcessRunning
     private let processLauncher: any ProcessLaunching
     private let inspector: any ProcessInspecting
     private let logDirectoryURL: URL
+    private let custodyInterlock: (any PhysicalLibraryCustodyInterlocking)?
 
     public init(
         processRunner: any ProcessRunning,
         processLauncher: any ProcessLaunching,
         inspector: any ProcessInspecting,
-        logDirectoryURL: URL
+        logDirectoryURL: URL,
+        custodyInterlock: (any PhysicalLibraryCustodyInterlocking)? = nil
     ) {
         self.processRunner = processRunner
         self.processLauncher = processLauncher
         self.inspector = inspector
         self.logDirectoryURL = logDirectoryURL
+        self.custodyInterlock = custodyInterlock
     }
 
     public func runningState() async -> RunningBackendState {
@@ -62,8 +131,14 @@ public actor BackendCoordinator {
     public func launchSteam(
         backend: BackendKind,
         installations: InstallationSnapshot,
-        appID: String? = nil
+        appID: String? = nil,
+        custodyValidationLease: PhysicalLibraryCustodyValidationLease? = nil
     ) async throws -> BackendLaunch {
+        let custodyPermit = try await acquireOperationalPermit(
+            backend,
+            custodyValidationLease: custodyValidationLease
+        )
+        defer { custodyPermit?.release() }
         let running = await inspector.runningBackends()
         if running.hasConflict {
             throw RegressionCoreError.backendConflict
@@ -74,17 +149,35 @@ public actor BackendCoordinator {
         if appID == nil, running.activeBackend == backend {
             throw RegressionCoreError.backendAlreadyRunning(backend)
         }
+        let launchIntent = try await custodyInterlock?.registerPhysicalLibraryLaunchIntent(
+            backend: backend
+        )
+        var launchMayHaveOccurred = false
+        defer {
+            if let launchIntent, !launchMayHaveOccurred {
+                Task { try? await self.custodyInterlock?.resolvePhysicalLibraryLaunchIntent(launchIntent) }
+            }
+        }
 
         let steamArguments: [String]
         if let appID {
             guard let normalized = SteamAppID.normalized(appID) else {
                 throw RegressionCoreError.launchFailed("El Steam App ID no es válido")
             }
+            let needsBootstrap = backend == .regression
+                && running.activeBackend == nil
+                && GameRuntimeProfileCatalog.profile(
+                    for: normalized,
+                    backend: backend
+                )?.requiresActiveSteamClient == true
+            if needsBootstrap { launchMayHaveOccurred = true }
             try await ensureSteamClientIsActiveIfRequired(
                 backend: backend,
                 appID: normalized,
                 running: running,
-                installations: installations
+                installations: installations,
+                custodyValidationLease: custodyValidationLease,
+                launchIntent: launchIntent
             )
             steamArguments = ["-applaunch", normalized]
         } else {
@@ -99,19 +192,29 @@ public actor BackendCoordinator {
         guard FileManager.default.isExecutableFile(atPath: command.executableURL.path) else {
             throw RegressionCoreError.launcherMissing(command.executableURL)
         }
-        return try await processLauncher.launch(
+        launchMayHaveOccurred = true
+        let launch = try await processLauncher.launch(
             backend: backend,
             executableURL: command.executableURL,
             arguments: command.arguments,
             logDirectoryURL: logDirectoryURL
         )
+        if let launchIntent {
+            try await custodyInterlock?.attachPhysicalLibraryLaunch(launch, to: launchIntent)
+            if try await waitUntilLaunchIsObservable(launch) {
+                try await custodyInterlock?.resolvePhysicalLibraryLaunchIntent(launchIntent)
+            }
+        }
+        return launch
     }
 
     private func ensureSteamClientIsActiveIfRequired(
         backend: BackendKind,
         appID: String,
         running: RunningBackendState,
-        installations: InstallationSnapshot
+        installations: InstallationSnapshot,
+        custodyValidationLease: PhysicalLibraryCustodyValidationLease?,
+        launchIntent: PhysicalLibraryCustodyLaunchIntent?
     ) async throws {
         guard backend == .regression,
               running.activeBackend == nil,
@@ -133,12 +236,19 @@ public actor BackendCoordinator {
         guard FileManager.default.isExecutableFile(atPath: steamCommand.executableURL.path) else {
             throw RegressionCoreError.launcherMissing(steamCommand.executableURL)
         }
-        _ = try await processLauncher.launch(
+        try await validateOperationalSelection(
+            backend,
+            custodyValidationLease: custodyValidationLease
+        )
+        let bootstrapLaunch = try await processLauncher.launch(
             backend: backend,
             executableURL: steamCommand.executableURL,
             arguments: steamCommand.arguments,
             logDirectoryURL: logDirectoryURL
         )
+        if let launchIntent {
+            try await custodyInterlock?.attachPhysicalLibraryLaunch(bootstrapLaunch, to: launchIntent)
+        }
 
         var observedSteamProcess = false
         for _ in 0..<180 {
@@ -200,8 +310,14 @@ public actor BackendCoordinator {
     public func requestShutdown(
         backend: BackendKind,
         installations: InstallationSnapshot,
-        timeoutSeconds: Double = 30
+        timeoutSeconds: Double = 30,
+        custodyValidationLease: PhysicalLibraryCustodyValidationLease? = nil
     ) async throws {
+        let custodyPermit = try await acquireOperationalPermit(
+            backend,
+            custodyValidationLease: custodyValidationLease
+        )
+        defer { custodyPermit?.release() }
         let command = try command(
             backend: backend,
             installations: installations,
@@ -232,12 +348,76 @@ public actor BackendCoordinator {
     public func switchBackend(
         from current: BackendKind?,
         to target: BackendKind,
-        installations: InstallationSnapshot
+        installations: InstallationSnapshot,
+        custodyValidationLease: PhysicalLibraryCustodyValidationLease? = nil
     ) async throws -> BackendLaunch {
+        try await validateOperationalSelection(
+            target,
+            custodyValidationLease: custodyValidationLease
+        )
         if let current, current != target {
-            try await requestShutdown(backend: current, installations: installations)
+            try await requestShutdown(
+                backend: current,
+                installations: installations,
+                custodyValidationLease: custodyValidationLease
+            )
         }
-        return try await launchSteam(backend: target, installations: installations)
+        return try await launchSteam(
+            backend: target,
+            installations: installations,
+            custodyValidationLease: custodyValidationLease
+        )
+    }
+
+    /// Aplica la misma política de custodia a UI, CLI y lanzamientos internos. El único bypass
+    /// posible es un lease opaco y vigente emitido por el gestor durante la validación física.
+    public func validateOperationalSelection(
+        _ backend: BackendKind,
+        custodyValidationLease: PhysicalLibraryCustodyValidationLease? = nil
+    ) async throws {
+        let permit = try await acquireOperationalPermit(
+            backend,
+            custodyValidationLease: custodyValidationLease
+        )
+        permit?.release()
+    }
+
+    private func acquireOperationalPermit(
+        _ backend: BackendKind,
+        custodyValidationLease: PhysicalLibraryCustodyValidationLease?
+    ) async throws -> PhysicalLibraryCustodyMutationPermit? {
+        guard let custodyInterlock else { return nil }
+        try await validateBackendAvailability(backend)
+        return try await custodyInterlock.acquirePhysicalLibraryCustodyMutationPermit(
+            backend: backend,
+            validationLease: custodyValidationLease
+        )
+    }
+
+    /// Los diagnósticos de solo lectura siguen disponibles durante una transacción, pero jamás
+    /// vuelven a presentar CrossOver como destino después del cutover físico.
+    public func validateBackendAvailability(_ backend: BackendKind) async throws {
+        guard backend == .crossOver else { return }
+        if let custodyInterlock {
+            _ = await custodyInterlock.currentPhysicalLibraryCustodyInterlock()
+        }
+        throw RegressionCoreError.unsafeLibraryState(
+            "CrossOver ya no es un backend operativo; usa Regression"
+        )
+    }
+
+    private func waitUntilLaunchIsObservable(_ launch: BackendLaunch) async throws -> Bool {
+        for sample in 0..<5 {
+            let running = await inspector.runningBackends()
+            if running.hasConflict {
+                throw RegressionCoreError.backendConflict
+            }
+            let pids = launch.backend == .regression ? running.regressionPIDs : running.crossOverPIDs
+            if pids.contains(launch.processID) || !pids.isEmpty { return true }
+            guard sample < 4 else { break }
+            try await Task.sleep(for: .milliseconds(500))
+        }
+        return false
     }
 
     private func command(

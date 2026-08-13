@@ -73,8 +73,8 @@ public struct TrustedComponentDescriptor: Equatable, Sendable {
 public enum TrustedComponentCatalog {
   public static let windowsMediaComponentID = "windows-media-gstreamer"
   public static let windowsMediaComponentVersion = "1"
-  public static let supportedApplicationVersion = "1.10.0"
-  public static let supportedBuildIdentifier = "35"
+  public static let supportedApplicationVersion = "1.10.1"
+  public static let supportedBuildIdentifier = "36"
 
   private static let windowsMediaDevelopmentManifestSHA256 =
     "ac662661fb3384c6ad100066391cab209f9de60b2e129fb92e07365ee6fe9bb1"
@@ -82,7 +82,7 @@ public enum TrustedComponentCatalog {
     "da8ba98d99d157f981ef3a2472dc9d74c9ce4673ef126bdd61851b9dd21dedb3"
   private static let unsupportedManifestPlaceholder = String(repeating: "0", count: 64)
 
-  /// Describe el payload LGPL de Windows Media incluido en Regression 1.10.0 (35).
+  /// Describe el payload LGPL de Windows Media incluido en Regression 1.10.1 (36).
   ///
   /// `applicationBundleURL` y `applicationSupportURL` se inyectan para que la app, los tests y
   /// un futuro verificador de staging inspeccionen exactamente el mismo contrato sin depender

@@ -3,6 +3,65 @@ import Foundation
 import XCTest
 
 final class GameTestPreflightTests: XCTestCase {
+    func testIndependentCustodyIsReadyWithoutCrossOver() async throws {
+        let fixture = try PreflightFixture()
+        defer { fixture.cleanup() }
+        let destination = fixture.installations.regression.steamRootURL
+            .appendingPathComponent("steamapps", isDirectory: true)
+
+        let report = await GameTestPreflight(
+            runner: PreflightProcessRunner(output: ""),
+            applicationSupportURL: fixture.applicationSupportURL
+        ).evaluate(
+            backend: .regression,
+            installations: fixture.installations,
+            runningState: RunningBackendState(),
+            databaseHealth: healthyDatabase(),
+            sharedLibraryAssessment: nil,
+            physicalCustodyAssessment: PhysicalLibraryCustodyAssessment(
+                status: .independent,
+                sourceSteamAppsURL: fixture.root.appendingPathComponent("Legacy/steamapps"),
+                destinationSteamAppsURL: destination,
+                inventory: emptyPhysicalLibraryInventory()
+            ),
+            game: fixture.game
+        )
+
+        let custody = try XCTUnwrap(report.checks.first { $0.checkID == .sharedLibrary })
+        XCTAssertEqual(custody.status, .ready)
+        XCTAssertEqual(custody.title, "Biblioteca propia")
+        XCTAssertFalse(custody.detail.contains("CrossOver"))
+    }
+
+    func testPendingCustodyAllowsRegressionValidationWithExplicitWarning() async throws {
+        let fixture = try PreflightFixture()
+        defer { fixture.cleanup() }
+
+        let report = await GameTestPreflight(
+            runner: PreflightProcessRunner(output: ""),
+            applicationSupportURL: fixture.applicationSupportURL
+        ).evaluate(
+            backend: .regression,
+            installations: fixture.installations,
+            runningState: RunningBackendState(),
+            databaseHealth: healthyDatabase(),
+            sharedLibraryAssessment: nil,
+            physicalCustodyAssessment: PhysicalLibraryCustodyAssessment(
+                status: .pendingValidation,
+                sourceSteamAppsURL: fixture.root.appendingPathComponent("Legacy/steamapps"),
+                destinationSteamAppsURL: fixture.installations.regression.steamRootURL
+                    .appendingPathComponent("steamapps", isDirectory: true),
+                inventory: emptyPhysicalLibraryInventory()
+            ),
+            game: fixture.game
+        )
+
+        let custody = try XCTUnwrap(report.checks.first { $0.checkID == .sharedLibrary })
+        XCTAssertEqual(custody.status, .warning)
+        XCTAssertEqual(custody.title, "Biblioteca propia")
+        XCTAssertNotEqual(report.status, .blocked)
+    }
+
     func testProcessParserUsesCommAndPreservesExecutablePathsWithSpaces() {
         let output = #"""
           10     1 /tmp/Regression.app/Contents/SharedSupport/wine-root/bin/wineserver
@@ -389,6 +448,17 @@ final class GameTestPreflightTests: XCTestCase {
             preflightReportCount: 0
         )
     }
+}
+
+private func emptyPhysicalLibraryInventory() -> PhysicalLibraryInventory {
+    PhysicalLibraryInventory(
+        manifestAppIDs: [],
+        manifestSHA256ByAppID: [:],
+        regularFileCount: 0,
+        directoryCount: 0,
+        totalRegularFileBytes: 0,
+        structuralFingerprint: "fixture"
+    )
 }
 
 private final class PreflightFixture: @unchecked Sendable {

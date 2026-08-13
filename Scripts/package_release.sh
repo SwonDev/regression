@@ -3,7 +3,8 @@
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${REGRESSION_RELEASE_VERSION:-1.10.0}"
+VERSION="${REGRESSION_RELEASE_VERSION:-1.10.1}"
+BUILD_NUMBER="${REGRESSION_RELEASE_BUILD_NUMBER:-36}"
 APP="$ROOT/Regression.app"
 APP_NAME="Regression.app"
 OUTPUT_DIR="${REGRESSION_RELEASE_OUTPUT_DIR:-$ROOT/build/release-$VERSION}"
@@ -44,6 +45,8 @@ download() {
 [[ -d "$APP/Contents/SharedSupport/wine-root" ]] || fail "Falta el runtime canónico."
 [[ "$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")" == "$VERSION" ]] \
     || fail "Regression.app no está empaquetada como versión $VERSION."
+[[ "$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")" == "$BUILD_NUMBER" ]] \
+    || fail "Regression.app no está empaquetada como build $BUILD_NUMBER."
 
 BOTTLE="$HOME/Library/Application Support/Regression/Bottles/Steam"
 if [[ -d "$BOTTLE" ]]; then

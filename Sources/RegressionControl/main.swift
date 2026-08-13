@@ -31,11 +31,18 @@ enum RegressionControl {
         let installations = await discovery.discover(regressionApplicationURL: applicationURL)
         let support = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/Regression", isDirectory: true)
+        let custodyManager = SharedSteamLibraryManager(
+            backupRootURL: support.appendingPathComponent(
+                "Backups/SharedLibrary",
+                isDirectory: true
+            )
+        )
         let coordinator = BackendCoordinator(
             processRunner: runner,
             processLauncher: launcher,
             inspector: inspector,
-            logDirectoryURL: support.appendingPathComponent("Logs/Launcher", isDirectory: true)
+            logDirectoryURL: support.appendingPathComponent("Logs/Launcher", isDirectory: true),
+            custodyInterlock: custodyManager
         )
         let databaseURL = ProcessInfo.processInfo.environment["REGRESSION_COMPATIBILITY_DATABASE_PATH"]
             .flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
@@ -53,25 +60,12 @@ enum RegressionControl {
 
         case "status":
             let running = await coordinator.runningState()
-            print("CrossOver:", installations.crossOver?.version ?? "no disponible")
-            print("Botella:", installations.crossOver?.bottleName ?? "no encontrada")
-            print("Steam CrossOver:", running.crossOverIsRunning ? "activo" : "cerrado")
+            let custody = await custodyManager.currentPhysicalLibraryCustodyInterlock()
+            print("Custodia:", custodyStatusDescription(custody.status))
             print("Steam Regression:", running.regressionIsRunning ? "activo" : "cerrado")
-            if let crossOver = installations.crossOver {
-                let manager = SharedSteamLibraryManager(
-                    backupRootURL: support.appendingPathComponent("Backups/SharedLibrary", isDirectory: true)
-                )
-                let assessment = await manager.assess(
-                    regression: installations.regression,
-                    crossOver: crossOver
-                )
-                if case .ready = assessment.status {
-                    print("Biblioteca compartida: lista")
-                } else if case let .blocked(reason) = assessment.status {
-                    print("Biblioteca compartida: bloqueada —", reason)
-                } else {
-                    print("Biblioteca compartida: pendiente")
-                }
+            if !custody.crossOverUnavailable {
+                print("Transición CrossOver:", installations.crossOver?.version ?? "no disponible")
+                print("Steam CrossOver:", running.crossOverIsRunning ? "activo" : "cerrado")
             }
 
         case "prepare-launch-state":
@@ -102,55 +96,112 @@ enum RegressionControl {
                 )
             }
 
-        case "share-library":
-            guard let crossOver = installations.crossOver else {
-                throw RegressionCoreError.crossOverNotInstalled
-            }
-            var running = await coordinator.runningState()
-            let previouslyActive = running.activeBackend
-            guard !running.hasConflict else { throw RegressionCoreError.backendConflict }
-
-            if let active = previouslyActive {
-                guard arguments.contains("--shutdown") else {
-                    throw RegressionCoreError.unsafeLibraryState(
-                        "Steam está activo; repite con --shutdown para cerrarlo limpiamente"
-                    )
-                }
-                print("Cerrando Steam con", active.displayName + "…")
-                try await coordinator.requestShutdown(
-                    backend: active,
-                    installations: installations
-                )
-                running = await coordinator.runningState()
-            }
-
-            let manager = SharedSteamLibraryManager(
-                backupRootURL: support.appendingPathComponent("Backups/SharedLibrary", isDirectory: true)
-            )
-            let assessment = await manager.assess(
+        case "library-status":
+            let running = await coordinator.runningState()
+            let assessment = await custodyManager.assessPhysicalCustody(
                 regression: installations.regression,
-                crossOver: crossOver
-            )
-            if !assessment.onlyInRegression.isEmpty {
-                throw RegressionCoreError.unsafeLibraryState(
-                    "Juegos exclusivos de Regression: \(assessment.onlyInRegression.joined(separator: ", "))"
-                )
-            }
-            let link = try await manager.configure(
-                regression: installations.regression,
-                crossOver: crossOver,
+                legacyIdentity: legacyPhysicalCustodyIdentity(
+                    installations: installations,
+                    homeDirectoryURL: FileManager.default.homeDirectoryForCurrentUser
+                ),
                 runningState: running
             )
-            print("Biblioteca compartida:", PrivacySanitizer.normalizedPath(link.path))
+            print("Custodia:", custodyStatusDescription(assessment.status))
+            print("Destino:", PrivacySanitizer.normalizedPath(assessment.destinationSteamAppsURL.path))
+            print("Manifiestos:", assessment.inventory.manifestAppIDs.count)
+            print("Archivos:", assessment.inventory.regularFileCount)
+            print("Bytes:", assessment.inventory.totalRegularFileBytes)
 
-            if arguments.contains("--restart") {
-                let restartBackend = previouslyActive ?? .crossOver
-                print("Reabriendo Steam con", restartBackend.displayName + "…")
-                _ = try await coordinator.launchSteam(
-                    backend: restartBackend,
-                    installations: installations
+        case "migrate-library":
+            try PhysicalLibraryCustodyCommandPolicy.authorizeMigration(arguments: arguments)
+            let identity = legacyPhysicalCustodyIdentity(
+                installations: installations,
+                homeDirectoryURL: FileManager.default.homeDirectoryForCurrentUser
+            )
+            let assessment = try await custodyManager.migratePhysicalCustody(
+                regression: installations.regression,
+                legacyIdentity: identity,
+                runningStateProvider: { await coordinator.runningState() }
+            )
+            print("Custodia:", custodyStatusDescription(assessment.status))
+            print(
+                "La biblioteca física está en Regression; valida Steam y un juego antes de finalizar."
+            )
+
+        case "rollback-library":
+            try PhysicalLibraryCustodyCommandPolicy.authorizeRollback(arguments: arguments)
+            let assessment = try await custodyManager.rollbackPhysicalCustody(
+                regression: installations.regression,
+                legacyIdentity: legacyPhysicalCustodyIdentity(
+                    installations: installations,
+                    homeDirectoryURL: FileManager.default.homeDirectoryForCurrentUser
+                ),
+                runningState: await coordinator.runningState()
+            )
+            print("Custodia:", custodyStatusDescription(assessment.status))
+
+        case "finalize-library":
+            let evidence = try PhysicalLibraryCustodyCommandPolicy.authorizeFinalization(
+                arguments: arguments
+            )
+            let assessment = try await custodyManager.finalizePhysicalCustodyValidated(
+                regression: installations.regression,
+                legacyIdentity: legacyPhysicalCustodyIdentity(
+                    installations: installations,
+                    homeDirectoryURL: FileManager.default.homeDirectoryForCurrentUser
+                ),
+                validationConfirmed: true,
+                validationEvidence: evidence,
+                runningState: await coordinator.runningState()
+            )
+            print("Custodia:", custodyStatusDescription(assessment.status))
+            print("Validación visual y funcional confirmada por el operador.")
+
+        case "validate-library":
+            let running = await coordinator.runningState()
+            let identity = legacyPhysicalCustodyIdentity(
+                installations: installations,
+                homeDirectoryURL: FileManager.default.homeDirectoryForCurrentUser
+            )
+            let requestedAppID = try PhysicalLibraryCustodyCommandPolicy.validationAppID(
+                arguments: arguments
+            )
+            if let requestedAppID {
+                let report = try await preflightReport(
+                    backend: .regression,
+                    appID: requestedAppID,
+                    installations: installations,
+                    runningState: running,
+                    repository: repository,
+                    runner: runner,
+                    supportURL: support
                 )
+                printPreflight(report)
+                guard report.status != .blocked else {
+                    throw RegressionCoreError.testEnvironmentBlocked(report.blockingSummary)
+                }
             }
+            let lease = try await custodyManager.beginPhysicalCustodyValidation(
+                regression: installations.regression,
+                legacyIdentity: identity,
+                runningState: running
+            )
+            _ = try await coordinator.launchSteam(
+                backend: .regression,
+                installations: installations,
+                appID: requestedAppID,
+                custodyValidationLease: lease
+            )
+            if let requestedAppID {
+                print("Validación iniciada en Regression para App ID", requestedAppID)
+            } else {
+                print("Validación iniciada en Steam de Regression")
+            }
+
+        case "share-library":
+            throw RegressionCoreError.unsafeLibraryState(
+                "share-library fue retirado: Regression ya no crea bibliotecas compartidas con CrossOver"
+            )
 
         case "launch":
             guard let rawAppID = arguments.dropFirst().first,
@@ -158,16 +209,10 @@ enum RegressionControl {
                 throw RegressionCoreError.launchFailed("Falta un Steam App ID válido")
             }
             var running = await coordinator.runningState()
-            let requestedBackend: BackendKind?
-            if let index = arguments.firstIndex(of: "--backend"), arguments.indices.contains(index + 1) {
-                requestedBackend = BackendKind(rawValue: arguments[index + 1])
-                guard requestedBackend != nil else {
-                    throw RegressionCoreError.launchFailed("Usa --backend crossOver o --backend regression")
-                }
-            } else {
-                requestedBackend = nil
-            }
-            let backend = requestedBackend ?? running.activeBackend ?? .crossOver
+            let backend = try BackendLaunchPolicy.cliSelection(
+                requestedRawValue: option("--backend", in: arguments),
+                activeBackend: running.activeBackend
+            )
             if let active = running.activeBackend, active != backend {
                 try await coordinator.requestShutdown(
                     backend: active,
@@ -212,15 +257,17 @@ enum RegressionControl {
             let backendName = option("--backend", in: arguments)
             let backend: BackendKind
             if let backendName {
-                guard let parsed = BackendKind(rawValue: backendName) else {
-                    throw RegressionCoreError.launchFailed(
-                        "Usa --backend crossOver o --backend regression"
-                    )
-                }
-                backend = parsed
+                backend = try BackendLaunchPolicy.cliSelection(
+                    requestedRawValue: backendName,
+                    activeBackend: running.activeBackend
+                )
             } else {
-                backend = running.activeBackend ?? .crossOver
+                backend = try BackendLaunchPolicy.cliSelection(
+                    requestedRawValue: nil,
+                    activeBackend: running.activeBackend
+                )
             }
+            try await coordinator.validateBackendAvailability(backend)
             let report = try await preflightReport(
                 backend: backend,
                 appID: appID,
@@ -236,10 +283,10 @@ enum RegressionControl {
             }
 
         case "switch":
-            guard let name = arguments.dropFirst().first,
-                  let target = BackendKind(rawValue: name) else {
-                throw RegressionCoreError.launchFailed("Usa crossOver o regression")
+            guard arguments.dropFirst().first == BackendKind.regression.rawValue else {
+                throw RegressionCoreError.launchFailed("Usa regression")
             }
+            let target = BackendKind.regression
             let running = await coordinator.runningState()
             _ = try await coordinator.switchBackend(
                 from: running.activeBackend,
@@ -763,7 +810,7 @@ enum RegressionControl {
                     "Usa observe APP_ID perfect|playable|failed --backend crossOver|regression --name NOMBRE [--note TEXTO]"
                 )
             }
-            let backendName = option("--backend", in: arguments) ?? "crossOver"
+            let backendName = option("--backend", in: arguments) ?? "regression"
             guard let backend = BackendKind(rawValue: backendName) else {
                 throw RegressionCoreError.launchFailed("Usa --backend crossOver o --backend regression")
             }
@@ -839,7 +886,7 @@ enum RegressionControl {
             print("Exportación guardada en", PrivacySanitizer.normalizedPath(path))
 
         default:
-            print("Uso: regressionctl [status | unreal-bootstrap-routes | preflight [APP_ID] [--backend crossOver|regression] | share-library --shutdown [--restart] | launch APP_ID [--backend crossOver|regression] | switch crossOver|regression | runs | processes [RUN_ID] | profiles | engines | certifications | technologies | candidates | optimization | requirements | repair-receipts | research | research-protocol | research-open | research-hypothesis | research-stage | research-attach-run | research-gate | research-artifact | research-finish | research-pause | research-complete | database | catalog | catalog-sync APP_ID [--force] | comparisons | verify RUN_ID perfect|playable|failed [--note TEXTO] | observe APP_ID perfect|playable|failed --backend MOTOR --name NOMBRE [--note TEXTO] | observations | export RUTA]")
+            print("Uso: regressionctl [status | library-status | migrate-library --confirm-single-library --confirm-crossover-games-removed | validate-library [APP_ID] | rollback-library --confirm-rollback | finalize-library --validated --evidence REFERENCIA | unreal-bootstrap-routes | preflight [APP_ID] [--backend regression] | launch APP_ID [--backend regression] | switch regression | runs | processes [RUN_ID] | profiles | engines | certifications | technologies | candidates | optimization | requirements | repair-receipts | research | research-protocol | research-open | research-hypothesis | research-stage | research-attach-run | research-gate | research-artifact | research-finish | research-pause | research-complete | database | catalog | catalog-sync APP_ID [--force] | comparisons | verify RUN_ID perfect|playable|failed [--note TEXTO] | observe APP_ID perfect|playable|failed --backend MOTOR --name NOMBRE [--note TEXTO] | observations | export RUTA]")
             exit(64)
         }
     }
@@ -881,13 +928,30 @@ enum RegressionControl {
         }
 
         let sharedAssessment: SharedLibraryAssessment?
-        if let crossOver = installations.crossOver {
-            sharedAssessment = await SharedSteamLibraryManager(
-                backupRootURL: supportURL.appendingPathComponent(
-                    "Backups/SharedLibrary",
-                    isDirectory: true
-                )
-            ).assess(
+        let custodyManager = SharedSteamLibraryManager(
+            backupRootURL: supportURL.appendingPathComponent(
+                "Backups/SharedLibrary",
+                isDirectory: true
+            )
+        )
+        let custody = await custodyManager.currentPhysicalLibraryCustodyInterlock()
+        let physicalCustodyAssessment: PhysicalLibraryCustodyAssessment?
+        if custody.crossOverUnavailable || custody.mutationPolicy != .unrestricted {
+            physicalCustodyAssessment = await custodyManager.assessPhysicalCustody(
+                regression: installations.regression,
+                legacyIdentity: legacyPhysicalCustodyIdentity(
+                    installations: installations,
+                    homeDirectoryURL: FileManager.default.homeDirectoryForCurrentUser
+                ),
+                runningState: runningState
+            )
+        } else {
+            physicalCustodyAssessment = nil
+        }
+        if custody.crossOverUnavailable {
+            sharedAssessment = nil
+        } else if let crossOver = installations.crossOver {
+            sharedAssessment = await custodyManager.assess(
                 regression: installations.regression,
                 crossOver: crossOver
             )
@@ -906,6 +970,7 @@ enum RegressionControl {
             runningState: runningState,
             databaseHealth: health,
             sharedLibraryAssessment: sharedAssessment,
+            physicalCustodyAssessment: physicalCustodyAssessment,
             game: game
         )
     }
@@ -926,6 +991,34 @@ enum RegressionControl {
                 print("  Acción:", recovery)
             }
         }
+    }
+
+    private static func custodyStatusDescription(_ status: PhysicalLibraryCustodyStatus) -> String {
+        switch status {
+        case .eligibleForTransfer: "lista para trasladar"
+        case .preparing: "preparando traslado"
+        case .preCutover: "preparada para el corte"
+        case .cutover: "trasladando custodia"
+        case .verifying: "verificando biblioteca"
+        case .pendingValidation: "pendiente de validación en Regression"
+        case .validating: "validando con Regression"
+        case .rollingBack: "restaurando estado anterior"
+        case .independent: "independiente"
+        case let .blocked(reason): "bloqueada — \(reason)"
+        }
+    }
+
+    private static func legacyPhysicalCustodyIdentity(
+        installations: InstallationSnapshot,
+        homeDirectoryURL: URL
+    ) -> PhysicalLibraryCustodyIdentity {
+        let steamAppsURL = installations.crossOver?.steamRootURL
+            .appendingPathComponent("steamapps", isDirectory: true)
+            ?? homeDirectoryURL.appendingPathComponent(
+                "Library/Application Support/CrossOver/Bottles/Steam/drive_c/Program Files (x86)/Steam/steamapps",
+                isDirectory: true
+            )
+        return PhysicalLibraryCustodyIdentity(legacySteamAppsURL: steamAppsURL)
     }
 
     private static func verificationVerdict(_ value: String) -> VerificationVerdict? {

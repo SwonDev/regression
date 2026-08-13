@@ -1,6 +1,6 @@
 ---
 name: Regression Native Utility
-description: Contrato visual del lanzador macOS de barra de menús para ejecutar Steam de Windows con el motor propio de Regression y un comparador opcional de desarrollo.
+description: Contrato visual del lanzador macOS de barra de menús para ejecutar Steam de Windows de forma autónoma con Regression.
 colors:
   primary: "#5E5CE6"
   secondary: "#0A84FF"
@@ -52,12 +52,6 @@ components:
   status-warning:
     backgroundColor: "{colors.warning}"
     textColor: "{colors.surface}"
-  backend-picker:
-    backgroundColor: "{colors.surface}"
-    textColor: "{colors.on-surface}"
-    typography: "{typography.callout}"
-    rounded: "{rounded.control}"
-    padding: "{spacing.compact}"
   game-row:
     backgroundColor: "{colors.surface}"
     textColor: "{colors.on-surface}"
@@ -78,7 +72,7 @@ components:
 
 ## Overview
 
-Regression es una utilidad nativa de macOS que vive en la barra de menús. Su panel debe sentirse como una extensión discreta del sistema, no como un gestor de botellas ni como una réplica visual de otro producto. La jerarquía prioriza el estado operativo, la acción principal para abrir Steam y la selección consciente del motor.
+Regression es una utilidad nativa de macOS que vive en la barra de menús. Su panel debe sentirse como una extensión discreta del sistema, no como un gestor de botellas ni como una réplica visual de otro producto. La jerarquía prioriza el estado operativo, la custodia de la biblioteca propia y la acción principal para abrir Steam.
 
 El panel usa controles SwiftUI y materiales de macOS. No se crean imitaciones personalizadas de Liquid Glass, barras de título ni ventanas flotantes superpuestas. La identidad propia se concentra en la R de la barra de menús, con una variante estática y nítida para cada estado real de la aplicación.
 
@@ -88,7 +82,7 @@ La expresión pública de la marca —GitHub, documentación y releases— reuti
 
 Los valores anteriores documentan el tono semántico de referencia. En código se prefieren `Color.accentColor`, `Color.primary`, `Color.secondary` y los colores de estado del sistema para conservar contraste, vibrancy, accesibilidad y adaptación automática a los modos claro, oscuro y de alto contraste.
 
-- Índigo del sistema para la identidad y el backend seleccionado.
+- Índigo del sistema para la identidad de Regression y la acción principal.
 - Azul del sistema para enlaces y acciones secundarias.
 - Verde, amarillo y rojo únicamente para éxito, advertencia y error.
 - Nunca comunicar un estado solo mediante color: acompañarlo con icono y texto.
@@ -105,7 +99,7 @@ Orden de contenido:
 
 1. Identidad, estado actual y progreso.
 2. Acciones para abrir, mostrar, actualizar o cerrar Steam de forma segura.
-3. Motor y estado de la biblioteca compartida en una misma tarjeta operativa.
+3. Estado de la biblioteca propia y, solo durante la transición, progreso de custodia y rollback.
 4. Resumen de juegos, verificaciones y motores observados.
 5. Juegos detectados y lanzamiento por App ID.
 6. Aprendizaje local y mantenimiento bajo divulgación progresiva.
@@ -124,7 +118,7 @@ Los controles conservan su forma nativa. Los contenedores auxiliares usan radios
 - **Icono de barra de menús:** lienzo exacto de 18 puntos con variante Retina de 36 píxeles. La huella alfa mide 32 píxeles Retina de alto, queda centrada horizontalmente y aplica una corrección óptica vertical de un píxel hacia arriba. Una `NSImageView` decorativa y transparente a eventos conserva ese tamaño exacto dentro del `NSStatusBarButton` nativo y corrige el centro vertical en −0,5 puntos. Usa cuatro imágenes estáticas: `ready`, `working`, `running` y `error`. Los PNG se tratan como plantillas para adaptarse a las apariencias clara y oscura.
 - **Estado:** el icono cambia sin animación al cambiar el estado operativo. El panel mantiene además resumen legible, insignia semántica y detalle técnico; la imagen nunca es el único canal de información.
 - **Acción principal:** un botón prominente cuyo texto cambia entre “Abrir Steam”, “Mostrar Steam” y “Reintentar”.
-- **Selector de motor:** selector nativo que explica que cambiar de motor cerrará primero el Steam activo.
+- **Custodia de biblioteca:** tarjeta prioritaria con fases reales, impacto explícito, una sola copia física y acciones transaccionales de validar o revertir.
 - **Juegos:** campo nativo de búsqueda por nombre o App ID y filas compactas reveladas en lotes de 24, con nombre, App ID y botón de reproducción; no muestran datos privados de la cuenta. La certificación local verde y la referencia pública azul/gris son líneas independientes y siempre etiquetadas.
 - **Historial:** resumen de ejecuciones, perfiles y motores locales, blindados revelados en lotes de 8, comparación pública opcional y exportación bajo demanda. La sincronización muestra progreso y conserva el último dato válido si falla la red. La sección distingue candidatos tecnológicos de casos y pruebas reales de I+D; los contadores nunca presentan uno como si fuese el otro.
 - **Errores:** mensaje comprensible, causa técnica desplegable y una acción concreta como “Reparar componente”, “Abrir diagnóstico” o “Usar motor de Regression”.
@@ -138,7 +132,7 @@ Los controles conservan su forma nativa. Los contenedores auxiliares usan radios
 - Mantener una sola instancia de Steam activa.
 - Explicar cualquier cambio de botella, biblioteca o licencia antes de ejecutarlo.
 - Usar etiquetas, ayuda contextual y accesibilidad para todos los controles.
-- Presentar Regression como motor predeterminado en instalaciones nuevas y conservar cualquier comparador como herramienta opcional de desarrollo.
+- Presentar Regression como único motor operativo y explicar que la biblioteca física pertenece a su botella.
 - Explicar qué dato público se consulta y permitir desactivar o actualizar la referencia.
 - Mantener buscables las bibliotecas grandes sin sacrificar la respuesta inmediata del popover.
 
@@ -147,8 +141,8 @@ Los controles conservan su forma nativa. Los contenedores auxiliares usan radios
 - No mostrar la aplicación en el Dock durante el uso normal.
 - No reproducir, interpolar ni fundir fotogramas en la barra de menús.
 - No animar información decorativa dentro del panel.
-- No convertir un comparador de desarrollo en requisito, protagonista de marca ni promesa del producto público.
+- No mostrar CrossOver como selector, requisito, propietario de juegos ni acción operativa.
 - No crear ni instalar otra botella o copia de Steam automáticamente.
 - No almacenar credenciales, identificadores de cuenta ni registros sin filtrar.
-- No iniciar simultáneamente Steam de CrossOver y Steam de Regression.
+- No recrear enlaces de juegos hacia CrossOver ni mantener dos copias de `steamapps`.
 - No presentar una valoración de CodeWeavers como veredicto o certificación de Regression.

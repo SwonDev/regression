@@ -20,18 +20,19 @@ El protocolo v2 revisa diez dimensiones y conserva también la procedencia tempo
 |---|---|---|
 | Base de aprendizaje | `quick_check`, claves foráneas y esquema esperado | SQLite no es íntegra o la migración no terminó |
 | Motor seleccionado | botella, Steam y launcher detectables | falta o está dañado el backend requerido |
-| Aislamiento de Steam | un único backend escritor | CrossOver y Regression coexisten o está activo el backend equivocado |
+| Aislamiento de Steam | Regression es el único escritor operativo | hay otro Steam o wineserver que puede modificar la botella o la biblioteca |
 | Juego objetivo | manifest, App ID y carpeta contenida en `steamapps/common` | la instalación falta, no coincide o intenta escapar de la biblioteca |
 | Aislamiento de Wine | procedencia del ejecutable real de cada wineserver | hay un wineserver inequívocamente ajeno |
 | Ciclo de servicios | relación entre `services.exe` y wineserver | queda un `services.exe` con PPID 1 sin wineserver vivo |
 | Presentación DXMT | marcadores `dxmt-cxpresent-*.id` | no bloquea: el launcher canónico los reinicia; un resto cerrado queda como aviso |
 | Almacenamiento | espacio para cachés, logs y actualizaciones | queda menos de 1 GB; por debajo de 5 GB se avisa |
 | Telemetría | lectura de los logs locales de Steam | la ruta existe pero no puede leerse, o su raíz no está disponible |
-| Biblioteca compartida | mismos bytes para la comparación A/B | no bloquea por sí sola; una divergencia queda explícita como aviso |
+| Custodia de biblioteca | `steamapps` es físico y pertenece a la botella Regression | la transferencia está en corte/rollback, el destino es inseguro o la biblioteca no está disponible |
 
-El lector de manifests resuelve el enlace simbólico canónico de `steamapps` antes de enumerar la
-biblioteca. De ese modo el backend Regression valida las instalaciones físicas de CrossOver sin
-duplicarlas y sin tratar el symlink como un archivo ordinario.
+El lector de manifests exige que la biblioteca final sea la carpeta física `steamapps` de la
+botella Regression. Durante la migración transaccional admite únicamente los estados explícitos
+de validación; al finalizar, la ubicación heredada de CrossOver queda ausente y no existe ningún
+enlace compartido ni una segunda copia de los juegos.
 
 Los procesos se clasifican con la columna **`comm` de `ps`**, que contiene solo el ejecutable real
 y conserva rutas con espacios. No se busca la palabra `wineserver` en los argumentos. Así un
@@ -86,15 +87,14 @@ Regression.app/Contents/SharedSupport/bin/regressionctl preflight
 Regression.app/Contents/SharedSupport/bin/regressionctl preflight 219990 --backend regression
 ```
 
-`regressionctl launch` usa el mismo preflight. Si necesita cambiar de backend, primero solicita
-el cierre normal del Steam activo; no inicia un segundo cliente intermedio.
+`regressionctl launch` usa el mismo preflight y siempre ejecuta Regression. Nunca inicia un
+cliente alternativo ni conmuta a CrossOver.
 
-## Relación con CrossOver y Apple
+## Referencias históricas y Apple
 
-El preflight sigue el principio de botellas separadas de CrossOver y usa únicamente su CLI
-oficial cuando ese backend está seleccionado. La documentación de CodeWeavers permite activar
-canales de log y variables por lanzamiento, pero Regression no aprende comandos arbitrarios ni
-convierte un log en una receta.
+El preflight no invoca CrossOver. Las observaciones históricas y la documentación pública de
+CodeWeavers pueden aportar contexto de investigación, pero no crean una dependencia operativa,
+no autorizan comandos y no convierten un log en una receta.
 
 Apple recomienda un flujo de diagnóstico que separa descubrimiento, preparación, ejecución,
 validación y entrega de evidencia. Game Porting Toolkit 4 añade `gpucapture` y `gpudebug`, pero

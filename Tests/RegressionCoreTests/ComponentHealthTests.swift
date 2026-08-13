@@ -10,8 +10,8 @@ final class ComponentHealthTests: XCTestCase {
     let roots = ProductionDescriptorRoots()
 
     let descriptor = TrustedComponentCatalog.windowsMediaDescriptor(
-      applicationVersion: "1.10.0",
-      buildIdentifier: "35",
+      applicationVersion: "1.10.1",
+      buildIdentifier: "36",
       variant: .development,
       applicationBundleURL: roots.bundle,
       applicationSupportURL: roots.applicationSupport
@@ -20,7 +20,7 @@ final class ComponentHealthTests: XCTestCase {
     XCTAssertEqual(descriptor.identity.componentID, "windows-media-gstreamer")
     XCTAssertEqual(descriptor.identity.componentVersion, "1")
     XCTAssertEqual(descriptor.identity.variant, .development)
-    XCTAssertEqual(descriptor.identity.buildIdentifier, "35")
+    XCTAssertEqual(descriptor.identity.buildIdentifier, "36")
     XCTAssertEqual(
       descriptor.payloadRootURL,
       roots.bundle.appendingPathComponent(
@@ -47,8 +47,8 @@ final class ComponentHealthTests: XCTestCase {
     let roots = ProductionDescriptorRoots()
 
     let descriptor = TrustedComponentCatalog.windowsMediaDescriptor(
-      applicationVersion: "1.10.0",
-      buildIdentifier: "35",
+      applicationVersion: "1.10.1",
+      buildIdentifier: "36",
       variant: .publicInstalled,
       applicationBundleURL: roots.bundle,
       applicationSupportURL: roots.applicationSupport
@@ -71,8 +71,8 @@ final class ComponentHealthTests: XCTestCase {
     let roots = ProductionDescriptorRoots()
 
     let descriptor = TrustedComponentCatalog.windowsMediaDescriptor(
-      applicationVersion: "1.10.0",
-      buildIdentifier: "35",
+      applicationVersion: "1.10.1",
+      buildIdentifier: "36",
       variant: .development,
       applicationBundleURL: roots.bundle,
       applicationSupportURL: roots.applicationSupport
@@ -88,8 +88,8 @@ final class ComponentHealthTests: XCTestCase {
   func testProductionWindowsMediaUnsupportedBuildIsRejectedBeforeFilesystemInspection() {
     let roots = ProductionDescriptorRoots()
     let descriptor = TrustedComponentCatalog.windowsMediaDescriptor(
-      applicationVersion: "1.10.0",
-      buildIdentifier: "36",
+      applicationVersion: "1.10.1",
+      buildIdentifier: "37",
       variant: .publicInstalled,
       applicationBundleURL: roots.bundle,
       applicationSupportURL: roots.applicationSupport
@@ -101,7 +101,7 @@ final class ComponentHealthTests: XCTestCase {
     XCTAssertEqual(report.recovery, .installSupportedApplicationBuild)
     XCTAssertEqual(
       report.issue,
-      .unsupportedVariant("Regression 1.10.0 (36)")
+      .unsupportedVariant("Regression 1.10.1 (37)")
     )
   }
 
@@ -109,7 +109,7 @@ final class ComponentHealthTests: XCTestCase {
     let roots = ProductionDescriptorRoots()
     let descriptor = TrustedComponentCatalog.windowsMediaDescriptor(
       applicationVersion: "1.11.0",
-      buildIdentifier: "35",
+      buildIdentifier: "36",
       variant: .development,
       applicationBundleURL: roots.bundle,
       applicationSupportURL: roots.applicationSupport
@@ -121,11 +121,31 @@ final class ComponentHealthTests: XCTestCase {
     XCTAssertEqual(report.recovery, .installSupportedApplicationBuild)
   }
 
-  func testProductionWindowsMediaExplicitUnsupportedVariantRemainsUnsupported() {
+  func testProductionWindowsMediaPreviousReleaseIsRejected() {
     let roots = ProductionDescriptorRoots()
     let descriptor = TrustedComponentCatalog.windowsMediaDescriptor(
       applicationVersion: "1.10.0",
       buildIdentifier: "35",
+      variant: .publicInstalled,
+      applicationBundleURL: roots.bundle,
+      applicationSupportURL: roots.applicationSupport
+    )
+
+    let report = ComponentHealthService.evaluate(descriptor)
+
+    XCTAssertEqual(report.status, .unsupportedVariant)
+    XCTAssertEqual(
+      report.issue,
+      .unsupportedVariant("Regression 1.10.0 (35)")
+    )
+    XCTAssertEqual(report.recovery, .installSupportedApplicationBuild)
+  }
+
+  func testProductionWindowsMediaExplicitUnsupportedVariantRemainsUnsupported() {
+    let roots = ProductionDescriptorRoots()
+    let descriptor = TrustedComponentCatalog.windowsMediaDescriptor(
+      applicationVersion: "1.10.1",
+      buildIdentifier: "36",
       variant: .unsupported("portable-v2"),
       applicationBundleURL: roots.bundle,
       applicationSupportURL: roots.applicationSupport
@@ -147,8 +167,8 @@ final class ComponentHealthTests: XCTestCase {
     let support = base.appendingPathComponent("support/../Regression", isDirectory: true)
 
     let descriptor = TrustedComponentCatalog.windowsMediaDescriptor(
-      applicationVersion: "1.10.0",
-      buildIdentifier: "35",
+      applicationVersion: "1.10.1",
+      buildIdentifier: "36",
       variant: .publicInstalled,
       applicationBundleURL: bundle,
       applicationSupportURL: support
@@ -173,8 +193,8 @@ final class ComponentHealthTests: XCTestCase {
   func testProductionWindowsMediaMissingPayloadOnlyRecommendsTrustedReinstall() {
     let roots = ProductionDescriptorRoots()
     let descriptor = TrustedComponentCatalog.windowsMediaDescriptor(
-      applicationVersion: "1.10.0",
-      buildIdentifier: "35",
+      applicationVersion: "1.10.1",
+      buildIdentifier: "36",
       variant: .development,
       applicationBundleURL: roots.bundle,
       applicationSupportURL: roots.applicationSupport
@@ -219,7 +239,7 @@ final class ComponentHealthTests: XCTestCase {
     )
 
     XCTAssertEqual(report.status, .ready)
-    XCTAssertEqual(report.identity.buildIdentifier, "35")
+    XCTAssertEqual(report.identity.buildIdentifier, "36")
   }
 
   func testSelfConsistentManifestIsRejectedWithoutMatchingCompiledDescriptor() throws {
@@ -537,7 +557,7 @@ private final class ComponentHealthFixture {
         componentID: "windows-media-gstreamer",
         componentVersion: "1",
         variant: variant,
-        buildIdentifier: "35"
+        buildIdentifier: "36"
       ),
       payloadRootURL: payload,
       manifestRelativePath: "manifest.sha256",

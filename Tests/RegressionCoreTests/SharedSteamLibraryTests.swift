@@ -4,679 +4,905 @@ import Foundation
 import XCTest
 
 final class SharedSteamLibraryTests: XCTestCase {
-    func testPhysicalCustodyAssessmentInventoriesCurrentCrossOverOwnedLayout() async throws {
-        let fixture = try SharedLibraryFixture()
+    func testAssessmentDerivesDestinationInsideRegressionBottle() async throws {
+        let fixture = try CustodyFixture()
         defer { fixture.remove() }
-        try fixture.makeCurrentSharedLayout()
-        try fixture.writeCrossOverManifest(appID: "42", name: "Juego compartido")
-
+        try fixture.makeSharedLayout()
+        try fixture.writeManifest(appID: "42")
         let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+
         let assessment = await manager.assessPhysicalCustody(
             regression: fixture.regression,
-            crossOver: fixture.crossOver,
-            regressionOwnedSteamAppsURL: fixture.regressionOwnedSteamApps,
-            runningState: RunningBackendState()
+            legacyIdentity: fixture.legacyIdentity,
+            runningState: .init()
         )
 
         XCTAssertEqual(assessment.status, .eligibleForTransfer)
+        XCTAssertEqual(assessment.destinationSteamAppsURL, fixture.regressionSteamApps)
         XCTAssertEqual(assessment.inventory.manifestAppIDs, ["42"])
-        XCTAssertEqual(assessment.inventory.manifestSHA256ByAppID["42"]?.count, 64)
-        XCTAssertGreaterThanOrEqual(assessment.inventory.regularFileCount, 1)
-        XCTAssertFalse(assessment.inventory.structuralFingerprint.isEmpty)
-        XCTAssertEqual(assessment.sourceSteamAppsURL, fixture.crossOverSteamApps)
-        XCTAssertEqual(assessment.destinationSteamAppsURL, fixture.regressionOwnedSteamApps)
     }
 
-    func testPreparePhysicalCustodyPlanIsDurablePrivateAndDoesNotMoveLibrary() async throws {
-        let fixture = try SharedLibraryFixture()
+    func testCallerCannotRedirectCustodyOutsideRegressionBottle() async throws {
+        let fixture = try CustodyFixture()
         defer { fixture.remove() }
-        try fixture.makeCurrentSharedLayout()
-        try fixture.writeCrossOverManifest(appID: "42", name: "Juego compartido")
+        try fixture.makeSharedLayout()
         let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
 
-        let plan = try await manager.preparePhysicalCustodyPlan(
+        let assessment = await manager.assessPhysicalCustody(
             regression: fixture.regression,
-            crossOver: fixture.crossOver,
-            regressionOwnedSteamAppsURL: fixture.regressionOwnedSteamApps,
-            runningState: RunningBackendState()
+            legacyIdentity: fixture.legacyIdentity,
+            regressionOwnedSteamAppsURL: fixture.root.appendingPathComponent("external/steamapps"),
+            runningState: .init()
         )
 
-        XCTAssertEqual(plan.phase, .planned)
-        XCTAssertEqual(plan.sourceSteamAppsURL, fixture.crossOverSteamApps)
-        XCTAssertEqual(plan.destinationSteamAppsURL, fixture.regressionOwnedSteamApps)
-        XCTAssertEqual(plan.transitionalLinks[fixture.crossOverSteamApps], fixture.regressionOwnedSteamApps)
-        XCTAssertEqual(plan.transitionalLinks[fixture.regressionSteamApps], fixture.regressionOwnedSteamApps)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.crossOverSteamApps.path))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.regressionOwnedSteamApps.path))
+        XCTAssertEqual(assessment.destinationSteamAppsURL, fixture.regressionSteamApps)
+        XCTAssertTrue(assessment.blockedReason?.contains("dentro de la botella") == true)
+    }
+
+    func testMigrationMovesSinglePhysicalTreeAndWaitsForRuntimeValidation() async throws {
+        let fixture = try CustodyFixture()
+        defer { fixture.remove() }
+        try fixture.makeSharedLayout()
+        try fixture.writeManifest(appID: "42")
+        let originalIdentity = try fixture.identity(at: fixture.crossOverSteamApps)
+        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+
+        let assessment = try await manager.migratePhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningStateProvider: { .init() }
+        )
+
+        XCTAssertEqual(assessment.status, .pendingValidation)
+        XCTAssertFalse(fixture.pathExists(fixture.crossOverSteamApps))
+        XCTAssertTrue(fixture.isPhysicalDirectory(fixture.regressionSteamApps))
+        XCTAssertEqual(try fixture.identity(at: fixture.regressionSteamApps), originalIdentity)
+        XCTAssertEqual(try fixture.physicalSteamAppsTrees(), [fixture.regressionSteamApps])
+        XCTAssertEqual(try fixture.stagedLinks().count, 1)
+    }
+
+    func testValidationLeaseAuthorizesOnlyRegressionAndFinalizeMakesOwnershipDurable() async throws {
+        let fixture = try CustodyFixture()
+        defer { fixture.remove() }
+        try fixture.makeSharedLayout()
+        try fixture.writeManifest(appID: "42")
+        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+        _ = try await manager.migratePhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningStateProvider: { .init() }
+        )
+
+        let unauthorized = await manager.authorizePhysicalLibraryCustodyMutation(
+            backend: .regression,
+            validationLease: nil
+        )
+        XCTAssertFalse(unauthorized)
+        let lease = try await manager.beginPhysicalCustodyValidation(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningState: .init()
+        )
+        let regressionAuthorized = await manager.authorizePhysicalLibraryCustodyMutation(
+            backend: .regression,
+            validationLease: lease
+        )
+        let crossOverAuthorized = await manager.authorizePhysicalLibraryCustodyMutation(
+            backend: .crossOver,
+            validationLease: lease
+        )
+        XCTAssertTrue(regressionAuthorized)
+        XCTAssertFalse(crossOverAuthorized)
+
+        let completed = try await manager.finalizePhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            validationLease: lease,
+            validationPassed: true,
+            runningState: .init()
+        )
+
+        XCTAssertEqual(completed.status, .independent)
+        XCTAssertFalse(fixture.pathExists(fixture.crossOverSteamApps))
+        XCTAssertTrue(fixture.isPhysicalDirectory(fixture.regressionSteamApps))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.receipt.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.journal.path))
+        XCTAssertTrue(try fixture.stagedLinks().isEmpty)
+
+        let restarted = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+        let assessment = await restarted.assessPhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningState: .init()
+        )
+        XCTAssertEqual(assessment.status, .independent)
+    }
+
+    func testFailedRuntimeValidationRestoresExactInitialTopology() async throws {
+        let fixture = try CustodyFixture()
+        defer { fixture.remove() }
+        try fixture.makeSharedLayout(relativeLink: true)
+        let originalRawLink = try FileManager.default.destinationOfSymbolicLink(
+            atPath: fixture.regressionSteamApps.path
+        )
+        let originalIdentity = try fixture.identity(at: fixture.crossOverSteamApps)
+        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+        _ = try await manager.migratePhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningStateProvider: { .init() }
+        )
+        let lease = try await manager.beginPhysicalCustodyValidation(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningState: .init()
+        )
+
+        let rolledBack = try await manager.finalizePhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            validationLease: lease,
+            validationPassed: false,
+            runningState: .init()
+        )
+
+        XCTAssertEqual(rolledBack.status, .eligibleForTransfer)
+        XCTAssertEqual(try fixture.identity(at: fixture.crossOverSteamApps), originalIdentity)
         XCTAssertEqual(
-            try fixture.resolvedSymbolicLink(at: fixture.regressionSteamApps),
-            fixture.crossOverSteamApps.standardizedFileURL
+            try FileManager.default.destinationOfSymbolicLink(atPath: fixture.regressionSteamApps.path),
+            originalRawLink
         )
-
-        let journal = manager.physicalCustodyJournalURL
-        let mode = try XCTUnwrap(
-            FileManager.default.attributesOfItem(atPath: journal.path)[.posixPermissions] as? NSNumber
-        ).intValue
-        XCTAssertEqual(mode & 0o777, 0o600)
-
-        let plannedAssessment = await manager.assessPhysicalCustody(
-            regression: fixture.regression,
-            crossOver: fixture.crossOver,
-            regressionOwnedSteamAppsURL: fixture.regressionOwnedSteamApps,
-            runningState: RunningBackendState()
-        )
-        XCTAssertEqual(plannedAssessment.status, .migrationPlanned)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.journal.path))
+        XCTAssertEqual(try fixture.physicalSteamAppsTrees(), [fixture.crossOverSteamApps])
     }
 
-    func testPhysicalCustodyAssessmentRecognizesCompletedOwnershipLayout() async throws {
-        let fixture = try SharedLibraryFixture()
-        defer { fixture.remove() }
-        try FileManager.default.createDirectory(
-            at: fixture.regressionOwnedSteamApps,
-            withIntermediateDirectories: true
-        )
-        try FileManager.default.removeItem(at: fixture.crossOverSteamApps)
-        try FileManager.default.createSymbolicLink(
-            at: fixture.crossOverSteamApps,
-            withDestinationURL: fixture.regressionOwnedSteamApps
-        )
-        try FileManager.default.removeItem(at: fixture.regressionSteamApps)
-        try FileManager.default.createSymbolicLink(
-            at: fixture.regressionSteamApps,
-            withDestinationURL: fixture.regressionOwnedSteamApps
-        )
-        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+    func testEveryCutoverCrashWindowRecoversIdempotently() async throws {
+        let points: [PhysicalLibraryCustodyFaultPoint] = [
+            .afterPrepared,
+            .afterWillStageDestination,
+            .afterDestinationStagedRename,
+            .afterDestinationStagedJournal,
+            .afterWillCommitCutover,
+            .afterCutoverRename,
+            .afterCutoverJournal,
+            .afterVerifyingJournal
+        ]
+        for point in points {
+            let fixture = try CustodyFixture()
+            defer { fixture.remove() }
+            try fixture.makeSharedLayout()
+            try fixture.writeManifest(appID: "42")
+            let injected = SharedSteamLibraryManager(
+                backupRootURL: fixture.backupRoot,
+                directoryEnumeratorProvider: CustodyFixture.enumerator,
+                custodyFault: { observed in
+                    if String(describing: observed) == String(describing: point) {
+                        throw InjectedCrash()
+                    }
+                }
+            )
+            do {
+                _ = try await injected.migratePhysicalCustody(
+                    regression: fixture.regression,
+                    legacyIdentity: fixture.legacyIdentity,
+                    runningStateProvider: { .init() }
+                )
+                XCTFail("La ventana \(point) debía interrumpirse")
+            } catch is InjectedCrash {
+                // Simula un proceso nuevo tras el crash.
+            }
 
-        let assessment = await manager.assessPhysicalCustody(
-            regression: fixture.regression,
-            crossOver: fixture.crossOver,
-            regressionOwnedSteamAppsURL: fixture.regressionOwnedSteamApps,
-            runningState: RunningBackendState()
-        )
-
-        XCTAssertEqual(assessment.status, .alreadyOwned)
-    }
-
-    func testCompletedOwnershipCanBeRecognizedFromLegacyIdentityWithoutCrossOverInstallation() async throws {
-        let fixture = try SharedLibraryFixture()
-        defer { fixture.remove() }
-        try fixture.makeCompletedOwnershipLayout()
-        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
-
-        let assessment = await manager.assessPhysicalCustody(
-            regression: fixture.regression,
-            legacyIdentity: PhysicalLibraryCustodyIdentity(
-                legacySteamAppsURL: fixture.crossOverSteamApps
-            ),
-            regressionOwnedSteamAppsURL: fixture.regressionOwnedSteamApps,
-            runningState: RunningBackendState()
-        )
-
-        XCTAssertEqual(assessment.status, .alreadyOwned)
-    }
-
-    func testPhysicalCustodyRejectsSourceReachedThroughSymlinkedAncestor() async throws {
-        let fixture = try SharedLibraryFixture()
-        defer { fixture.remove() }
-        let linkedBottle = fixture.root.appendingPathComponent("linked-crossover-bottle")
-        try FileManager.default.createSymbolicLink(
-            at: linkedBottle,
-            withDestinationURL: fixture.crossOver.bottleURL
-        )
-        let legacySteamApps = linkedBottle
-            .appendingPathComponent("drive_c/Program Files (x86)/Steam/steamapps")
-        try FileManager.default.removeItem(at: fixture.regressionSteamApps)
-        try FileManager.default.createSymbolicLink(
-            at: fixture.regressionSteamApps,
-            withDestinationURL: legacySteamApps
-        )
-        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
-
-        let assessment = await manager.assessPhysicalCustody(
-            regression: fixture.regression,
-            legacyIdentity: PhysicalLibraryCustodyIdentity(legacySteamAppsURL: legacySteamApps),
-            regressionOwnedSteamAppsURL: fixture.regressionOwnedSteamApps,
-            runningState: RunningBackendState()
-        )
-
-        guard case let .blocked(reason) = assessment.status else {
-            return XCTFail("Un ancestro enlazado debía bloquear la evaluación")
+            let recovered = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+            let result = try await recovered.migratePhysicalCustody(
+                regression: fixture.regression,
+                legacyIdentity: fixture.legacyIdentity,
+                runningStateProvider: { .init() }
+            )
+            XCTAssertEqual(result.status, .pendingValidation, "Fallo al recuperar \(point)")
+            XCTAssertFalse(fixture.pathExists(fixture.crossOverSteamApps))
+            XCTAssertTrue(fixture.isPhysicalDirectory(fixture.regressionSteamApps))
+            XCTAssertEqual(try fixture.physicalSteamAppsTrees().count, 1)
         }
-        XCTAssertTrue(reason.contains("ancestro") && reason.contains("enlace simbólico"), reason)
     }
 
-    func testPhysicalCustodyUsesCanonicalCaseInsensitiveOverlap() async throws {
-        let fixture = try SharedLibraryFixture()
+    func testSteamReappearingAtLastGateStopsBeforeCutoverAndRollbackIsExact() async throws {
+        let fixture = try CustodyFixture()
         defer { fixture.remove() }
-        try fixture.makeCurrentSharedLayout()
-        let differentlyCasedSource = URL(
-            fileURLWithPath: fixture.crossOverSteamApps.path.uppercased(),
-            isDirectory: true
-        )
+        try fixture.makeSharedLayout()
         let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+        let states = LockedStates([
+            .init(),
+            .init(),
+            .init(),
+            .init(regressionPIDs: [404]),
+        ])
 
-        let assessment = await manager.assessPhysicalCustody(
-            regression: fixture.regression,
-            crossOver: fixture.crossOver,
-            regressionOwnedSteamAppsURL: differentlyCasedSource.appendingPathComponent("future"),
-            runningState: RunningBackendState()
-        )
-
-        guard case let .blocked(reason) = assessment.status else {
-            return XCTFail("El solapamiento canónico debía bloquear la evaluación")
+        await assertUnsafeLibraryState(containing: "Steam debe estar completamente cerrado") {
+            _ = try await manager.migratePhysicalCustody(
+                regression: fixture.regression,
+                legacyIdentity: fixture.legacyIdentity,
+                runningStateProvider: { states.next() }
+            )
         }
-        XCTAssertTrue(reason.contains("solapa"), reason)
+        XCTAssertTrue(fixture.isPhysicalDirectory(fixture.crossOverSteamApps))
+        XCTAssertFalse(fixture.pathExists(fixture.regressionSteamApps))
+        XCTAssertEqual(try fixture.stagedLinks().count, 1)
+
+        _ = try await manager.rollbackPhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningState: .init()
+        )
+        XCTAssertTrue(fixture.isPhysicalDirectory(fixture.crossOverSteamApps))
+        XCTAssertNotNil(try? FileManager.default.destinationOfSymbolicLink(atPath: fixture.regressionSteamApps.path))
+        let interlock = await manager.currentPhysicalLibraryCustodyInterlock()
+        XCTAssertEqual(interlock.mutationPolicy, .unrestricted)
     }
 
-    func testPhysicalCustodyInventoryRejectsDuplicateCanonicalAppID() async throws {
-        let fixture = try SharedLibraryFixture()
+    func testInventoryMutationAtLastGateStopsBeforeCutover() async throws {
+        let fixture = try CustodyFixture()
         defer { fixture.remove() }
-        try fixture.makeCurrentSharedLayout()
-        try fixture.writeCrossOverManifest(appID: "42", name: "Juego")
-        try fixture.writeCrossOverManifest(appID: "00042", name: "Duplicado")
-        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
-
-        let assessment = await manager.assessPhysicalCustody(
-            regression: fixture.regression,
-            crossOver: fixture.crossOver,
-            regressionOwnedSteamAppsURL: fixture.regressionOwnedSteamApps,
-            runningState: RunningBackendState()
-        )
-
-        guard case let .blocked(reason) = assessment.status else {
-            return XCTFail("Un App ID canónico duplicado debía bloquear el inventario")
-        }
-        XCTAssertTrue(reason.contains("App ID") && reason.contains("duplicado"), reason)
-    }
-
-    func testPhysicalCustodyInventoryFailsClosedWhenEnumeratorReportsUnreadableSubtree() async throws {
-        let fixture = try SharedLibraryFixture()
-        defer { fixture.remove() }
-        try fixture.makeCurrentSharedLayout()
-        let failingURL = fixture.crossOverSteamApps.appendingPathComponent("inaccesible")
+        try fixture.makeSharedLayout()
+        let changed = fixture.crossOverSteamApps.appendingPathComponent("late-change.bin")
         let manager = SharedSteamLibraryManager(
             backupRootURL: fixture.backupRoot,
-            directoryEnumeratorProvider: { root, keys, options, reportFailure in
-                reportFailure(failingURL, "Permiso denegado")
-                return FileManager.default.enumerator(
-                    at: root,
-                    includingPropertiesForKeys: keys,
-                    options: options
-                )
+            directoryEnumeratorProvider: CustodyFixture.enumerator,
+            custodyFault: { point in
+                if String(describing: point)
+                    == String(describing: PhysicalLibraryCustodyFaultPoint.afterDestinationStagedJournal)
+                {
+                    try Data("cambio tardío".utf8).write(to: changed)
+                }
             }
         )
 
-        let assessment = await manager.assessPhysicalCustody(
-            regression: fixture.regression,
-            crossOver: fixture.crossOver,
-            regressionOwnedSteamAppsURL: fixture.regressionOwnedSteamApps,
-            runningState: RunningBackendState()
-        )
-
-        guard case let .blocked(reason) = assessment.status else {
-            return XCTFail("Un error del enumerador debía bloquear el inventario")
-        }
-        XCTAssertTrue(reason.contains("enumerar") && reason.contains("inaccesible"), reason)
-    }
-
-    func testPhysicalCustodyInventoryEnforcesEntryDepthAndByteBudgets() async throws {
-        let fixture = try SharedLibraryFixture()
-        defer { fixture.remove() }
-        try fixture.makeCurrentSharedLayout()
-        try FileManager.default.createDirectory(
-            at: fixture.crossOverSteamApps.appendingPathComponent("a/b", isDirectory: true),
-            withIntermediateDirectories: true
-        )
-        try Data([1, 2, 3]).write(
-            to: fixture.crossOverSteamApps.appendingPathComponent("a/b/payload.bin")
-        )
-
-        let entryManager = SharedSteamLibraryManager(
-            backupRootURL: fixture.backupRoot,
-            inventoryLimits: .init(maxEntries: 1, maxDepth: 32, maxTotalRegularFileBytes: 1_024)
-        )
-        let entryAssessment = await entryManager.assessPhysicalCustody(
-            regression: fixture.regression,
-            crossOver: fixture.crossOver,
-            regressionOwnedSteamAppsURL: fixture.regressionOwnedSteamApps,
-            runningState: RunningBackendState()
-        )
-        XCTAssertTrue(entryAssessment.status.blockedReason?.contains("entradas") == true)
-
-        let depthManager = SharedSteamLibraryManager(
-            backupRootURL: fixture.backupRoot,
-            inventoryLimits: .init(maxEntries: 32, maxDepth: 1, maxTotalRegularFileBytes: 1_024)
-        )
-        let depthAssessment = await depthManager.assessPhysicalCustody(
-            regression: fixture.regression,
-            crossOver: fixture.crossOver,
-            regressionOwnedSteamAppsURL: fixture.regressionOwnedSteamApps,
-            runningState: RunningBackendState()
-        )
-        XCTAssertTrue(depthAssessment.status.blockedReason?.contains("profundidad") == true)
-
-        let byteManager = SharedSteamLibraryManager(
-            backupRootURL: fixture.backupRoot,
-            inventoryLimits: .init(maxEntries: 32, maxDepth: 32, maxTotalRegularFileBytes: 2)
-        )
-        let byteAssessment = await byteManager.assessPhysicalCustody(
-            regression: fixture.regression,
-            crossOver: fixture.crossOver,
-            regressionOwnedSteamAppsURL: fixture.regressionOwnedSteamApps,
-            runningState: RunningBackendState()
-        )
-        XCTAssertTrue(byteAssessment.status.blockedReason?.contains("bytes") == true)
-    }
-
-    func testStandardInventoryEntryBudgetIsBoundedWellBelowLegacyPressureCeiling() {
-        XCTAssertEqual(PhysicalLibraryInventoryLimits.standard.maxEntries, 1_000_000)
-        XCTAssertLessThan(PhysicalLibraryInventoryLimits.standard.maxEntries, 5_000_000)
-    }
-
-    func testPhysicalCustodyInventoryHonorsTaskCancellation() async throws {
-        let fixture = try SharedLibraryFixture()
-        defer { fixture.remove() }
-        try fixture.makeCurrentSharedLayout()
-        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
-        let regression = fixture.regression
-        let crossOver = fixture.crossOver
-        let destination = fixture.regressionOwnedSteamApps
-
-        let assessment = await Task { () -> PhysicalLibraryCustodyAssessment in
-            withUnsafeCurrentTask { $0?.cancel() }
-            return await manager.assessPhysicalCustody(
-                regression: regression,
-                crossOver: crossOver,
-                regressionOwnedSteamAppsURL: destination,
-                runningState: RunningBackendState()
-            )
-        }.value
-
-        XCTAssertTrue(assessment.status.blockedReason?.contains("cancelado") == true)
-    }
-
-    func testPhysicalCustodyPlanRecoversIdempotentlyAfterPlanningInterruptionAndCanRollBack() async throws {
-        let fixture = try SharedLibraryFixture()
-        defer { fixture.remove() }
-        try fixture.makeCurrentSharedLayout()
-        try fixture.writeCrossOverManifest(appID: "42", name: "Juego compartido")
-
-        let firstManager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
-        let original = try await firstManager.preparePhysicalCustodyPlan(
-            regression: fixture.regression,
-            crossOver: fixture.crossOver,
-            regressionOwnedSteamAppsURL: fixture.regressionOwnedSteamApps,
-            runningState: RunningBackendState()
-        )
-
-        let recoveredManager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
-        let recovered = try await recoveredManager.recoverPhysicalCustodyPlan(
-            regression: fixture.regression,
-            crossOver: fixture.crossOver,
-            regressionOwnedSteamAppsURL: fixture.regressionOwnedSteamApps,
-            runningState: RunningBackendState()
-        )
-        let repeated = try await recoveredManager.preparePhysicalCustodyPlan(
-            regression: fixture.regression,
-            crossOver: fixture.crossOver,
-            regressionOwnedSteamAppsURL: fixture.regressionOwnedSteamApps,
-            runningState: RunningBackendState()
-        )
-
-        XCTAssertEqual(recovered, original)
-        XCTAssertEqual(repeated, original)
-        try await recoveredManager.cancelPhysicalCustodyPlan()
-        try await recoveredManager.cancelPhysicalCustodyPlan()
-        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.physicalCustodyJournal.path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.crossOverSteamApps.path))
-    }
-
-    func testPhysicalCustodyPreflightRejectsRunningSteamWithoutWritingJournal() async throws {
-        let fixture = try SharedLibraryFixture()
-        defer { fixture.remove() }
-        try fixture.makeCurrentSharedLayout()
-        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
-
-        await assertUnsafeLibraryState(containing: "Steam debe estar completamente cerrado") {
-            _ = try await manager.preparePhysicalCustodyPlan(
+        await assertUnsafeLibraryState(containing: "cambió antes del cutover") {
+            _ = try await manager.migratePhysicalCustody(
                 regression: fixture.regression,
-                crossOver: fixture.crossOver,
-                regressionOwnedSteamAppsURL: fixture.regressionOwnedSteamApps,
-                runningState: RunningBackendState(regressionPIDs: [123])
+                legacyIdentity: fixture.legacyIdentity,
+                runningStateProvider: { .init() }
             )
         }
-        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.physicalCustodyJournal.path))
+        XCTAssertTrue(fixture.isPhysicalDirectory(fixture.crossOverSteamApps))
+        XCTAssertFalse(fixture.pathExists(fixture.regressionSteamApps))
+        XCTAssertEqual(try fixture.stagedLinks().count, 1)
     }
 
-    func testPhysicalCustodyPreflightRejectsUnexpectedSourceSymlink() async throws {
-        let fixture = try SharedLibraryFixture()
+    func testCrossVolumeAssessmentFailsBeforeMutation() async throws {
+        let fixture = try CustodyFixture()
         defer { fixture.remove() }
-        try FileManager.default.removeItem(at: fixture.crossOverSteamApps)
-        try FileManager.default.createSymbolicLink(
-            at: fixture.crossOverSteamApps,
-            withDestinationURL: fixture.root.appendingPathComponent("unexpected", isDirectory: true)
-        )
-        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
-
-        let assessment = await manager.assessPhysicalCustody(
-            regression: fixture.regression,
-            crossOver: fixture.crossOver,
-            regressionOwnedSteamAppsURL: fixture.regressionOwnedSteamApps,
-            runningState: RunningBackendState()
-        )
-        guard case let .blocked(reason) = assessment.status else {
-            return XCTFail("La fuente enlazada debía bloquear la transferencia")
-        }
-        XCTAssertTrue(reason.contains("enlace simbólico inesperado"))
-    }
-
-    func testPhysicalCustodyPreflightRejectsOccupiedDestination() async throws {
-        let fixture = try SharedLibraryFixture()
-        defer { fixture.remove() }
-        try fixture.makeCurrentSharedLayout()
-        try FileManager.default.createDirectory(
-            at: fixture.regressionOwnedSteamApps,
-            withIntermediateDirectories: true
-        )
-        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
-
-        await assertUnsafeLibraryState(containing: "destino de Regression ya está ocupado") {
-            _ = try await manager.preparePhysicalCustodyPlan(
-                regression: fixture.regression,
-                crossOver: fixture.crossOver,
-                regressionOwnedSteamAppsURL: fixture.regressionOwnedSteamApps,
-                runningState: RunningBackendState()
-            )
-        }
-    }
-
-    func testPhysicalCustodyPreflightRejectsCrossVolumeMove() async throws {
-        let fixture = try SharedLibraryFixture()
-        defer { fixture.remove() }
-        try fixture.makeCurrentSharedLayout()
+        try fixture.makeSharedLayout()
         let manager = SharedSteamLibraryManager(
             backupRootURL: fixture.backupRoot,
             volumeIdentityProvider: { url in
-                url.path.contains("crossover-bottle") ? "source-volume" : "destination-volume"
+                url.path.contains("crossover-bottle") ? "source" : "destination"
             }
-        )
-
-        await assertUnsafeLibraryState(containing: "volúmenes distintos") {
-            _ = try await manager.preparePhysicalCustodyPlan(
-                regression: fixture.regression,
-                crossOver: fixture.crossOver,
-                regressionOwnedSteamAppsURL: fixture.regressionOwnedSteamApps,
-                runningState: RunningBackendState()
-            )
-        }
-    }
-
-    func testPhysicalCustodyRecoveryRejectsInventoryChangedAfterInterruption() async throws {
-        let fixture = try SharedLibraryFixture()
-        defer { fixture.remove() }
-        try fixture.makeCurrentSharedLayout()
-        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
-        _ = try await manager.preparePhysicalCustodyPlan(
-            regression: fixture.regression,
-            crossOver: fixture.crossOver,
-            regressionOwnedSteamAppsURL: fixture.regressionOwnedSteamApps,
-            runningState: RunningBackendState()
-        )
-        try Data("cambio posterior".utf8).write(
-            to: fixture.crossOverSteamApps.appendingPathComponent("changed.bin")
-        )
-
-        await assertUnsafeLibraryState(containing: "inventario cambió") {
-            _ = try await manager.recoverPhysicalCustodyPlan(
-                regression: fixture.regression,
-                crossOver: fixture.crossOver,
-                regressionOwnedSteamAppsURL: fixture.regressionOwnedSteamApps,
-                runningState: RunningBackendState()
-            )
-        }
-    }
-
-    func testPhysicalCustodyPlanCancellationRejectsUnexpectedJournalDirectory() async throws {
-        let fixture = try SharedLibraryFixture()
-        defer { fixture.remove() }
-        try FileManager.default.createDirectory(
-            at: fixture.physicalCustodyJournal,
-            withIntermediateDirectories: true
-        )
-        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
-
-        await assertUnsafeLibraryState(containing: "no es un archivo regular") {
-            try await manager.cancelPhysicalCustodyPlan()
-        }
-        var isDirectory: ObjCBool = false
-        XCTAssertTrue(
-            FileManager.default.fileExists(
-                atPath: fixture.physicalCustodyJournal.path,
-                isDirectory: &isDirectory
-            )
-        )
-        XCTAssertTrue(isDirectory.boolValue)
-    }
-
-    func testPhysicalCustodyPlanCancellationCannotDeleteDirectorySubstitutedBeforeUnlink() async throws {
-        let fixture = try SharedLibraryFixture()
-        defer { fixture.remove() }
-        try fixture.makeCurrentSharedLayout()
-        let journal = fixture.physicalCustodyJournal
-        let manager = SharedSteamLibraryManager(
-            backupRootURL: fixture.backupRoot,
-            directoryEnumeratorProvider: { root, keys, options, reportFailure in
-                FileManager.default.enumerator(
-                    at: root,
-                    includingPropertiesForKeys: keys,
-                    options: options,
-                    errorHandler: { url, error in
-                        reportFailure(url, error.localizedDescription)
-                        return false
-                    }
-                )
-            },
-            beforeJournalUnlink: {
-                try? FileManager.default.removeItem(at: journal)
-                try? FileManager.default.createDirectory(at: journal, withIntermediateDirectories: false)
-            }
-        )
-        _ = try await manager.preparePhysicalCustodyPlan(
-            regression: fixture.regression,
-            crossOver: fixture.crossOver,
-            regressionOwnedSteamAppsURL: fixture.regressionOwnedSteamApps,
-            runningState: RunningBackendState()
-        )
-
-        await assertUnsafeLibraryState(containing: "cancelar") {
-            try await manager.cancelPhysicalCustodyPlan()
-        }
-        var isDirectory: ObjCBool = false
-        XCTAssertTrue(FileManager.default.fileExists(atPath: journal.path, isDirectory: &isDirectory))
-        XCTAssertTrue(isDirectory.boolValue)
-    }
-
-    func testPhysicalCustodyJournalReaderRejectsFIFOWithoutOpeningIt() async throws {
-        let fixture = try SharedLibraryFixture()
-        defer { fixture.remove() }
-        try FileManager.default.createDirectory(at: fixture.backupRoot, withIntermediateDirectories: true)
-        XCTAssertEqual(mkfifo(fixture.physicalCustodyJournal.path, 0o600), 0)
-        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
-
-        await assertUnsafeLibraryState(containing: "archivo regular") {
-            _ = try await manager.recoverPhysicalCustodyPlan(
-                regression: fixture.regression,
-                legacyIdentity: .init(legacySteamAppsURL: fixture.crossOverSteamApps),
-                regressionOwnedSteamAppsURL: fixture.regressionOwnedSteamApps,
-                runningState: RunningBackendState()
-            )
-        }
-    }
-
-    func testPhysicalCustodyJournalReaderRejectsOversizedFileBeforeDecoding() async throws {
-        let fixture = try SharedLibraryFixture()
-        defer { fixture.remove() }
-        try FileManager.default.createDirectory(at: fixture.backupRoot, withIntermediateDirectories: true)
-        try Data(repeating: 0x41, count: 65).write(to: fixture.physicalCustodyJournal)
-        let manager = SharedSteamLibraryManager(
-            backupRootURL: fixture.backupRoot,
-            inventoryLimits: .init(
-                maxEntries: 32,
-                maxDepth: 32,
-                maxTotalRegularFileBytes: 1_024,
-                maxJournalBytes: 64
-            )
-        )
-
-        await assertUnsafeLibraryState(containing: "límite") {
-            _ = try await manager.recoverPhysicalCustodyPlan(
-                regression: fixture.regression,
-                legacyIdentity: .init(legacySteamAppsURL: fixture.crossOverSteamApps),
-                regressionOwnedSteamAppsURL: fixture.regressionOwnedSteamApps,
-                runningState: RunningBackendState()
-            )
-        }
-    }
-
-    func testPhysicalCustodyAssessmentDoesNotTreatInvalidJournalAsPlanned() async throws {
-        let fixture = try SharedLibraryFixture()
-        defer { fixture.remove() }
-        try fixture.makeCurrentSharedLayout()
-        try FileManager.default.createDirectory(at: fixture.backupRoot, withIntermediateDirectories: true)
-        try Data("no es JSON".utf8).write(to: fixture.physicalCustodyJournal)
-        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
-
-        let assessment = await manager.assessPhysicalCustody(
-            regression: fixture.regression,
-            crossOver: fixture.crossOver,
-            regressionOwnedSteamAppsURL: fixture.regressionOwnedSteamApps,
-            runningState: RunningBackendState()
-        )
-
-        guard case let .blocked(reason) = assessment.status else {
-            return XCTFail("Un journal corrupto no debía convertirse en migrationPlanned")
-        }
-        XCTAssertTrue(reason.contains("journal") && reason.contains("recuperar"), reason)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.physicalCustodyJournal.path))
-    }
-
-    func testPhysicalCustodyAssessmentRejectsJournalForDifferentDestination() async throws {
-        let fixture = try SharedLibraryFixture()
-        defer { fixture.remove() }
-        try fixture.makeCurrentSharedLayout()
-        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
-        _ = try await manager.preparePhysicalCustodyPlan(
-            regression: fixture.regression,
-            crossOver: fixture.crossOver,
-            regressionOwnedSteamAppsURL: fixture.regressionOwnedSteamApps,
-            runningState: RunningBackendState()
         )
 
         let assessment = await manager.assessPhysicalCustody(
             regression: fixture.regression,
-            crossOver: fixture.crossOver,
-            regressionOwnedSteamAppsURL: fixture.root.appendingPathComponent("otro-destino/steamapps"),
-            runningState: RunningBackendState()
+            legacyIdentity: fixture.legacyIdentity,
+            runningState: .init()
         )
 
-        guard case let .blocked(reason) = assessment.status else {
-            return XCTFail("Un journal de otra ruta no debía convertirse en migrationPlanned")
-        }
-        XCTAssertTrue(reason.contains("journal") && reason.contains("instalaciones"), reason)
+        XCTAssertTrue(assessment.blockedReason?.contains("volúmenes distintos") == true)
+        XCTAssertTrue(fixture.isPhysicalDirectory(fixture.crossOverSteamApps))
+        XCTAssertNotNil(try? FileManager.default.destinationOfSymbolicLink(atPath: fixture.regressionSteamApps.path))
     }
 
-    func testPhysicalCustodyJournalRejectsSymlinkedParentWithoutDeletingTarget() async throws {
-        let fixture = try SharedLibraryFixture()
+    func testOccupiedDestinationFailsClosedWithoutReplacingIt() async throws {
+        let fixture = try CustodyFixture()
         defer { fixture.remove() }
-        let physicalBackup = fixture.root.appendingPathComponent("physical-backup", isDirectory: true)
-        let linkedBackup = fixture.root.appendingPathComponent("linked-backup", isDirectory: true)
-        try FileManager.default.createDirectory(at: physicalBackup, withIntermediateDirectories: true)
-        try Data("{}".utf8).write(
-            to: physicalBackup.appendingPathComponent("physical-custody-journal.json")
-        )
-        try FileManager.default.createSymbolicLink(at: linkedBackup, withDestinationURL: physicalBackup)
-        let manager = SharedSteamLibraryManager(backupRootURL: linkedBackup)
-
-        await assertUnsafeLibraryState(containing: "ancestro") {
-            try await manager.cancelPhysicalCustodyPlan()
-        }
-        XCTAssertTrue(
-            FileManager.default.fileExists(
-                atPath: physicalBackup.appendingPathComponent("physical-custody-journal.json").path
-            )
-        )
-    }
-
-    func testConfigureRollsBackOriginalSteamAppsWhenReceiptCannotBeWritten() async throws {
-        let fixture = try SharedLibraryFixture()
-        defer { fixture.remove() }
-        try Data("preservar".utf8).write(to: fixture.regressionSteamApps.appendingPathComponent("marker.txt"))
-        try FileManager.default.createDirectory(
-            at: fixture.backupRoot.appendingPathComponent("shared-library-receipt.json"),
-            withIntermediateDirectories: true
-        )
-
-        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
-        do {
-            _ = try await manager.configure(
-                regression: fixture.regression,
-                crossOver: fixture.crossOver,
-                runningState: RunningBackendState()
-            )
-            XCTFail("La escritura del recibo debía fallar")
-        } catch {
-            XCTAssertTrue(
-                FileManager.default.fileExists(
-                    atPath: fixture.regressionSteamApps.appendingPathComponent("marker.txt").path
-                )
-            )
-            XCTAssertThrowsError(
-                try FileManager.default.destinationOfSymbolicLink(
-                    atPath: fixture.regressionSteamApps.path
-                )
-            )
-        }
-    }
-
-    func testConfigureCreatesRecoverableSharedLibraryAndPrivateReceipt() async throws {
-        let fixture = try SharedLibraryFixture()
-        defer { fixture.remove() }
-        let manifest = fixture.crossOver.steamRootURL
-            .appendingPathComponent("steamapps/appmanifest_42.acf")
-        try Data(#"""
-        "AppState"
-        {
-            "appid" "42"
-            "name" "Juego compartido"
-            "installdir" "Shared Game"
-        }
-        """#.utf8).write(to: manifest)
+        try fixture.makeSharedLayout()
+        try FileManager.default.removeItem(at: fixture.regressionSteamApps)
+        try FileManager.default.createDirectory(at: fixture.regressionSteamApps, withIntermediateDirectories: false)
+        try Data("preservar".utf8).write(to: fixture.regressionSteamApps.appendingPathComponent("marker"))
         let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
 
-        let link = try await manager.configure(
+        let assessment = await manager.assessPhysicalCustody(
             regression: fixture.regression,
-            crossOver: fixture.crossOver,
-            runningState: RunningBackendState()
+            legacyIdentity: fixture.legacyIdentity,
+            runningState: .init()
         )
-        let assessment = await manager.assess(
-            regression: fixture.regression,
-            crossOver: fixture.crossOver
-        )
-        XCTAssertEqual(link, fixture.regressionSteamApps)
-        XCTAssertEqual(assessment.status, .ready)
+
+        XCTAssertTrue(assessment.blockedReason?.contains("ocupado") == true)
         XCTAssertEqual(
-            SteamManifestParser.games(
-                in: fixture.regression.steamRootURL,
-                backend: .regression
-            ).map(\.appID),
-            ["42"]
+            try String(contentsOf: fixture.regressionSteamApps.appendingPathComponent("marker")),
+            "preservar"
+        )
+    }
+
+    func testAdversarialJournalSymlinkFailsClosed() async throws {
+        let fixture = try CustodyFixture()
+        defer { fixture.remove() }
+        try fixture.makeSharedLayout()
+        try FileManager.default.createDirectory(at: fixture.backupRoot, withIntermediateDirectories: true)
+        let target = fixture.root.appendingPathComponent("attacker.json")
+        try Data("{}".utf8).write(to: target)
+        try FileManager.default.createSymbolicLink(at: fixture.journal, withDestinationURL: target)
+        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+
+        let snapshot = await manager.currentPhysicalLibraryCustodyInterlock()
+
+        XCTAssertEqual(snapshot.mutationPolicy, .blocked)
+        XCTAssertTrue(fixture.isPhysicalDirectory(fixture.crossOverSteamApps))
+    }
+
+    func testSparseHundredTenGiBLibraryMovesByRenameWithoutDuplication() async throws {
+        let fixture = try CustodyFixture()
+        defer { fixture.remove() }
+        try fixture.makeSharedLayout()
+        let sparse = fixture.crossOverSteamApps.appendingPathComponent("common/huge.sparse")
+        try FileManager.default.createDirectory(at: sparse.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let descriptor = open(sparse.path, O_CREAT | O_WRONLY | O_CLOEXEC, 0o600)
+        XCTAssertGreaterThanOrEqual(descriptor, 0)
+        let logicalBytes: off_t = 110 * 1_024 * 1_024 * 1_024
+        XCTAssertEqual(ftruncate(descriptor, logicalBytes), 0)
+        close(descriptor)
+        let identity = try fixture.identity(at: fixture.crossOverSteamApps)
+        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+
+        let result = try await manager.migratePhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningStateProvider: { .init() }
         )
 
-        let receipt = fixture.backupRoot.appendingPathComponent("shared-library-receipt.json")
-        let mode = try XCTUnwrap(
-            FileManager.default.attributesOfItem(atPath: receipt.path)[.posixPermissions] as? NSNumber
-        ).intValue
-        XCTAssertEqual(mode & 0o777, 0o600)
+        XCTAssertEqual(result.inventory.totalRegularFileBytes, UInt64(logicalBytes))
+        XCTAssertEqual(try fixture.identity(at: fixture.regressionSteamApps), identity)
+        XCTAssertEqual(try fixture.physicalSteamAppsTrees().count, 1)
+    }
+
+    func testFinalizeRejectsForgedOrMissingValidationSession() async throws {
+        let fixture = try CustodyFixture()
+        defer { fixture.remove() }
+        try fixture.makeSharedLayout()
+        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+        _ = try await manager.migratePhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningStateProvider: { .init() }
+        )
+        let lease = try await manager.beginPhysicalCustodyValidation(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningState: .init()
+        )
+
+        await assertUnsafeLibraryState(containing: "Steam debe estar completamente cerrado") {
+            _ = try await manager.finalizePhysicalCustody(
+                regression: fixture.regression,
+                legacyIdentity: fixture.legacyIdentity,
+                validationLease: lease,
+                validationPassed: true,
+                runningState: .init(regressionPIDs: [99])
+            )
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.journal.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.receipt.path))
+    }
+
+    func testFinalizationCrashWindowsRecoverWithoutLosingRollbackMarkerPrematurely() async throws {
+        let points: [PhysicalLibraryCustodyFaultPoint] = [
+            .afterWillFinalizeJournal,
+            .afterFinalizeReceipt,
+            .afterFinalizeMarkerUnlink,
+            .afterCompletedJournal,
+            .beforeFinalJournalUnlink
+        ]
+        for point in points {
+            let fixture = try CustodyFixture()
+            defer { fixture.remove() }
+            try fixture.makeSharedLayout()
+            let injected = SharedSteamLibraryManager(
+                backupRootURL: fixture.backupRoot,
+                directoryEnumeratorProvider: CustodyFixture.enumerator,
+                custodyFault: { observed in
+                    if String(describing: observed) == String(describing: point) {
+                        throw InjectedCrash()
+                    }
+                }
+            )
+            _ = try await injected.migratePhysicalCustody(
+                regression: fixture.regression,
+                legacyIdentity: fixture.legacyIdentity,
+                runningStateProvider: { .init() }
+            )
+            do {
+                _ = try await injected.finalizePhysicalCustodyValidated(
+                    regression: fixture.regression,
+                    legacyIdentity: fixture.legacyIdentity,
+                    validationConfirmed: true,
+                    validationEvidence: "Steam, render, entrada y gameplay validados",
+                    runningState: .init()
+                )
+                XCTFail("La ventana \(point) debía interrumpirse")
+            } catch is InjectedCrash {}
+
+            let recovered = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+            let result = try await recovered.finalizePhysicalCustodyValidated(
+                regression: fixture.regression,
+                legacyIdentity: fixture.legacyIdentity,
+                validationConfirmed: true,
+                validationEvidence: "Steam, render, entrada y gameplay validados",
+                runningState: .init()
+            )
+            XCTAssertEqual(result.status, .independent, "Fallo al recuperar \(point)")
+            XCTAssertTrue(fixture.isPhysicalDirectory(fixture.regressionSteamApps))
+            XCTAssertFalse(fixture.pathExists(fixture.crossOverSteamApps))
+            XCTAssertTrue(try fixture.stagedLinks().isEmpty)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.journal.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.receipt.path))
+        }
+    }
+
+    func testCrashAfterMarkerQuarantineRecoversWithoutHiddenLeaf() async throws {
+        let fixture = try CustodyFixture()
+        defer { fixture.remove() }
+        try fixture.makeSharedLayout()
+        let manager = SharedSteamLibraryManager(
+            backupRootURL: fixture.backupRoot,
+            directoryEnumeratorProvider: CustodyFixture.enumerator,
+            custodyFault: { point in
+                if String(describing: point)
+                    == String(describing: PhysicalLibraryCustodyFaultPoint.afterFinalizeMarkerQuarantine)
+                {
+                    throw InjectedCrash()
+                }
+            }
+        )
+        _ = try await manager.migratePhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningStateProvider: { .init() }
+        )
+        do {
+            _ = try await manager.finalizePhysicalCustodyValidated(
+                regression: fixture.regression,
+                legacyIdentity: fixture.legacyIdentity,
+                validationConfirmed: true,
+                validationEvidence: "Validación completa",
+                runningState: .init()
+            )
+            XCTFail("Se esperaba interrupción")
+        } catch is InjectedCrash {}
+
+        let restarted = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+        let result = try await restarted.migratePhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningStateProvider: { .init() }
+        )
+        XCTAssertEqual(result.status, .independent)
+        XCTAssertTrue(try fixture.custodyQuarantines().isEmpty)
+        XCTAssertTrue(try fixture.stagedLinks().isEmpty)
+    }
+
+    func testCrashAfterJournalQuarantineRecoversWithoutOrphan() async throws {
+        let fixture = try CustodyFixture()
+        defer { fixture.remove() }
+        try fixture.makeSharedLayout()
+        let manager = SharedSteamLibraryManager(
+            backupRootURL: fixture.backupRoot,
+            directoryEnumeratorProvider: CustodyFixture.enumerator,
+            custodyFault: { point in
+                if String(describing: point)
+                    == String(describing: PhysicalLibraryCustodyFaultPoint.afterJournalQuarantine)
+                {
+                    throw InjectedCrash()
+                }
+            }
+        )
+        _ = try await manager.migratePhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningStateProvider: { .init() }
+        )
+        do {
+            _ = try await manager.rollbackPhysicalCustody(
+                regression: fixture.regression,
+                legacyIdentity: fixture.legacyIdentity,
+                runningState: .init()
+            )
+            XCTFail("Se esperaba interrupción")
+        } catch is InjectedCrash {}
+
+        let restarted = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+        let result = try await restarted.migratePhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningStateProvider: { .init() }
+        )
+        XCTAssertEqual(result.status, .pendingValidation)
+        XCTAssertTrue(try fixture.custodyQuarantines().isEmpty)
+    }
+
+    func testCrashBetweenRollbackMarkerAndJournalCleanupResumesToEligible() async throws {
+        let fixture = try CustodyFixture()
+        defer { fixture.remove() }
+        try fixture.makeSharedLayout()
+        let manager = SharedSteamLibraryManager(
+            backupRootURL: fixture.backupRoot,
+            directoryEnumeratorProvider: CustodyFixture.enumerator,
+            custodyFault: { point in
+                if point == .afterRollbackStartedMarkerUnlink { throw InjectedCrash() }
+            }
+        )
+        _ = try await manager.migratePhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningStateProvider: { .init() }
+        )
+        do {
+            _ = try await manager.rollbackPhysicalCustody(
+                regression: fixture.regression,
+                legacyIdentity: fixture.legacyIdentity,
+                runningState: .init()
+            )
+            XCTFail("Se esperaba interrupción")
+        } catch is InjectedCrash {}
+
+        let restarted = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+        let result = try await restarted.migratePhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningStateProvider: { .init() }
+        )
+        XCTAssertEqual(result.status, .eligibleForTransfer)
+        XCTAssertFalse(fixture.pathExists(fixture.journal))
+        XCTAssertFalse(fixture.pathExists(fixture.backupRoot.appendingPathComponent("physical-custody-started.json")))
+    }
+
+    func testCrashAfterStartedMarkerQuarantineRecoversWithoutResidue() async throws {
+        let fixture = try CustodyFixture()
+        defer { fixture.remove() }
+        try fixture.makeSharedLayout()
+        let manager = SharedSteamLibraryManager(
+            backupRootURL: fixture.backupRoot,
+            directoryEnumeratorProvider: CustodyFixture.enumerator,
+            custodyFault: { point in
+                if point == .afterStartedMarkerQuarantine { throw InjectedCrash() }
+            }
+        )
+        _ = try await manager.migratePhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningStateProvider: { .init() }
+        )
+        do {
+            _ = try await manager.rollbackPhysicalCustody(
+                regression: fixture.regression,
+                legacyIdentity: fixture.legacyIdentity,
+                runningState: .init()
+            )
+            XCTFail("Se esperaba interrupción")
+        } catch is InjectedCrash {}
+
+        let restarted = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+        let result = try await restarted.migratePhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningStateProvider: { .init() }
+        )
+        XCTAssertEqual(result.status, .eligibleForTransfer)
+        XCTAssertTrue(try fixture.custodyQuarantines().isEmpty)
+    }
+
+    func testDeletingPrimaryReceiptAfterFinalUsesDurableMirror() async throws {
+        let fixture = try CustodyFixture()
+        defer { fixture.remove() }
+        try fixture.makeSharedLayout()
+        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+        _ = try await manager.migratePhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningStateProvider: { .init() }
+        )
+        _ = try await manager.finalizePhysicalCustodyValidated(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            validationConfirmed: true,
+            validationEvidence: "Validación completa",
+            runningState: .init()
+        )
+        try FileManager.default.removeItem(at: fixture.receipt)
+
+        let restarted = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+        let snapshot = await restarted.currentPhysicalLibraryCustodyInterlock()
+        XCTAssertEqual(snapshot.status, .independent)
+        XCTAssertEqual(snapshot.mutationPolicy, .unrestricted)
+        XCTAssertTrue(snapshot.crossOverUnavailable)
+    }
+
+    func testParentDirectorySwapAfterJournalIsDetectedBeforeAnyRename() async throws {
+        let fixture = try CustodyFixture()
+        defer { fixture.remove() }
+        try fixture.makeSharedLayout()
+        let regressionSteamRoot = fixture.regressionSteamApps.deletingLastPathComponent()
+        let displaced = regressionSteamRoot.deletingLastPathComponent()
+            .appendingPathComponent("Steam-displaced")
+        let manager = SharedSteamLibraryManager(
+            backupRootURL: fixture.backupRoot,
+            directoryEnumeratorProvider: CustodyFixture.enumerator,
+            custodyFault: { point in
+                guard String(describing: point) == String(describing: PhysicalLibraryCustodyFaultPoint.afterPrepared) else {
+                    return
+                }
+                try FileManager.default.moveItem(at: regressionSteamRoot, to: displaced)
+                try FileManager.default.createDirectory(at: regressionSteamRoot, withIntermediateDirectories: false)
+                throw InjectedCrash()
+            }
+        )
+        do {
+            _ = try await manager.migratePhysicalCustody(
+                regression: fixture.regression,
+                legacyIdentity: fixture.legacyIdentity,
+                runningStateProvider: { .init() }
+            )
+            XCTFail("Se esperaba interrupción")
+        } catch is InjectedCrash {}
+
+        let restarted = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+        await assertUnsafeLibraryState(containing: "padre") {
+            _ = try await restarted.migratePhysicalCustody(
+                regression: fixture.regression,
+                legacyIdentity: fixture.legacyIdentity,
+                runningStateProvider: { .init() }
+            )
+        }
+        XCTAssertTrue(fixture.isPhysicalDirectory(fixture.crossOverSteamApps))
+        XCTAssertFalse(fixture.pathExists(fixture.regressionSteamApps))
+    }
+
+    func testSharedMutationPermitPreventsMigrationRaceUntilReleased() async throws {
+        let fixture = try CustodyFixture()
+        defer { fixture.remove() }
+        try fixture.makeSharedLayout()
+        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+        let permit = try await manager.acquirePhysicalLibraryCustodyMutationPermit(
+            backend: .regression,
+            validationLease: nil
+        )
+
+        await assertUnsafeLibraryState(containing: "otra operación") {
+            _ = try await manager.migratePhysicalCustody(
+                regression: fixture.regression,
+                legacyIdentity: fixture.legacyIdentity,
+                runningStateProvider: { .init() }
+            )
+        }
+        permit.release()
+        let result = try await manager.migratePhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningStateProvider: { .init() }
+        )
+        XCTAssertEqual(result.status, .pendingValidation)
+    }
+
+    func testDurableLaunchIntentBlocksMigrationWhenSpawnedPIDIsStillAlive() async throws {
+        let fixture = try CustodyFixture()
+        defer { fixture.remove() }
+        try fixture.makeSharedLayout()
+        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+        let intent = try await manager.registerPhysicalLibraryLaunchIntent(backend: .regression)
+        try await manager.attachPhysicalLibraryLaunch(
+            BackendLaunch(
+                backend: .regression,
+                processID: getpid(),
+                command: "/usr/bin/true",
+                arguments: [],
+                logURL: fixture.root.appendingPathComponent("launch.log"),
+                startedAt: Date()
+            ),
+            to: intent
+        )
+
+        await assertUnsafeLibraryState(containing: "lanzador") {
+            _ = try await manager.migratePhysicalCustody(
+                regression: fixture.regression,
+                legacyIdentity: fixture.legacyIdentity,
+                runningStateProvider: { .init() }
+            )
+        }
+        XCTAssertTrue(fixture.isPhysicalDirectory(fixture.crossOverSteamApps))
+        XCTAssertFalse(fixture.isPhysicalDirectory(fixture.regressionSteamApps))
+        try await manager.resolvePhysicalLibraryLaunchIntent(intent)
+    }
+
+    func testConcurrentLaunchIntentRegistrationHasExactlyOneDurableWinner() async throws {
+        let fixture = try CustodyFixture()
+        defer { fixture.remove() }
+        try fixture.makeSharedLayout()
+        let first = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+        let second = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+
+        let results = await withTaskGroup(
+            of: Result<PhysicalLibraryCustodyLaunchIntent, Error>.self,
+            returning: [Result<PhysicalLibraryCustodyLaunchIntent, Error>].self
+        ) { group in
+            for manager in [first, second] {
+                group.addTask {
+                    do { return .success(try await manager.registerPhysicalLibraryLaunchIntent(backend: .regression)) }
+                    catch { return .failure(error) }
+                }
+            }
+            var values: [Result<PhysicalLibraryCustodyLaunchIntent, Error>] = []
+            for await value in group { values.append(value) }
+            return values
+        }
+        let winners = results.compactMap { try? $0.get() }
+        XCTAssertEqual(winners.count, 1)
+        let snapshot = await first.currentPhysicalLibraryCustodyInterlock()
+        XCTAssertEqual(snapshot.mutationPolicy, .blocked)
+        try await first.resolvePhysicalLibraryLaunchIntent(try XCTUnwrap(winners.first))
+    }
+
+    func testSubstitutedRollbackMarkerIsNeverDeletedDuringFinalization() async throws {
+        let fixture = try CustodyFixture()
+        defer { fixture.remove() }
+        try fixture.makeSharedLayout()
+        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+        _ = try await manager.migratePhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningStateProvider: { .init() }
+        )
+        let marker = try XCTUnwrap(try fixture.stagedLinks().first)
+        let rawTarget = try FileManager.default.destinationOfSymbolicLink(atPath: marker.path)
+        try FileManager.default.removeItem(at: marker)
+        try FileManager.default.createSymbolicLink(atPath: marker.path, withDestinationPath: rawTarget)
+
+        await assertUnsafeLibraryState(containing: "sustituido") {
+            _ = try await manager.finalizePhysicalCustodyValidated(
+                regression: fixture.regression,
+                legacyIdentity: fixture.legacyIdentity,
+                validationConfirmed: true,
+                validationEvidence: "Validación completa",
+                runningState: .init()
+            )
+        }
+        XCTAssertTrue(fixture.pathExists(marker))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.receipt.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.journal.path))
+    }
+
+    func testSubstitutedRollbackMarkerIsNeverRestored() async throws {
+        let fixture = try CustodyFixture()
+        defer { fixture.remove() }
+        try fixture.makeSharedLayout()
+        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+        _ = try await manager.migratePhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningStateProvider: { .init() }
+        )
+        let marker = try XCTUnwrap(try fixture.stagedLinks().first)
+        let rawTarget = try FileManager.default.destinationOfSymbolicLink(atPath: marker.path)
+        try FileManager.default.removeItem(at: marker)
+        try FileManager.default.createSymbolicLink(atPath: marker.path, withDestinationPath: rawTarget)
+
+        await assertUnsafeLibraryState(containing: "sustituido") {
+            _ = try await manager.rollbackPhysicalCustody(
+                regression: fixture.regression,
+                legacyIdentity: fixture.legacyIdentity,
+                runningState: .init()
+            )
+        }
+        XCTAssertTrue(fixture.isPhysicalDirectory(fixture.crossOverSteamApps))
+        XCTAssertFalse(fixture.pathExists(fixture.regressionSteamApps))
+        XCTAssertTrue(fixture.pathExists(marker))
+    }
+
+    func testRollbackMarkerSwapImmediatelyBeforeQuarantineIsPreservedNotDeleted() async throws {
+        let fixture = try CustodyFixture()
+        defer { fixture.remove() }
+        try fixture.makeSharedLayout()
+        let swapped = LockedFlag()
+        let regressionSteamApps = fixture.regressionSteamApps
+        let manager = SharedSteamLibraryManager(
+            backupRootURL: fixture.backupRoot,
+            directoryEnumeratorProvider: CustodyFixture.enumerator,
+            custodyFault: { point in
+                guard String(describing: point)
+                    == String(describing: PhysicalLibraryCustodyFaultPoint.beforeFinalizeMarkerQuarantine),
+                    swapped.take() else { return }
+                let parent = regressionSteamApps.deletingLastPathComponent()
+                let marker = try FileManager.default.contentsOfDirectory(
+                    at: parent,
+                    includingPropertiesForKeys: nil
+                ).first {
+                    $0.lastPathComponent.hasPrefix(".steamapps-custody-")
+                        && $0.lastPathComponent.hasSuffix(".rollback")
+                }
+                guard let marker else { throw InjectedCrash() }
+                let target = try FileManager.default.destinationOfSymbolicLink(atPath: marker.path)
+                try FileManager.default.removeItem(at: marker)
+                try FileManager.default.createSymbolicLink(atPath: marker.path, withDestinationPath: target)
+            }
+        )
+        _ = try await manager.migratePhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningStateProvider: { .init() }
+        )
+
+        await assertUnsafeLibraryState(containing: "sustituido") {
+            _ = try await manager.finalizePhysicalCustodyValidated(
+                regression: fixture.regression,
+                legacyIdentity: fixture.legacyIdentity,
+                validationConfirmed: true,
+                validationEvidence: "Validación completa",
+                runningState: .init()
+            )
+        }
+        XCTAssertEqual(try fixture.stagedLinks().count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.journal.path))
+    }
+
+    func testJournalSwapImmediatelyBeforeQuarantineIsPreservedNotDeleted() async throws {
+        let fixture = try CustodyFixture()
+        defer { fixture.remove() }
+        try fixture.makeSharedLayout()
+        let swapped = LockedFlag()
+        let journal = fixture.journal
+        let manager = SharedSteamLibraryManager(
+            backupRootURL: fixture.backupRoot,
+            directoryEnumeratorProvider: CustodyFixture.enumerator,
+            beforeJournalUnlink: {
+                guard swapped.take() else { return }
+                try? FileManager.default.removeItem(at: journal)
+                try? Data("journal atacante".utf8).write(to: journal)
+            }
+        )
+        _ = try await manager.migratePhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningStateProvider: { .init() }
+        )
+
+        await assertUnsafeLibraryState(containing: "sustituido") {
+            _ = try await manager.rollbackPhysicalCustody(
+                regression: fixture.regression,
+                legacyIdentity: fixture.legacyIdentity,
+                runningState: .init()
+            )
+        }
+        XCTAssertEqual(try String(contentsOf: fixture.journal), "journal atacante")
+        XCTAssertTrue(fixture.isPhysicalDirectory(fixture.crossOverSteamApps))
+        XCTAssertNotNil(
+            try? FileManager.default.destinationOfSymbolicLink(
+                atPath: fixture.regressionSteamApps.path
+            )
+        )
+    }
+}
+
+private struct InjectedCrash: Error {}
+
+private final class LockedStates: @unchecked Sendable {
+    private let lock = NSLock()
+    private var states: [RunningBackendState]
+
+    init(_ states: [RunningBackendState]) { self.states = states }
+
+    func next() -> RunningBackendState {
+        lock.lock()
+        defer { lock.unlock() }
+        return states.isEmpty ? .init() : states.removeFirst()
+    }
+}
+
+private final class LockedFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var available = true
+
+    func take() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard available else { return false }
+        available = false
+        return true
     }
 }
 
@@ -696,27 +922,37 @@ private func assertUnsafeLibraryState(
     }
 }
 
-private extension PhysicalLibraryCustodyStatus {
+private extension PhysicalLibraryCustodyAssessment {
     var blockedReason: String? {
-        guard case let .blocked(reason) = self else { return nil }
+        guard case let .blocked(reason) = status else { return nil }
         return reason
     }
 }
 
-private final class SharedLibraryFixture {
+private final class CustodyFixture {
+    static let enumerator: SharedSteamLibraryManager.DirectoryEnumeratorProvider = {
+        root, keys, options, reportFailure in
+        FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: keys,
+            options: options,
+            errorHandler: { url, error in
+                reportFailure(url, error.localizedDescription)
+                return false
+            }
+        )
+    }
+
     let root: URL
     let backupRoot: URL
     let regressionSteamApps: URL
     let crossOverSteamApps: URL
-    let regressionOwnedSteamApps: URL
     let regression: RegressionInstallation
-    let crossOver: CrossOverInstallation
 
     init() throws {
-        // /var es un enlace de sistema a /private/var. Toda la matriz protege que su
-        // canonicalización no se confunda con un ancestro mutable controlado por el usuario.
-        root = URL(fileURLWithPath: "/var/tmp", isDirectory: true)
-            .appendingPathComponent("regression-shared-library-\(UUID().uuidString)", isDirectory: true)
+        root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+            .appendingPathComponent(".build/custody-test-fixtures", isDirectory: true)
+            .appendingPathComponent("regression-custody-\(UUID().uuidString)", isDirectory: true)
         backupRoot = root.appendingPathComponent("backups", isDirectory: true)
         let regressionBottle = root.appendingPathComponent("regression-bottle", isDirectory: true)
         let crossOverBottle = root.appendingPathComponent("crossover-bottle", isDirectory: true)
@@ -724,86 +960,87 @@ private final class SharedLibraryFixture {
         let regressionSteam = regressionBottle.appendingPathComponent(relativeSteam, isDirectory: true)
         let crossOverSteam = crossOverBottle.appendingPathComponent(relativeSteam, isDirectory: true)
         regressionSteamApps = regressionSteam.appendingPathComponent("steamapps", isDirectory: true)
-        try FileManager.default.createDirectory(at: regressionSteamApps, withIntermediateDirectories: true)
         crossOverSteamApps = crossOverSteam.appendingPathComponent("steamapps", isDirectory: true)
-        regressionOwnedSteamApps = root
-            .appendingPathComponent("regression-library", isDirectory: true)
-            .appendingPathComponent("steamapps", isDirectory: true)
+        try FileManager.default.createDirectory(at: regressionSteam, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: crossOverSteamApps, withIntermediateDirectories: true)
-
         regression = RegressionInstallation(
             applicationURL: root.appendingPathComponent("Regression.app"),
             bottleURL: regressionBottle,
             steamExecutableURL: regressionSteam.appendingPathComponent("Steam.exe"),
-            engineLauncherURL: root.appendingPathComponent("regression-engine"),
-            health: .ready,
-            healthDetail: "ok"
-        )
-        crossOver = CrossOverInstallation(
-            applicationURL: root.appendingPathComponent("CrossOver.app"),
-            version: "26.3",
-            build: "1",
-            bottleName: "Steam",
-            bottleURL: crossOverBottle,
-            steamExecutableURL: crossOverSteam.appendingPathComponent("steam.exe"),
-            wineCLIURL: root.appendingPathComponent("wine"),
-            bottleCLIURL: root.appendingPathComponent("cxbottle"),
-            feedURL: nil,
+            engineLauncherURL: root.appendingPathComponent("engine"),
             health: .ready,
             healthDetail: "ok"
         )
     }
 
-    var physicalCustodyJournal: URL {
-        backupRoot.appendingPathComponent("physical-custody-journal.json")
+    var legacyIdentity: PhysicalLibraryCustodyIdentity {
+        .init(legacySteamAppsURL: crossOverSteamApps)
     }
 
-    func makeCurrentSharedLayout() throws {
-        try FileManager.default.removeItem(at: regressionSteamApps)
-        try FileManager.default.createSymbolicLink(
-            at: regressionSteamApps,
-            withDestinationURL: crossOverSteamApps
-        )
+    var journal: URL { backupRoot.appendingPathComponent("physical-custody-journal.json") }
+    var receipt: URL { backupRoot.appendingPathComponent("physical-custody-receipt.json") }
+
+    func makeSharedLayout(relativeLink: Bool = false) throws {
+        if pathExists(regressionSteamApps) { try FileManager.default.removeItem(at: regressionSteamApps) }
+        if relativeLink {
+            let relative = "../../../../crossover-bottle/drive_c/Program Files (x86)/Steam/steamapps"
+            try FileManager.default.createSymbolicLink(atPath: regressionSteamApps.path, withDestinationPath: relative)
+        } else {
+            try FileManager.default.createSymbolicLink(at: regressionSteamApps, withDestinationURL: crossOverSteamApps)
+        }
     }
 
-    func makeCompletedOwnershipLayout() throws {
-        try FileManager.default.createDirectory(
-            at: regressionOwnedSteamApps,
-            withIntermediateDirectories: true
-        )
-        try FileManager.default.removeItem(at: crossOverSteamApps)
-        try FileManager.default.createSymbolicLink(
-            at: crossOverSteamApps,
-            withDestinationURL: regressionOwnedSteamApps
-        )
-        try FileManager.default.removeItem(at: regressionSteamApps)
-        try FileManager.default.createSymbolicLink(
-            at: regressionSteamApps,
-            withDestinationURL: regressionOwnedSteamApps
-        )
-    }
-
-    func writeCrossOverManifest(appID: String, name: String) throws {
-        let manifest = crossOverSteamApps.appendingPathComponent("appmanifest_\(appID).acf")
+    func writeManifest(appID: String) throws {
         try Data(#"""
         "AppState"
         {
             "appid" "\#(appID)"
-            "name" "\#(name)"
-            "installdir" "Shared Game"
+            "name" "Juego"
+            "installdir" "Game"
         }
-        """#.utf8).write(to: manifest)
+        """#.utf8).write(to: crossOverSteamApps.appendingPathComponent("appmanifest_\(appID).acf"))
     }
 
-    func resolvedSymbolicLink(at url: URL) throws -> URL {
-        let destination = try FileManager.default.destinationOfSymbolicLink(atPath: url.path)
-        let resolved = destination.hasPrefix("/")
-            ? URL(fileURLWithPath: destination)
-            : url.deletingLastPathComponent().appendingPathComponent(destination)
-        return resolved.standardizedFileURL
+    func identity(at url: URL) throws -> [UInt64] {
+        var metadata = stat()
+        guard lstat(url.path, &metadata) == 0 else { throw CocoaError(.fileNoSuchFile) }
+        return [UInt64(metadata.st_dev), UInt64(metadata.st_ino)]
     }
 
-    func remove() {
-        try? FileManager.default.removeItem(at: root)
+    func pathExists(_ url: URL) -> Bool {
+        FileManager.default.fileExists(atPath: url.path)
+            || (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) != nil
     }
+
+    func isPhysicalDirectory(_ url: URL) -> Bool {
+        var metadata = stat()
+        return lstat(url.path, &metadata) == 0 && (metadata.st_mode & S_IFMT) == S_IFDIR
+    }
+
+    func physicalSteamAppsTrees() throws -> [URL] {
+        [crossOverSteamApps, regressionSteamApps].filter(isPhysicalDirectory)
+    }
+
+    func stagedLinks() throws -> [URL] {
+        let parent = regressionSteamApps.deletingLastPathComponent()
+        return try FileManager.default.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil)
+            .filter {
+                $0.lastPathComponent.hasPrefix(".steamapps-custody-")
+                    && $0.lastPathComponent.hasSuffix(".rollback")
+                    && (try? FileManager.default.destinationOfSymbolicLink(atPath: $0.path)) != nil
+            }
+    }
+
+    func custodyQuarantines() throws -> [URL] {
+        let roots = [backupRoot, regressionSteamApps.deletingLastPathComponent()]
+        return try roots.flatMap { root in
+            guard FileManager.default.fileExists(atPath: root.path) else { return [URL]() }
+            return try FileManager.default.contentsOfDirectory(
+                at: root,
+                includingPropertiesForKeys: nil
+            ).filter { $0.lastPathComponent.hasSuffix(".quarantine") }
+        }
+    }
+
+    func remove() { try? FileManager.default.removeItem(at: root) }
 }

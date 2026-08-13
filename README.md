@@ -35,8 +35,11 @@ Regression es una aplicación nativa de barra de menús que ejecuta Steam para W
 su propio motor de compatibilidad. Detecta el juego, prepara únicamente lo que necesita y mantiene
 cada corrección aislada para no alterar los títulos que ya funcionan.
 
-Una instalación nueva selecciona **Regression** por defecto. No requiere comprar, instalar ni
-configurar otro producto de compatibilidad.
+Regression es el único motor operativo. Su botella contiene la única carpeta física de juegos:
+no comparte `steamapps`, credenciales, registro ni configuración con CrossOver, y no requiere
+comprar, instalar o configurar otro producto de compatibilidad. Si detecta una biblioteca heredada,
+la traslada dentro de la botella propia mediante renombres atómicos, sin copiar los juegos, y
+mantiene rollback hasta que Steam y un juego se validan de forma explícita.
 
 > [!IMPORTANT]
 > Regression está en desarrollo activo y es un proyecto personal y educativo. La compatibilidad

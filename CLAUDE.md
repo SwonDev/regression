@@ -1,9 +1,9 @@
 # CLAUDE.md — Proyecto Regression
 
-> Aplicación nativa de barra de menús con dos backends aislados: CrossOver 26.3 es el motor
-> predeterminado temporal y el motor propio Windows→macOS sigue íntegro y seleccionable.
-> La biblioteca física de juegos es única; credenciales, registro y configuración permanecen
-> separados. La telemetría local observa y compara, pero no aplica perfiles automáticamente.
+> Aplicación nativa de barra de menús con Regression como único motor operativo. Su runtime,
+> botella y única biblioteca física de juegos son propios; CrossOver no se invoca, no comparte
+> estado y solo permanece como referencia histórica de investigación. La telemetría local
+> conserva evidencia, pero no aplica perfiles automáticamente.
 >
 > Documentación hermana: `AGENTS.md` (reglas inviolables + protocolo, fuente de verdad que
 > comparte con Codex) y `README.md` (arquitectura, build reproducible, diagnósticos, método).
@@ -13,9 +13,10 @@
 
 ## 1. Estado conseguido (2026-07-28)
 
-**Funciona (verificado con capturas):**
-- Integración oficial con la botella Steam de CrossOver, conmutación segura de backend, app
-  `LSUIElement` sin Dock, biblioteca compartida y base SQLite v11 de aprendizaje exportable. La
+**Baseline histórico verificado con capturas (2026-07-28):**
+- La etapa anterior integraba la botella Steam de CrossOver, conmutación segura de backend, app
+  `LSUIElement` sin Dock, biblioteca compartida y base SQLite v11 de aprendizaje exportable. Ese
+  diseño se conserva solo como historia y ya no describe la arquitectura operativa. La
   base normaliza motores por Wine/componentes/registro, separa opciones del juego, vincula cada
   blindado con su evidencia/configuración/motor exactos, conserva el preflight de cada prueba y
   compara de forma no vinculante con metadatos públicos de CodeWeavers. Los
@@ -54,15 +55,15 @@
 1. **JAMÁS se integra algo que rompe lo que ya funciona.** Un arreglo que apaga otra cosa
    no es un arreglo: se revierte al instante y se repiensa. Lo que decide es la matriz de
    validación (§3), no las intenciones.
-2. **La referencia es CrossOver: se copia literalmente cómo lo hace CrossOver.** Versiones
+2. **CrossOver es una referencia de investigación, no una dependencia.** Las versiones
    exactas de cada componente, convenciones de build (prefix horneado), wiring de DLLs
    (qué va en system32, qué en lib, qué es builtin y qué native), configuración de botella,
    crossties. Se estudia y se replica ESO antes de inventar. La paridad se consigue
    igualando, no improvisando. Prohibido ir juego por juego sin este método.
-3. **Separación estricta de backends.** El backend CrossOver usa deliberadamente la instalación
-   y licencia del usuario mediante su CLI oficial. El motor propio sigue independiente: no se
-   copian DLLs/dylibs ni binarios propietarios; lo aprendido se reproduce desde fuentes públicas
-   o mediante reimplementación legal.
+3. **Autonomía operativa estricta.** Regression no invoca CrossOver ni comparte con él botella,
+   juegos, credenciales, registro o configuración. No se copian DLLs/dylibs ni binarios
+   propietarios; las observaciones históricas se reproducen desde fuentes públicas o mediante
+   reimplementación legal.
 4. **Legalidad limpia.** Solo fuentes open-source oficiales. Nada de descompilar ni extraer
    código de binarios propietarios (GUI de CrossOver, licencias, forks privados). Los
    binarios de Apple (GPTK: D3DMetal.framework, libd3dshared.dylib) se usan tal cual los
@@ -167,13 +168,13 @@ bash build/verify-canonical-installation.sh # una única app descubrible
 
 ---
 
-## 5. Hoja de ruta (orden acordado)
+## 5. Hoja de ruta actual
 
-1. Usar CrossOver como backend estable predeterminado y verificar visualmente cada ejecución
-   desde el menú de Regression; no inferir éxito por exit code.
-2. Iniciar sesión una vez en el Steam propio y revalidar Cube World desde la biblioteca
-   compartida, manteniendo su perfil blindado sin cambios globales.
-3. Comparar configuraciones y motores verificados en SQLite/JSON y trasladarlos al motor propio solo
+1. Mantener Regression como único backend estable y verificar visualmente cada ejecución desde
+   su menú; no inferir éxito por exit code.
+2. Validar Steam y los juegos desde la única biblioteca física dentro de la botella Regression,
+   manteniendo cada perfil blindado sin cambios globales.
+3. Conservar las observaciones históricas en SQLite/JSON y trasladar mejoras al motor propio solo
    desde fuentes públicas o reimplementación legal, de forma aislada por juego.
 4. Mantener MoltenVK/D3D12 y `cxcompatdb` como investigación del motor propio, sin invalidar
    FFT ni otros juegos ya confirmados por rutas distintas.

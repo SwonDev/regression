@@ -132,3 +132,151 @@ struct RegressionStatusBadge: View {
       .accessibilityLabel("Estado: \(title)")
   }
 }
+
+enum LibraryIndependenceState: Equatable {
+  case eligible
+  case preparing
+  case preCutover
+  case cutover
+  case verifying
+  case pendingValidation
+  case validating
+  case rollingBack
+  case error(String)
+  case independent
+
+  var isBusy: Bool {
+    switch self {
+    case .preparing, .cutover, .verifying, .validating, .rollingBack: true
+    case .eligible, .preCutover, .pendingValidation, .error, .independent: false
+    }
+  }
+
+  var hidesLegacyOperations: Bool {
+    switch self {
+    case .cutover, .verifying, .pendingValidation, .validating, .rollingBack, .error,
+      .independent:
+      true
+    case .eligible, .preparing, .preCutover: false
+    }
+  }
+
+  var blocksNormalOperations: Bool {
+    switch self {
+    case .preparing, .preCutover, .cutover, .verifying, .pendingValidation, .validating,
+      .rollingBack:
+      true
+    case .eligible, .independent:
+      false
+    case .error:
+      true
+    }
+  }
+
+  var allowsValidationGameLaunch: Bool {
+    self == .validating
+  }
+
+  var requiresMigrationResume: Bool {
+    switch self {
+    case .preparing, .preCutover, .cutover, .verifying: true
+    case .eligible, .pendingValidation, .validating, .rollingBack, .error, .independent: false
+    }
+  }
+
+  var accessibilityValue: String {
+    switch self {
+    case .eligible: "Preparado para revisar el traslado"
+    case .preparing: "Inventariando la biblioteca"
+    case .preCutover: "Esperando confirmación"
+    case .cutover: "Trasladando la biblioteca"
+    case .verifying: "Verificando archivos y manifiestos"
+    case .pendingValidation: "Esperando validación con Steam"
+    case .validating: "Validando Steam y juegos con Regression"
+    case .rollingBack: "Restaurando el estado anterior"
+    case .error: "Necesita atención"
+    case .independent: "Independencia validada"
+    }
+  }
+}
+
+struct RegressionCustodyProgress: View {
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+  let state: LibraryIndependenceState
+
+  private let stages = ["Inventario", "Traslado", "Integridad", "Validación"]
+
+  var body: some View {
+    Group {
+      if dynamicTypeSize.isAccessibilitySize {
+        verticalProgress
+      } else {
+        ViewThatFits(in: .horizontal) {
+          compactProgress
+          verticalProgress
+        }
+      }
+    }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel("Progreso de independencia")
+    .accessibilityValue(state.accessibilityValue)
+  }
+
+  private var compactProgress: some View {
+    Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 8) {
+      GridRow {
+        stageLabel(index: 0, title: stages[0])
+        stageLabel(index: 1, title: stages[1])
+      }
+      GridRow {
+        stageLabel(index: 2, title: stages[2])
+        stageLabel(index: 3, title: stages[3])
+      }
+    }
+  }
+
+  private var verticalProgress: some View {
+    VStack(alignment: .leading, spacing: 7) {
+      ForEach(Array(stages.enumerated()), id: \.offset) { index, title in
+        stageLabel(index: index, title: title)
+      }
+    }
+  }
+
+  private func stageLabel(index: Int, title: String) -> some View {
+    Label {
+      Text(title)
+        .regressionFont(.caption2.weight(index == activeStage ? .semibold : .regular))
+        .foregroundStyle(index <= activeStage ? Color.primary : .regressionSecondary)
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
+    } icon: {
+      Image(systemName: symbol(for: index))
+        .foregroundStyle(color(for: index))
+    }
+  }
+
+  private var activeStage: Int {
+    switch state {
+    case .eligible, .preparing, .preCutover, .error: 0
+    case .cutover: 1
+    case .verifying, .rollingBack: 2
+    case .pendingValidation, .validating, .independent: 3
+    }
+  }
+
+  private func symbol(for index: Int) -> String {
+    if case .error = state, index == activeStage { return "exclamationmark.circle.fill" }
+    if case .rollingBack = state, index == activeStage { return "arrow.uturn.backward.circle.fill" }
+    if index < activeStage || state == .independent { return "checkmark.circle.fill" }
+    if index == activeStage && state.isBusy { return "circle.dotted" }
+    return "circle"
+  }
+
+  private func color(for index: Int) -> Color {
+    if case .error = state, index == activeStage { return .red }
+    if case .rollingBack = state, index == activeStage { return .orange }
+    if index < activeStage || state == .independent { return .green }
+    return index == activeStage ? .accentColor : .secondary
+  }
+}

@@ -283,6 +283,7 @@ public actor GameTestPreflight {
         runningState: RunningBackendState,
         databaseHealth: CompatibilityDatabaseHealth,
         sharedLibraryAssessment: SharedLibraryAssessment?,
+        physicalCustodyAssessment: PhysicalLibraryCustodyAssessment? = nil,
         game: SteamGame? = nil,
         targetAppID: String? = nil,
         targetGameName: String? = nil,
@@ -342,7 +343,8 @@ public actor GameTestPreflight {
         checks.append(telemetryCheck(steamRootURL: steamRootURL))
         checks.append(sharedLibraryCheck(
             installations: installations,
-            assessment: sharedLibraryAssessment
+            assessment: sharedLibraryAssessment,
+            physicalCustody: physicalCustodyAssessment
         ))
 
         return GameTestPreflightReport(
@@ -787,14 +789,52 @@ public actor GameTestPreflight {
 
     private func sharedLibraryCheck(
         installations: InstallationSnapshot,
-        assessment: SharedLibraryAssessment?
+        assessment: SharedLibraryAssessment?,
+        physicalCustody: PhysicalLibraryCustodyAssessment?
     ) -> GameTestPreflightCheck {
+        if let physicalCustody {
+            switch physicalCustody.status {
+            case .independent:
+                return GameTestPreflightCheck(
+                    checkID: .sharedLibrary,
+                    status: .ready,
+                    title: "Biblioteca propia",
+                    detail: "La única instalación física de los juegos está dentro de la botella de Regression."
+                )
+            case .pendingValidation, .validating:
+                return GameTestPreflightCheck(
+                    checkID: .sharedLibrary,
+                    status: .warning,
+                    title: "Biblioteca propia",
+                    detail: "La biblioteca ya está en Regression y espera completar su validación funcional.",
+                    recoveryAction: "Valida Steam y un juego con Regression antes de finalizar la custodia."
+                )
+            case .cutover, .verifying, .rollingBack:
+                return GameTestPreflightCheck(
+                    checkID: .sharedLibrary,
+                    status: .blocked,
+                    title: "Custodia de la biblioteca",
+                    detail: "La biblioteca está atravesando una fase transaccional y no admite lanzamientos.",
+                    recoveryAction: "Espera a que Regression alcance un estado recuperable."
+                )
+            case let .blocked(reason):
+                return GameTestPreflightCheck(
+                    checkID: .sharedLibrary,
+                    status: .blocked,
+                    title: "Custodia de la biblioteca",
+                    detail: PrivacySanitizer.redactedLogExcerpt(reason, limit: 300),
+                    recoveryAction: "Abre el diagnóstico de custodia antes de lanzar Steam."
+                )
+            case .eligibleForTransfer, .preparing, .preCutover:
+                break
+            }
+        }
         guard installations.crossOver != nil else {
             return GameTestPreflightCheck(
                 checkID: .sharedLibrary,
                 status: .ready,
-                title: "Biblioteca compartida",
-                detail: "No hay una instalación de CrossOver con la que comparar la biblioteca."
+                title: "Biblioteca de Regression",
+                detail: "Regression usa su propia ubicación para los archivos de los juegos."
             )
         }
         guard let assessment else {

@@ -10,7 +10,6 @@ struct MenuBarView: View {
   @Bindable var model: RegressionAppModel
 
   @State private var gamesAreExpanded = true
-  @State private var comparisonToolsAreExpanded = false
   @State private var errorDetailsAreExpanded = false
   @State private var learningIsExpanded = false
   @State private var maintenanceIsExpanded = false
@@ -22,6 +21,7 @@ struct MenuBarView: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 14) {
         operationalHeader
+        libraryIndependenceSection
         primaryActions
         backendAndLibrarySection
         gamesSection
@@ -108,7 +108,7 @@ struct MenuBarView: View {
           Task { await model.recover(failure.recovery) }
         }
         .buttonStyle(.borderedProminent)
-        .disabled(model.operation.isBusy)
+        .disabled(model.operation.isBusy || model.libraryIndependenceState.blocksNormalOperations)
         .accessibilityHint("Aplica la recuperación recomendada antes de volver a iniciar Steam")
       } else {
         Button {
@@ -122,7 +122,7 @@ struct MenuBarView: View {
           )
         }
         .buttonStyle(.borderedProminent)
-        .disabled(model.operation.isBusy)
+        .disabled(model.operation.isBusy || model.libraryIndependenceState.blocksNormalOperations)
       }
 
       if model.failure?.recovery != .refresh {
@@ -135,7 +135,7 @@ struct MenuBarView: View {
         .accessibilityLabel("Actualizar estado")
         .accessibilityHint("Vuelve a detectar instalaciones, biblioteca y perfiles locales")
         .help("Actualizar estado")
-        .disabled(model.operation.isBusy)
+        .disabled(model.operation.isBusy || model.libraryIndependenceState.isBusy)
       }
 
       if model.runningState.activeBackend != nil {
@@ -175,81 +175,130 @@ struct MenuBarView: View {
           Spacer(minLength: 4)
         }
 
-        Divider()
-
-        HStack(alignment: .top, spacing: 9) {
-          Image(systemName: libraryStatusSymbol)
-            .foregroundStyle(libraryStatusColor)
-            .accessibilityHidden(true)
-          VStack(alignment: .leading, spacing: 5) {
-            Text(libraryStatusTitle)
-              .regressionFont(.callout.weight(.medium))
-            Text(libraryStatusDetail)
-              .regressionFont(.caption)
-              .foregroundStyle(.regressionSecondary)
-              .fixedSize(horizontal: false, vertical: true)
-          }
-          Spacer()
-        }
-
-        if model.installations?.crossOver != nil {
-          Divider()
-
-          DisclosureGroup(isExpanded: $comparisonToolsAreExpanded) {
-            VStack(alignment: .leading, spacing: 8) {
-              Text(
-                "Usa CrossOver únicamente como referencia de desarrollo. "
-                  + "Cambiar el motor cerrará primero cualquier Steam activo."
-              )
-              .regressionFont(.caption)
-              .foregroundStyle(.regressionSecondary)
-              .fixedSize(horizontal: false, vertical: true)
-
-              Picker(
-                "Motor para la siguiente ejecución",
-                selection: Binding(
-                  get: { model.selectedBackend },
-                  set: { backend in Task { await model.selectBackend(backend) } }
-                )
-              ) {
-                ForEach(BackendKind.allCases) { backend in
-                  Text(backend.displayName).tag(backend)
-                }
-              }
-              .pickerStyle(.segmented)
-              .labelsHidden()
-              .disabled(model.operation.isBusy)
-              .accessibilityLabel("Motor para la siguiente ejecución")
-              .accessibilityHint("Cambiar de motor cerrará primero cualquier Steam activo")
-
-              if !libraryIsReady {
-                Button("Usar temporalmente la biblioteca de CrossOver…") {
-                  Task { await model.configureSharedLibrary() }
-                }
-                .disabled(model.operation.isBusy)
-                .help(
-                  "Crea un enlace recuperable para comparar motores; "
-                    + "no transfiere la biblioteca a Regression"
-                )
-              }
-
-              crossOverMaintenance
-            }
-            .padding(.top, 8)
-          } label: {
-            HStack {
-              Label("Herramientas de comparación", systemImage: "arrow.left.arrow.right")
-                .regressionFont(.callout.weight(.medium))
-              Spacer()
-              if model.selectedBackend == .crossOver {
-                Text("CrossOver en uso")
-                  .regressionFont(.caption)
-                  .foregroundStyle(.orange)
-              }
-            }
-          }
-        }
+        Text("Steam y los juegos se ejecutan únicamente con el motor propio de Regression.")
+          .regressionFont(.caption)
+          .foregroundStyle(.regressionSecondary)
+          .fixedSize(horizontal: false, vertical: true)
       }
+    }
+  }
+
+  private var libraryIndependenceSection: some View {
+    RegressionCard {
+      VStack(alignment: .leading, spacing: 10) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+          Label(libraryIndependenceTitle, systemImage: libraryIndependenceSymbol)
+            .regressionFont(.headline)
+            .foregroundStyle(libraryIndependenceColor)
+          Spacer(minLength: 8)
+          if model.libraryIndependenceState.isBusy {
+            ProgressView()
+              .controlSize(.small)
+              .accessibilityLabel(model.libraryIndependenceState.accessibilityValue)
+          }
+        }
+
+        Text(libraryIndependenceDetail)
+          .regressionFont(.callout)
+          .foregroundStyle(.regressionSecondary)
+          .fixedSize(horizontal: false, vertical: true)
+
+        RegressionCustodyProgress(state: model.libraryIndependenceState)
+
+        if let assessment = model.physicalLibraryCustodyAssessment,
+           !assessment.inventory.manifestAppIDs.isEmpty {
+          Text(inventorySummary(assessment.inventory))
+            .regressionFont(.caption.monospacedDigit())
+            .foregroundStyle(.regressionSecondary)
+        }
+
+        libraryIndependenceActions
+      }
+      .accessibilityElement(children: .contain)
+      .accessibilityLabel("Independencia de la biblioteca")
+      .accessibilityValue(model.libraryIndependenceState.accessibilityValue)
+      .accessibilityAddTraits(.updatesFrequently)
+    }
+  }
+
+  @ViewBuilder
+  private var libraryIndependenceActions: some View {
+    switch model.libraryIndependenceState {
+    case .eligible:
+      Button("Revisar y trasladar…") {
+        Task { await model.startPhysicalLibraryCustodyMigration() }
+      }
+      .buttonStyle(.borderedProminent)
+      .disabled(model.operation.isBusy)
+      .keyboardShortcut(.defaultAction)
+      .accessibilityHint(
+        "Confirma un traslado sin copia que dejará la instalación heredada sin juegos"
+      )
+    case .preparing:
+      if model.physicalLibraryCustodyAssessmentIsRunning {
+        Button("Cancelar inventario") {
+          model.cancelPhysicalLibraryCustodyAssessment()
+        }
+        .accessibilityHint("Cancela antes de que comience el traslado")
+      } else {
+        Text("Mantén Regression abierta mientras asegura el punto de recuperación.")
+          .regressionFont(.caption)
+          .foregroundStyle(.regressionSecondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    case .preCutover:
+      Text("Confirma el traslado en el diálogo del sistema.")
+        .regressionFont(.caption)
+        .foregroundStyle(.regressionSecondary)
+    case .cutover, .verifying:
+      Text("Mantén Regression abierta. Esta fase no se puede interrumpir con seguridad.")
+        .regressionFont(.caption)
+        .foregroundStyle(.regressionSecondary)
+        .fixedSize(horizontal: false, vertical: true)
+    case .pendingValidation:
+      HStack(spacing: 8) {
+        Button("Validar con Steam") {
+          Task { await model.beginPhysicalLibraryCustodyValidation() }
+        }
+        .buttonStyle(.borderedProminent)
+        .keyboardShortcut(.defaultAction)
+        Button("Restaurar") {
+          Task { await model.rollbackPhysicalLibraryCustody() }
+        }
+        .disabled(model.runningState.activeBackend != nil)
+        .accessibilityHint("Cierra Steam antes de restaurar la ubicación anterior")
+      }
+    case .validating:
+      HStack(spacing: 8) {
+        if model.runningState.regressionIsRunning {
+          Button("Confirmar validación…") {
+            Task { await model.finalizePhysicalLibraryCustodyValidation() }
+          }
+          .buttonStyle(.borderedProminent)
+        } else {
+          Button("Reabrir Steam") {
+            Task { await model.beginPhysicalLibraryCustodyValidation() }
+          }
+          .buttonStyle(.borderedProminent)
+        }
+        Button("Restaurar") {
+          Task { await model.rollbackPhysicalLibraryCustody() }
+        }
+        .disabled(model.runningState.activeBackend != nil)
+        .accessibilityHint("Cierra Steam antes de restaurar la ubicación anterior")
+      }
+    case .rollingBack:
+      Text("Restaurando la ruta anterior y comprobando su identidad…")
+        .regressionFont(.caption)
+        .foregroundStyle(.regressionSecondary)
+    case .error:
+      Button("Reintentar comprobación") {
+        Task { await model.assessPhysicalLibraryCustody() }
+      }
+    case .independent:
+      Label("Biblioteca propia validada", systemImage: "checkmark.seal.fill")
+        .regressionFont(.caption.weight(.semibold))
+        .foregroundStyle(.green)
     }
   }
 
@@ -371,7 +420,7 @@ struct MenuBarView: View {
         Text(game.name)
           .lineLimit(2)
           .fixedSize(horizontal: false, vertical: true)
-        Text("App ID \(game.appID) · \(game.sourceBackend.displayName)")
+        Text("App ID \(game.appID)")
           .regressionFont(.caption.monospacedDigit())
           .foregroundStyle(.regressionSecondary)
         if let learned = model.learnedSummary(for: game) {
@@ -422,7 +471,10 @@ struct MenuBarView: View {
       .disabled(
         model.operation.isBusy
           || model.failure != nil
-          || game.sourceBackend != model.selectedBackend
+          || (
+            model.libraryIndependenceState.blocksNormalOperations
+              && !model.libraryIndependenceState.allowsValidationGameLaunch
+          )
       )
       .padding(.top, 2)
     }
@@ -585,7 +637,7 @@ struct MenuBarView: View {
           }
 
           Text(
-            "Cada caso conserva la referencia de CrossOver, hipótesis ordenadas, una sola variable por prueba, rollback y la matriz visual completa. Ningún expediente puede cerrarse sin un blindado exacto de Regression."
+            "Cada caso conserva su referencia técnica, hipótesis ordenadas, una sola variable por prueba, rollback y la matriz visual completa. Ningún expediente puede cerrarse sin un blindado exacto de Regression."
           )
           .regressionFont(.caption2)
           .foregroundStyle(.regressionSecondary)
@@ -756,49 +808,6 @@ struct MenuBarView: View {
 
           Divider()
 
-          HStack(spacing: 8) {
-            Label("Custodia de la biblioteca", systemImage: "externaldrive.badge.checkmark")
-              .regressionFont(.callout.weight(.medium))
-            Spacer()
-            if model.physicalLibraryCustodyAssessmentIsRunning {
-              ProgressView()
-                .controlSize(.small)
-                .accessibilityLabel("Evaluando la custodia física de la biblioteca")
-            }
-          }
-
-          Text(
-            "Inspecciona la biblioteca Steam heredada y un destino propio de Regression. "
-              + "No copia, mueve, enlaza ni inicia Steam."
-          )
-          .regressionFont(.caption)
-          .foregroundStyle(.regressionSecondary)
-          .fixedSize(horizontal: false, vertical: true)
-
-          physicalLibraryCustodyAssessmentContent
-
-          HStack(spacing: 8) {
-            Button("Evaluar custodia") {
-              Task { await model.assessPhysicalLibraryCustody() }
-            }
-            .disabled(
-              model.physicalLibraryCustodyAssessmentIsRunning
-                || model.operation.isBusy
-            )
-            .accessibilityHint(
-              "Comprueba la biblioteca heredada sin realizar una migración"
-            )
-
-            if model.physicalLibraryCustodyAssessmentIsRunning {
-              Button("Cancelar") {
-                model.cancelPhysicalLibraryCustodyAssessment()
-              }
-              .accessibilityHint("Detiene el inventario de solo lectura")
-            }
-          }
-
-          Divider()
-
           Toggle(
             "Abrir Steam al iniciar Regression",
             isOn: Binding(
@@ -870,48 +879,6 @@ struct MenuBarView: View {
   }
 
   @ViewBuilder
-  private var physicalLibraryCustodyAssessmentContent: some View {
-    if let assessment = model.physicalLibraryCustodyAssessment {
-      VStack(alignment: .leading, spacing: 4) {
-        Label(
-          physicalLibraryCustodyTitle(assessment),
-          systemImage: physicalLibraryCustodySymbol(assessment)
-        )
-        .regressionFont(.caption.weight(.medium))
-        .foregroundStyle(physicalLibraryCustodyColor(assessment))
-
-        Text(physicalLibraryCustodyDetail(assessment))
-          .regressionFont(.caption2)
-          .foregroundStyle(.regressionSecondary)
-          .fixedSize(horizontal: false, vertical: true)
-
-        if !assessment.inventory.manifestAppIDs.isEmpty {
-          Text(inventorySummary(assessment.inventory))
-            .regressionFont(.caption.monospacedDigit())
-            .foregroundStyle(.regressionSecondary)
-        }
-      }
-      .accessibilityElement(children: .combine)
-    } else if let notice = model.physicalLibraryCustodyAssessmentNotice {
-      Text(notice)
-        .regressionFont(.caption)
-        .foregroundStyle(.regressionSecondary)
-        .fixedSize(horizontal: false, vertical: true)
-        .accessibilityLabel(notice)
-    } else if model.physicalLibraryCustodyAssessmentIsRunning {
-      Text("Verificando que Steam está cerrado e inventariando sin cambiar archivos…")
-        .regressionFont(.caption)
-        .foregroundStyle(.regressionSecondary)
-        .fixedSize(horizontal: false, vertical: true)
-    } else {
-      Text("La evaluación solo se ejecuta bajo demanda porque una biblioteca grande puede tardar.")
-        .regressionFont(.caption2)
-        .foregroundStyle(.regressionSecondary)
-        .fixedSize(horizontal: false, vertical: true)
-    }
-  }
-
-  @ViewBuilder
   private var regressionUpdateSection: some View {
     switch model.regressionReleaseStatus {
     case .checking:
@@ -960,11 +927,17 @@ struct MenuBarView: View {
           Task { await model.installAvailableRegressionUpdate() }
         }
         .buttonStyle(.borderedProminent)
-        .disabled(model.operation.isBusy || model.runningState.regressionIsRunning)
+        .disabled(
+          model.operation.isBusy
+            || model.runningState.regressionIsRunning
+            || model.libraryIndependenceState.blocksNormalOperations
+        )
         .help(
-          model.runningState.regressionIsRunning
-            ? "Cierra Steam del motor Regression antes de actualizar"
-            : "Descarga, verifica e instala Regression \(release.version)"
+          model.libraryIndependenceState.blocksNormalOperations
+            ? "Termina la custodia o el rollback de la biblioteca antes de actualizar"
+            : model.runningState.regressionIsRunning
+              ? "Cierra Steam del motor Regression antes de actualizar"
+              : "Descarga, verifica e instala Regression \(release.version)"
         )
       }
     case .downloading(let version):
@@ -1032,50 +1005,27 @@ struct MenuBarView: View {
       .regressionFont(.headline)
   }
 
-  @ViewBuilder
-  private var crossOverMaintenance: some View {
-    Divider()
-
-    if let update = model.updateStatus {
-      HStack {
-        Text("CrossOver \(update.installedVersion)")
-        Spacer()
-        Text(updateStatusText(update))
-          .foregroundStyle(update.updateAvailable ? .orange : .secondary)
-      }
-      .regressionFont(.caption)
-      Text(
-        update.automaticChecksEnabled && update.automaticInstallationEnabled
-          ? "CrossOver gestiona sus actualizaciones automáticamente."
-          : "Revisa las preferencias de actualización de CrossOver."
-      )
-      .regressionFont(.caption)
-      .foregroundStyle(.regressionSecondary)
-    }
-
-    Button("Abrir CrossOver para actualizar o reparar") {
-      model.openCrossOver()
-    }
-  }
-
   private func gameLaunchAvailabilityHint(_ game: SteamGame) -> String {
     if model.failure != nil {
       return "Resuelve primero el estado que necesita atención"
     }
-    if game.sourceBackend == model.selectedBackend {
-      return "Solicita a Steam que abra el juego con \(model.selectedBackend.displayName)"
+    if model.libraryIndependenceState.allowsValidationGameLaunch {
+      return "Inicia el juego con Regression como parte de la validación de independencia"
     }
-    return "Este juego solo se detectó en \(game.sourceBackend.displayName); "
-      + "selecciona ese motor en Herramientas de comparación"
+    if model.libraryIndependenceState.blocksNormalOperations {
+      return "Completa primero el traslado o la validación de la biblioteca"
+    }
+    return "Solicita a Steam que abra el juego con Regression"
   }
 
   private func gameLaunchHelp(_ game: SteamGame) -> String {
     if model.failure != nil {
       return "No disponible hasta resolver el estado actual"
     }
-    return game.sourceBackend == model.selectedBackend
-      ? "Iniciar \(game.name)"
-      : "No disponible con \(model.selectedBackend.displayName)"
+    return model.libraryIndependenceState.blocksNormalOperations
+      && !model.libraryIndependenceState.allowsValidationGameLaunch
+      ? "No disponible durante el traslado o su validación"
+      : "Iniciar \(game.name) con Regression"
   }
 
   private var statusBadgeTitle: String {
@@ -1106,9 +1056,69 @@ struct MenuBarView: View {
   }
 
   private var activeEngineTitle: String {
-    switch model.selectedBackend {
-    case .regression: "Regression"
-    case .crossOver: "CrossOver · comparación"
+    "Regression"
+  }
+
+  private var libraryIndependenceTitle: String {
+    switch model.libraryIndependenceState {
+    case .eligible: "Biblioteca lista para trasladar"
+    case .preparing: "Comprobando la biblioteca"
+    case .preCutover: "Todo listo para el traslado"
+    case .cutover: "Trasladando a Regression"
+    case .verifying: "Verificando la integridad"
+    case .pendingValidation: "Falta validar Steam"
+    case .validating: "Validando con Regression"
+    case .rollingBack: "Restaurando la biblioteca"
+    case .error: "La biblioteca necesita atención"
+    case .independent: "Regression es independiente"
+    }
+  }
+
+  private var libraryIndependenceDetail: String {
+    switch model.libraryIndependenceState {
+    case .eligible:
+      "Los juegos se trasladarán a la botella propia de Regression. No se copiarán 110 GB y la instalación anterior quedará sin juegos. Las botellas no se compartirán."
+    case .preparing:
+      "Se están inventariando manifiestos, rutas e identidad del volumen. Todavía no se ha movido ningún juego."
+    case .preCutover:
+      "Steam está cerrado y el traslado puede hacerse mediante un renombrado en el mismo volumen, sin duplicar los juegos."
+    case .cutover:
+      "Regression está tomando custodia de la única carpeta física de juegos. Ninguna otra instalación conservará una copia ni un enlace."
+    case .verifying:
+      "La carpeta ya está en Regression. Se comprueban el mismo inode, los manifiestos y el inventario estructural."
+    case .pendingValidation:
+      "Los archivos ya pertenecen a Regression. Abre Steam desde esta tarjeta para validar tienda, biblioteca y un juego antes de finalizar."
+    case .validating:
+      "Steam se ejecuta exclusivamente con Regression. Comprueba la tienda, la biblioteca y un juego protegido; después confirma el resultado."
+    case .rollingBack:
+      "La validación no se ha aceptado. Regression restaura la ubicación anterior sin crear una segunda biblioteca."
+    case let .error(detail):
+      detail
+    case .independent:
+      "La biblioteca física vive en la botella de Regression y su ejecución se ha validado. Todo se gestiona de forma independiente."
+    }
+  }
+
+  private var libraryIndependenceSymbol: String {
+    switch model.libraryIndependenceState {
+    case .eligible: "externaldrive.badge.plus"
+    case .preparing, .preCutover: "checklist"
+    case .cutover: "arrow.right.circle.fill"
+    case .verifying: "checkmark.shield"
+    case .pendingValidation, .validating: "play.circle"
+    case .rollingBack: "arrow.uturn.backward.circle"
+    case .error: "exclamationmark.triangle.fill"
+    case .independent: "checkmark.seal.fill"
+    }
+  }
+
+  private var libraryIndependenceColor: Color {
+    switch model.libraryIndependenceState {
+    case .error: .red
+    case .rollingBack: .orange
+    case .independent: .green
+    case .cutover, .verifying, .pendingValidation, .validating: .accentColor
+    case .eligible, .preparing, .preCutover: .primary
     }
   }
 
@@ -1163,129 +1173,6 @@ struct MenuBarView: View {
       certification.sourceRunID != nil || certification.sourceObservationID != nil
         ? "catálogo protegido · evidencia local"
         : "catálogo protegido"
-    }
-  }
-
-  private var libraryIsReady: Bool {
-    guard model.libraryFailureDetail == nil else { return false }
-    guard let assessment = model.sharedLibraryAssessment else { return false }
-    if case .ready = assessment.status { return true }
-    return false
-  }
-
-  private var libraryStatusTitle: String {
-    if model.libraryFailureDetail != nil {
-      return "La biblioteca necesita atención"
-    }
-    guard let assessment = model.sharedLibraryAssessment else {
-      return model.installations == nil || model.installations?.crossOver != nil
-        ? "Detectando biblioteca"
-        : "Biblioteca de Regression"
-    }
-    switch assessment.status {
-    case .ready:
-      return "Biblioteca compartida"
-    case .notConfigured:
-      return "Bibliotecas separadas"
-    case .blocked:
-      return "La biblioteca necesita atención"
-    }
-  }
-
-  private var libraryStatusDetail: String {
-    if let libraryFailureDetail = model.libraryFailureDetail {
-      return libraryFailureDetail
-    }
-    guard let assessment = model.sharedLibraryAssessment else {
-      return model.installations == nil || model.installations?.crossOver != nil
-        ? "Comprobando dónde están los archivos de los juegos."
-        : "Los archivos de los juegos permanecen en la instalación propia de Regression."
-    }
-    switch assessment.status {
-    case .ready:
-      switch model.selectedBackend {
-      case .regression:
-        return "Regression ejecuta los juegos con su propio motor. Sus archivos "
-          + "permanecen en la biblioteca existente de CrossOver mediante un enlace."
-      case .crossOver:
-        return "CrossOver está seleccionado como comparador. Los archivos permanecen "
-          + "en la misma biblioteca compartida."
-      }
-    case .notConfigured:
-      return "Los archivos existentes de CrossOver aún no están enlazados a Regression."
-    case .blocked(let reason):
-      return reason
-    }
-  }
-
-  private var libraryStatusSymbol: String {
-    if model.libraryFailureDetail != nil {
-      return "exclamationmark.triangle.fill"
-    }
-    guard let assessment = model.sharedLibraryAssessment else {
-      return "externaldrive"
-    }
-    switch assessment.status {
-    case .ready: return "externaldrive"
-    case .notConfigured: return "externaldrive.badge.plus"
-    case .blocked: return "exclamationmark.triangle.fill"
-    }
-  }
-
-  private var libraryStatusColor: Color {
-    if model.libraryFailureDetail != nil { return .red }
-    guard let assessment = model.sharedLibraryAssessment else { return .secondary }
-    if case .blocked = assessment.status { return .red }
-    return .secondary
-  }
-
-  private func physicalLibraryCustodyTitle(_ assessment: PhysicalLibraryCustodyAssessment) -> String
-  {
-    switch assessment.status {
-    case .eligibleForTransfer:
-      "Biblioteca preparada para una futura transferencia"
-    case .migrationPlanned:
-      "Hay un plan de transferencia pendiente"
-    case .alreadyOwned:
-      "Biblioteca bajo custodia de Regression"
-    case .blocked:
-      "La custodia no puede evaluarse todavía"
-    }
-  }
-
-  private func physicalLibraryCustodyDetail(_ assessment: PhysicalLibraryCustodyAssessment)
-    -> String
-  {
-    switch assessment.status {
-    case .eligibleForTransfer:
-      "La evaluación terminó sin cambios. Regression no habilita ningún traslado desde aquí."
-    case .migrationPlanned:
-      "Se encontró un plan ya existente. Esta pantalla no lo ejecuta ni modifica archivos."
-    case .alreadyOwned:
-      "La fuente heredada ya apunta al destino propio comprobado; no se ha realizado ningún cambio."
-    case .blocked(let reason):
-      reason
-    }
-  }
-
-  private func physicalLibraryCustodySymbol(_ assessment: PhysicalLibraryCustodyAssessment)
-    -> String
-  {
-    switch assessment.status {
-    case .eligibleForTransfer: "checkmark.circle"
-    case .migrationPlanned: "clock.badge.exclamationmark"
-    case .alreadyOwned: "checkmark.shield"
-    case .blocked: "exclamationmark.triangle"
-    }
-  }
-
-  private func physicalLibraryCustodyColor(_ assessment: PhysicalLibraryCustodyAssessment) -> Color
-  {
-    switch assessment.status {
-    case .eligibleForTransfer: .secondary
-    case .alreadyOwned: .green
-    case .migrationPlanned: .orange
-    case .blocked: .red
     }
   }
 
@@ -1364,8 +1251,6 @@ struct MenuBarView: View {
 
   private func recoveryTitle(_ recovery: UserFacingFailure.Recovery) -> String {
     switch recovery {
-    case .openCrossOver: "Abrir CrossOver"
-    case .chooseRegression: "Usar Regression"
     case .refresh: "Reintentar"
     }
   }
@@ -1397,12 +1282,4 @@ struct MenuBarView: View {
     return run.result == .crashed ? "Cierre inesperado" : "Pendiente de verificación"
   }
 
-  private func updateStatusText(_ update: CrossOverUpdateStatus) -> String {
-    guard let availableVersion = update.availableVersion else {
-      return "Versión no comprobada"
-    }
-    return update.updateAvailable
-      ? "Disponible: \(availableVersion)"
-      : "Actualizado"
-  }
 }

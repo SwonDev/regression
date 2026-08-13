@@ -4,7 +4,7 @@
 # y reutiliza D3DMetal solo desde una instalación local que el usuario ya haya licenciado.
 set -Eeuo pipefail
 
-VERSION="1.10.0"
+VERSION="1.10.1"
 REPO="SwonDev/regression"
 ASSET_NAME="Regression-${VERSION}-macos-arm64.tar.zst"
 APP_NAME="Regression.app"
@@ -30,6 +30,7 @@ BRIDGE_APP_BACKUP=""
 BRIDGE_AGENT_BACKUP=""
 BRIDGE_CHANGED=0
 BOTTLE_REGISTRY_BACKUP=""
+GPTK_PRESERVATION_MANIFEST=""
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
 usage() {
@@ -395,6 +396,12 @@ D3DMETAL_SOURCE=""
 
 if [[ -d "$DESTINATION/Contents/SharedSupport/wine-root/lib/apple_gptk/external/D3DMetal.framework" ]]; then
     D3DMETAL_SOURCE="$DESTINATION/Contents/SharedSupport/wine-root/lib/apple_gptk"
+    GPTK_PRESERVATION_MANIFEST="$WORK_DIR/gptk-before-install.mtree"
+    (
+        cd "$D3DMETAL_SOURCE"
+        /usr/sbin/mtree -c -k type,mode,link,sha256digest \
+            | /usr/bin/sed -n '/^# \.$/,$p'
+    ) > "$GPTK_PRESERVATION_MANIFEST"
     mkdir -p "$WINE_ROOT/lib"
     cleanup_path "$GPTK_ROOT"
     cp -cR "$D3DMETAL_SOURCE" "$GPTK_ROOT"
@@ -663,6 +670,19 @@ for cached_ntdll in "${cached_ntdll_paths[@]}"; do
 done
 
 codesign --verify --deep --strict "$DESTINATION"
+if [[ -n "$GPTK_PRESERVATION_MANIFEST" ]]; then
+    GPTK_INSTALLED_MANIFEST="$WORK_DIR/gptk-after-install.mtree"
+    (
+        cd "$DESTINATION/Contents/SharedSupport/wine-root/lib/apple_gptk"
+        /usr/sbin/mtree -c -k type,mode,link,sha256digest \
+            | /usr/bin/sed -n '/^# \.$/,$p'
+    ) > "$GPTK_INSTALLED_MANIFEST"
+    /usr/bin/cmp -s "$GPTK_PRESERVATION_MANIFEST" "$GPTK_INSTALLED_MANIFEST" || {
+        fail "La instalación no conservó exactamente los hashes, modos y enlaces GPTK."
+        rollback 1
+    }
+    ok "GPTK local verificado byte a byte tras la sustitución"
+fi
 if [[ -x "$LSREGISTER" ]]; then
     "$LSREGISTER" -f "$DESTINATION"
 fi
