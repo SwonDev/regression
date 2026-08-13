@@ -172,3 +172,22 @@ No usar el checkout antiguo `/Users/adrianpereradelgado/Documents/Vibeclaude/Reg
   Release warnings-as-errors, suites shell, transición pública, serie Wine reproducible,
   ShellCheck crítico, `git diff --check` y verificación clean-PATH del asset. Falta únicamente
   commit/push/tag/release y descargar de GitHub los tres assets publicados para comparar hashes.
+
+## Publicación final 21:14
+
+- Commit de producto y tag: `c11cddfd457ac247e5f54bd8aad51974ccd13d9d` / `v1.11.0`.
+- `master` y `codex/regression-aaa-autonomy` se publicaron por fast-forward; el tag anotado
+  `v1.11.0` apunta al mismo commit de producto.
+- Release latest pública:
+  <https://github.com/SwonDev/regression/releases/tag/v1.11.0>.
+- Los tres assets se volvieron a descargar desde GitHub a un scratch nuevo. El tar conserva
+  SHA-256 `47740fbf27e6e792e2f6c5bf0b08a8ca7344f0bd1241adb0ad0e72569c3baa7e`,
+  el instalador conserva
+  `bba8a3225d5f79d2fb5d4d620f54043d1c9a00b10536cce43f846cec1aa3e40b` y el sidecar es
+  idéntico al local.
+- El asset descargado superó de nuevo `verify-release-asset.sh` con PATH limitado al sistema y
+  el instalador publicado superó `--verify-release`: descargó el release oficial, verificó la
+  autoridad independiente y auditó el bundle sin modificar el Mac.
+- Estado final: instalación canónica 1.11.0 (37), firma profunda válida, SQLite v14 íntegra,
+  `steamapps` física inode/device `28262319/16777234`, ruta CrossOver ausente y cero procesos
+  Regression/Steam/Wine/juego. No queda ningún paso de promoción pendiente.
