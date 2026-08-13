@@ -1,27 +1,25 @@
 # Protocolo de investigación de compatibilidad
 
-Este documento convierte el trabajo A/B contra CrossOver en un procedimiento repetible. El
-objetivo no es copiar binarios propietarios: es observar una ejecución correcta, identificar la
-diferencia mínima y reproducir legalmente ese comportamiento en el motor propio mediante fuentes
-públicas, recursos locales autorizados y configuración aislada.
+Este documento convierte la investigación dentro del runtime propio de Regression en un
+procedimiento repetible. El baseline es siempre una ejecución protegida de Regression o, si el
+juego nunca funcionó, el fallo reproducible registrado localmente. Los candidatos se construyen
+con fuentes FOSS oficiales, recursos Apple autorizados y configuración aislada.
 
-`AGENTS.md` sigue siendo la norma obligatoria. Este documento explica cómo ejecutarla en la
-práctica cuando un juego funciona en CrossOver y falla en Regression.
+`AGENTS.md` sigue siendo la norma obligatoria. Regression no instala, consulta, abre ni invoca
+CrossOver o CodeWeavers durante este protocolo.
 
 ## Principios
 
-1. **La referencia es el comportamiento, no una intuición.** Hay que ejecutar el mismo juego en
-   CrossOver y Regression, en el mismo Mac y, cuando sea posible, con los mismos archivos, save,
-   resolución y escena.
+1. **La referencia es el comportamiento reproducible, no una intuición.** Baseline y candidato se
+   ejecutan en Regression, en el mismo Mac y con archivos, save, resolución y escena equivalentes.
 2. **Un proceso correcto no demuestra una imagen correcta.** La validación exige observar el
    juego, interactuar con él y capturar su ventana.
 3. **Cada juego tiene un perfil aislado.** Un ajuste verificado no se traslada al registro global
    ni al launcher común si puede expresarse por nombre de ejecutable, App ID o perfil.
 4. **Una variable por prueba.** Backend, DLL, override, variable de entorno, RetinaMode y
    resolución se prueban por separado.
-5. **CrossOver no es una dependencia del motor propio.** Se permite inspección estática de su
-   instalación y uso normal de sus herramientas oficiales. No se enlazan sus rutas ni se copian
-   sus binarios propietarios a Regression.
+5. **Autonomía total.** No se inspecciona ni ejecuta una instalación de CrossOver y no se enlazan
+   sus rutas. Toda evidencia operativa procede de Regression y de fuentes FOSS oficiales.
 6. **La promoción requiere rollback.** Antes de modificar la app o una botella se preservan los
    archivos afectados y se registran hashes. El instalador debe restaurarlos automáticamente si
    falla cualquier etapa posterior —incluida la firma— y esa ruta de error se prueba en un clon,
@@ -61,15 +59,16 @@ ejecución para que no se confunda con una diferencia del motor. El preflight so
 termina procesos, no elimina marcadores ni modifica una botella.
 
 Después se abre un expediente local con `regressionctl research-open`. El expediente guarda el
-síntoma reproducible y el comportamiento observado en CrossOver. Cada causa posible se registra
+síntoma reproducible y el comportamiento esperado según el baseline protegido o el contrato del
+juego. Cada causa posible se registra
 como hipótesis falsable, con una predicción que indique qué observación la apoyará y qué
-observación la descartará. “Probar otra DLL” no es una hipótesis; “la pareja `d3d11/dxgi` no
-pertenece al mismo backend y por eso el módulo efectivo difiere de CrossOver” sí lo es.
+observación la descartará. “Probar otra DLL” no es una hipótesis; “la pareja `d3d11/dxgi` mezcla
+familias de build y por eso el módulo efectivo no coincide con el perfil compilado” sí lo es.
 
 Las hipótesis se ordenan por:
 
 1. capacidad de explicar todos los síntomas, no solo uno;
-2. evidencia diferencial contra CrossOver;
+2. evidencia diferencial entre baseline y candidato de Regression;
 3. coste y riesgo de la prueba;
 4. posibilidad de aislar una única variable;
 5. valor del resultado negativo para reducir el espacio de búsqueda.
@@ -81,10 +80,10 @@ El número exacto depende del fallo, pero debe declararse antes de ver el result
 
 ## Expediente persistente y estados
 
-El esquema local v12 separa los candidatos tecnológicos de los experimentos que realmente se han
+El esquema local v14 separa los candidatos tecnológicos de los experimentos que realmente se han
 ejecutado y conserva el estado previo de cada prueba:
 
-- `compatibility_research_cases`: problema, expectativa CrossOver, estado y conclusión;
+- `compatibility_research_cases`: problema, expectativa reproducible, estado y conclusión;
 - `research_hypotheses`: causas ordenadas, predicción, apoyo o falsación;
 - `research_experiments`: una única dimensión cambiada, aislamiento, baseline, candidato, run y
   rollback;
@@ -103,9 +102,9 @@ La base no almacena comandos, scripts ni blobs. Solo conserva descripciones sane
 referencias privadas y fingerprints. Los perfiles y recetas ejecutables siguen compilados y
 revisados en el repositorio.
 
-## Fase 1: establecer dos baselines
+## Fase 1: establecer baseline y candidato dentro de Regression
 
-### Baseline Regression
+### Baseline protegido
 
 - Arrancar desde la app canónica, nunca desde un wine improvisado.
 - Descartar wineservers ajenos, procesos huérfanos, diálogos modales de Steam Cloud y ficheros
@@ -115,26 +114,25 @@ revisados en el repositorio.
 - Capturar el síntoma exacto: negro, parpadeo, geometría dañada, click desplazado, bloqueo al
   cambiar opciones, crash o cierre normal.
 
-### Baseline CrossOver
+### Candidato aislado
 
-- Usar la botella donde el usuario ya sabe que el juego funciona.
-- No reinstalar el juego si ambas botellas pueden usar una única biblioteca física de Steam.
+- Crear una copia o perfil autocontenido sin modificar la botella y runtime estables.
 - Fijar una escena reproducible: menú, personaje/save y zona concreta.
 - Confirmar visualmente render, entrada, cambio de opciones y persistencia tras reinicio.
-- Registrar la versión exacta de CrossOver y el backend explícito de la botella. El modo
-  “automático” no se presupone: hay que comprobar qué ruta termina activa.
+- Registrar la versión y huellas exactas del runtime FOSS, el perfil y la capa gráfica efectiva.
 
 ### Distinguir una regresión de una limitación compartida
 
-Si una imperfección visual aparece en Regression, primero hay que reproducir la misma escena en
-CrossOver y comparar tanto la captura como la configuración escrita por el juego. Cuando ambos
-backends producen la misma superficie y la propia interfaz del título no ofrece otra relación de
-aspecto, el defecto no demuestra una regresión del motor. Se conserva el baseline funcional como
+Si una imperfección visual aparece en Regression, hay que compararla con el último baseline
+protegido y con la configuración escrita por el juego. Cuando la superficie no cambia entre
+versiones propias y el título no ofrece otra relación de aspecto, el defecto no demuestra una
+regresión nueva. Se conserva el baseline funcional como
 `Funciona con incidencias`; no se fuerza una resolución en el estado bueno ni se crea un perfil
 que solo oculte el síntoma. Rotwood documenta este caso con una superficie 1512×870 compartida en
-una pantalla 1512×982: [`games/rotwood.md`](games/rotwood.md).
+una pantalla 1512×982: [`games/rotwood.md`](games/rotwood.md). Ese expediente incluye una
+comparación histórica de terceros que se conserva como contexto, no como paso reproducible actual.
 
-La paridad con CrossOver tampoco convierte el resultado en perfecto. Si el usuario considera la
+La equivalencia con un baseline anterior tampoco convierte el resultado en perfecto. Si el usuario considera la
 presentación incorrecta, la incidencia sigue explícita. Una mejora posterior debe investigarse
 como candidato aislado y superar render, composición, entrada, opciones, persistencia y rollback.
 
@@ -146,22 +144,21 @@ La observación permitida y útil incluye:
 - módulos cargados mediante `lsof`;
 - variables de entorno relevantes sin credenciales;
 - claves gráficas del registro de la botella;
-- crossties públicos o legibles como datos de configuración;
+- manifiestos, parches y configuración del runtime FOSS compilado por Regression;
 - estructura y hashes de recursos con licencia de uso local;
 - logs de Wine, DXMT, DXVK, D3DMetal, MoltenVK y Steam;
 - resolución lógica, resolución de framebuffer y geometría de ventanas.
 
-No se descompila la GUI, el sistema de licencias, `cxcompatdb` ni forks privados. Si CrossOver usa
-una pieza no pública, la salida válida es investigar una implementación abierta equivalente, no
-extraerla.
+No se descompila software propietario ni se usan bases o forks privados. Si una pieza necesaria no
+es pública y redistribuible, la salida válida es investigar una implementación abierta equivalente.
 
 ## Fase 3: construir una matriz de diferencias
 
 Antes de modificar código se prepara una tabla con, al menos:
 
-| Dimensión | CrossOver correcto | Regression fallido | Candidato aislado |
+| Dimensión | Baseline Regression | Síntoma reproducido | Candidato aislado |
 |---|---|---|---|
-| Wine/prefix | versión y prefix efectivos | versión y prefix efectivos | igualar convención |
+| Wine/prefix | versión y prefix protegidos | versión y prefix efectivos | conservar o cambiar una dimensión |
 | Backend D3D | D3DMetal, DXMT, DXVK o vkd3d | ruta realmente cargada | un solo backend |
 | DLLs | módulos y orden de carga | módulos y orden de carga | perfil propio |
 | Overrides | builtin/native/ausente | configuración efectiva | override por proceso |
@@ -236,7 +233,7 @@ Cada perfil perfecto debe conservar:
 - captura local del resultado y su SHA-256;
 - lista saneada de módulos cargados;
 - resolución, backend, App ID y ejecutable;
-- comprobación de ausencia de rutas de CrossOver en el proceso propio;
+- comprobación de que todas las rutas ejecutables pertenecen a Regression o a componentes locales autorizados;
 - resultado de build, tests, firma y aplicación del parche;
 - confirmación visual explícita del usuario;
 - ruta de rollback;
@@ -247,18 +244,18 @@ Cada perfil perfecto debe conservar:
 
 El cierre estructurado exige además estas ocho puertas sobre el mismo experimento:
 
-1. referencia CrossOver reproducida;
+1. baseline Regression reproducido;
 2. render correcto;
 3. entrada precisa;
 4. opciones gráficas modificables y persistentes;
 5. gameplay representativo;
-6. ausencia de recursos ejecutables de CrossOver en el motor propio;
+6. independencia y procedencia autorizada de todos los recursos ejecutables;
 7. matriz de regresión correspondiente al componente tocado;
 8. rollback ensayado o verificado.
 
 Y estas ocho evidencias con huella:
 
-1. captura CrossOver;
+1. captura del baseline Regression;
 2. captura Regression;
 3. inventario de módulos;
 4. snapshot de configuración;

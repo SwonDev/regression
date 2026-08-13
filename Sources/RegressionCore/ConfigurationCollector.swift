@@ -3,13 +3,6 @@ import Darwin
 import Foundation
 
 public enum ConfigurationCollector {
-    private static let allowedBottleKeys: Set<String> = [
-        "Version", "Template", "WineArch", "WindowsVersion",
-        "WINEMSYNC", "WINEESYNC", "CX_GRAPHICS_BACKEND",
-        "WINEDXVK", "WINED3DMETAL", "CX_DXVK", "CX_D3DMETAL",
-        "DXVK_ASYNC", "DXVK_STATE_CACHE", "DXVK_LOG_LEVEL",
-        "MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "WINEDLLOVERRIDES"
-    ]
     private static let allowedRegistryKeys: Set<String> = [
         "RetinaMode", "VideoMemorySize", "renderer", "OffscreenRenderingMode",
         "UseGLSL", "MouseWarpOverride", "GrabFullscreen", "Decorated"
@@ -26,7 +19,6 @@ public enum ConfigurationCollector {
             "provider.version": providerVersion,
             "bottle.name": bottleURL.lastPathComponent
         ]
-        collectBottleConfiguration(at: bottleURL, into: &values)
         collectRegistryConfiguration(at: bottleURL, into: &values)
         collectRuntimeModuleInventory(at: bottleURL, into: &values)
         collectDotNetFrameworks(at: bottleURL, into: &values)
@@ -68,23 +60,6 @@ public enum ConfigurationCollector {
 
     public static func engineFingerprint(for configuration: [String: String]) -> String {
         fingerprint(engineValues(from: configuration))
-    }
-
-    private static func collectBottleConfiguration(at bottleURL: URL, into values: inout [String: String]) {
-        let configURL = bottleURL.appendingPathComponent("cxbottle.conf")
-        guard let contents = try? String(contentsOf: configURL, encoding: .utf8) else { return }
-        let pattern = #"(?m)^\s*"([A-Za-z0-9_]+)"\s*=\s*"([^"]*)"\s*$"#
-        guard let expression = try? NSRegularExpression(pattern: pattern) else { return }
-        let range = NSRange(contents.startIndex..<contents.endIndex, in: contents)
-        for match in expression.matches(in: contents, range: range) {
-            guard
-                let keyRange = Range(match.range(at: 1), in: contents),
-                let valueRange = Range(match.range(at: 2), in: contents)
-            else { continue }
-            let key = String(contents[keyRange])
-            guard allowedBottleKeys.contains(key) else { continue }
-            values["bottle.\(key)"] = String(contents[valueRange])
-        }
     }
 
     private static func collectRegistryConfiguration(at bottleURL: URL, into values: inout [String: String]) {

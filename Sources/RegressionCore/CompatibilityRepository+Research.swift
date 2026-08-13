@@ -10,9 +10,9 @@ extension CompatibilityRepository {
                 "un expediente nuevo debe empezar abierto y sin una conclusión precargada"
             )
         }
-        guard researchCase.referenceBackend == .crossOver else {
+        guard researchCase.referenceBackend == .regression else {
             throw RegressionCoreError.invalidEvidence(
-                "la referencia primaria de un expediente debe ser CrossOver"
+                "los expedientes nuevos deben usar el baseline propio de Regression"
             )
         }
         guard let appID = SteamAppID.normalized(researchCase.appID) else {
@@ -56,7 +56,9 @@ extension CompatibilityRepository {
             }
             return result
         }
-        let filter = normalizedAppID == nil ? "" : "WHERE c.app_id=?"
+        let filter = normalizedAppID == nil
+            ? "WHERE c.reference_backend='regression'"
+            : "WHERE c.reference_backend='regression' AND c.app_id=?"
         let bindings: [Any] = normalizedAppID.map { [$0] } ?? []
         return try query(
             """
@@ -77,7 +79,7 @@ extension CompatibilityRepository {
                 c.updated_at DESC;
             """,
             bindings: bindings
-        ) { statement in
+        ) { statement -> CompatibilityResearchCase? in
             guard
                 let id = UUID(uuidString: Self.text(statement, 0)),
                 let backend = BackendKind(rawValue: Self.text(statement, 5)),
@@ -144,9 +146,7 @@ extension CompatibilityRepository {
                 "cada hipótesis debe ser concreta y tener una predicción falsable"
             )
         }
-        guard try researchCases().contains(where: { $0.id == hypothesis.caseID }) else {
-            throw RegressionCoreError.invalidEvidence("el expediente de la hipótesis no existe")
-        }
+        _ = try autonomousResearchCase(id: hypothesis.caseID)
         try execute(
             """
             INSERT INTO research_hypotheses(
@@ -177,7 +177,11 @@ extension CompatibilityRepository {
 
     public func researchHypotheses(caseID: UUID? = nil) throws -> [ResearchHypothesis] {
         try ensurePrepared()
-        let filter = caseID == nil ? "" : "WHERE case_id=?"
+        let filter = caseID == nil
+            ? "WHERE EXISTS (SELECT 1 FROM compatibility_research_cases c "
+                + "WHERE c.id=research_hypotheses.case_id AND c.reference_backend='regression')"
+            : "WHERE case_id=? AND EXISTS (SELECT 1 FROM compatibility_research_cases c "
+                + "WHERE c.id=research_hypotheses.case_id AND c.reference_backend='regression')"
         let bindings: [Any] = caseID.map { [$0.uuidString] } ?? []
         return try query(
             """
@@ -188,7 +192,7 @@ extension CompatibilityRepository {
             ORDER BY case_id, rank, created_at;
             """,
             bindings: bindings
-        ) { statement in
+        ) { statement -> ResearchHypothesis? in
             guard
                 let id = UUID(uuidString: Self.text(statement, 0)),
                 let parentID = UUID(uuidString: Self.text(statement, 1)),
@@ -212,9 +216,7 @@ extension CompatibilityRepository {
 
     public func registerResearchExperiment(_ experiment: ResearchExperiment) throws {
         try ensurePrepared()
-        guard let researchCase = try researchCases().first(where: { $0.id == experiment.caseID }) else {
-            throw RegressionCoreError.invalidEvidence("el expediente del experimento no existe")
-        }
+        let researchCase = try autonomousResearchCase(id: experiment.caseID)
         if let hypothesisID = experiment.hypothesisID {
             guard try researchHypotheses(caseID: experiment.caseID)
                 .contains(where: { $0.id == hypothesisID }) else {
@@ -271,7 +273,11 @@ extension CompatibilityRepository {
 
     public func researchExperiments(caseID: UUID? = nil) throws -> [ResearchExperiment] {
         try ensurePrepared()
-        let filter = caseID == nil ? "" : "WHERE case_id=?"
+        let filter = caseID == nil
+            ? "WHERE EXISTS (SELECT 1 FROM compatibility_research_cases c "
+                + "WHERE c.id=research_experiments.case_id AND c.reference_backend='regression')"
+            : "WHERE case_id=? AND EXISTS (SELECT 1 FROM compatibility_research_cases c "
+                + "WHERE c.id=research_experiments.case_id AND c.reference_backend='regression')"
         let bindings: [Any] = caseID.map { [$0.uuidString] } ?? []
         return try query(
             """
@@ -284,7 +290,7 @@ extension CompatibilityRepository {
             ORDER BY updated_at DESC;
             """,
             bindings: bindings
-        ) { statement in
+        ) { statement -> ResearchExperiment? in
             guard
                 let id = UUID(uuidString: Self.text(statement, 0)),
                 let parentID = UUID(uuidString: Self.text(statement, 1)),
@@ -315,10 +321,11 @@ extension CompatibilityRepository {
 
     public func attachResearchRun(experimentID: UUID, runID: UUID) throws {
         try ensurePrepared()
-        guard let experiment = try researchExperiments().first(where: { $0.id == experimentID }),
-              let researchCase = try researchCases().first(where: { $0.id == experiment.caseID }) else {
+        guard let experiment = try researchExperimentRecord(id: experimentID),
+              let researchCase = try researchCaseRecord(id: experiment.caseID) else {
             throw RegressionCoreError.invalidEvidence("el experimento no existe")
         }
+        try requireAutonomousResearchCase(researchCase)
         guard [.ready, .running, .validation].contains(experiment.state) else {
             throw RegressionCoreError.invalidEvidence(
                 "solo un experimento preparado y activo puede vincular una ejecución"
@@ -338,7 +345,7 @@ extension CompatibilityRepository {
             WHERE r.id=?;
             """,
             bindings: [runID.uuidString]
-        ) { statement in
+        ) { statement -> RunIdentity? in
             guard let backend = BackendKind(rawValue: Self.text(statement, 1)) else { return nil }
             return RunIdentity(
                 appID: Self.text(statement, 0),
@@ -387,12 +394,13 @@ extension CompatibilityRepository {
                 "solo los resultados fallidos o revertidos se cierran por esta vía"
             )
         }
-        guard let experiment = try researchExperiments().first(where: { $0.id == id }),
+        guard let experiment = try researchExperimentRecord(id: id),
               experiment.state != .passed else {
             throw RegressionCoreError.invalidEvidence(
                 "el experimento no existe o ya forma parte de un cierre verificado"
             )
         }
+        _ = try autonomousResearchCase(id: experiment.caseID)
         try execute(
             """
             UPDATE research_experiments
@@ -410,13 +418,13 @@ extension CompatibilityRepository {
 
     public func recordResearchGate(_ result: ResearchGateResult) throws {
         try ensurePrepared()
-        guard let experiment = try researchExperiments().first(where: {
-            $0.id == result.experimentID
-        }), experiment.state != .passed else {
+        guard let experiment = try researchExperimentRecord(id: result.experimentID),
+              experiment.state != .passed else {
             throw RegressionCoreError.invalidEvidence(
                 "no se puede alterar la matriz de un experimento inexistente o ya cerrado"
             )
         }
+        _ = try autonomousResearchCase(id: experiment.caseID)
         let evidence = researchText(result.evidenceReference, limit: 2_000)
         if result.status != .pending, evidence.isEmpty {
             throw RegressionCoreError.invalidEvidence(
@@ -445,7 +453,15 @@ extension CompatibilityRepository {
 
     public func researchGates(experimentID: UUID? = nil) throws -> [ResearchGateResult] {
         try ensurePrepared()
-        let filter = experimentID == nil ? "" : "WHERE experiment_id=?"
+        let filter = experimentID == nil
+            ? "WHERE EXISTS (SELECT 1 FROM research_experiments e "
+                + "JOIN compatibility_research_cases c ON c.id=e.case_id "
+                + "WHERE e.id=research_gate_results.experiment_id "
+                + "AND c.reference_backend='regression')"
+            : "WHERE experiment_id=? AND EXISTS (SELECT 1 FROM research_experiments e "
+                + "JOIN compatibility_research_cases c ON c.id=e.case_id "
+                + "WHERE e.id=research_gate_results.experiment_id "
+                + "AND c.reference_backend='regression')"
         let bindings: [Any] = experimentID.map { [$0.uuidString] } ?? []
         return try query(
             """
@@ -455,7 +471,7 @@ extension CompatibilityRepository {
             ORDER BY experiment_id, gate;
             """,
             bindings: bindings
-        ) { statement in
+        ) { statement -> ResearchGateResult? in
             guard
                 let parentID = UUID(uuidString: Self.text(statement, 0)),
                 let gate = ResearchValidationGate(rawValue: Self.text(statement, 1)),
@@ -474,13 +490,13 @@ extension CompatibilityRepository {
 
     public func recordResearchArtifact(_ artifact: ResearchArtifact) throws {
         try ensurePrepared()
-        guard let experiment = try researchExperiments().first(where: {
-            $0.id == artifact.experimentID
-        }), experiment.state != .passed else {
+        guard let experiment = try researchExperimentRecord(id: artifact.experimentID),
+              experiment.state != .passed else {
             throw RegressionCoreError.invalidEvidence(
                 "no se puede alterar la evidencia de un experimento inexistente o ya cerrado"
             )
         }
+        let researchCase = try autonomousResearchCase(id: experiment.caseID)
         let reference = researchText(artifact.reference, limit: 2_000)
         guard !reference.isEmpty else {
             throw RegressionCoreError.invalidEvidence("la evidencia necesita una referencia privada")
@@ -496,7 +512,8 @@ extension CompatibilityRepository {
         } else {
             fingerprint = nil
         }
-        if CompatibilityResearchProtocol.mandatoryArtifacts.contains(artifact.kind),
+        if CompatibilityResearchProtocol.mandatoryArtifacts(for: researchCase.referenceBackend)
+            .contains(artifact.kind),
            fingerprint?.isEmpty != false {
             throw RegressionCoreError.invalidEvidence(
                 "la evidencia obligatoria necesita una huella verificable"
@@ -526,7 +543,15 @@ extension CompatibilityRepository {
 
     public func researchArtifacts(experimentID: UUID? = nil) throws -> [ResearchArtifact] {
         try ensurePrepared()
-        let filter = experimentID == nil ? "" : "WHERE experiment_id=?"
+        let filter = experimentID == nil
+            ? "WHERE EXISTS (SELECT 1 FROM research_experiments e "
+                + "JOIN compatibility_research_cases c ON c.id=e.case_id "
+                + "WHERE e.id=research_artifacts.experiment_id "
+                + "AND c.reference_backend='regression')"
+            : "WHERE experiment_id=? AND EXISTS (SELECT 1 FROM research_experiments e "
+                + "JOIN compatibility_research_cases c ON c.id=e.case_id "
+                + "WHERE e.id=research_artifacts.experiment_id "
+                + "AND c.reference_backend='regression')"
         let bindings: [Any] = experimentID.map { [$0.uuidString] } ?? []
         return try query(
             """
@@ -536,7 +561,7 @@ extension CompatibilityRepository {
             ORDER BY captured_at, kind;
             """,
             bindings: bindings
-        ) { statement in
+        ) { statement -> ResearchArtifact? in
             guard
                 let id = UUID(uuidString: Self.text(statement, 0)),
                 let parentID = UUID(uuidString: Self.text(statement, 1)),
@@ -661,14 +686,33 @@ extension CompatibilityRepository {
                 OR (
                     SELECT COUNT(DISTINCT gate) FROM research_gate_results g
                     WHERE g.experiment_id=e.id AND g.status='passed'
-                      AND g.gate IN (\(ResearchSchema.mandatoryGatesSQL))
+                      AND g.gate IN (\(ResearchSchema.autonomousMandatoryGatesSQL))
                 )!=\(CompatibilityResearchProtocol.mandatoryGates.count)
+                AND (SELECT reference_backend FROM compatibility_research_cases
+                     WHERE id=e.case_id)='regression'
+                OR (
+                    SELECT COUNT(DISTINCT gate) FROM research_gate_results g
+                    WHERE g.experiment_id=e.id AND g.status='passed'
+                      AND g.gate IN (\(ResearchSchema.legacyMandatoryGatesSQL))
+                )!=\(CompatibilityResearchProtocol.mandatoryGates(for: .crossOver).count)
+                AND (SELECT reference_backend FROM compatibility_research_cases
+                     WHERE id=e.case_id)='crossOver'
                 OR (
                     SELECT COUNT(DISTINCT kind) FROM research_artifacts a
                     WHERE a.experiment_id=e.id
                       AND a.fingerprint IS NOT NULL AND trim(a.fingerprint)!=''
-                      AND a.kind IN (\(ResearchSchema.mandatoryArtifactsSQL))
+                      AND a.kind IN (\(ResearchSchema.autonomousMandatoryArtifactsSQL))
                 )!=\(CompatibilityResearchProtocol.mandatoryArtifacts.count)
+                AND (SELECT reference_backend FROM compatibility_research_cases
+                     WHERE id=e.case_id)='regression'
+                OR (
+                    SELECT COUNT(DISTINCT kind) FROM research_artifacts a
+                    WHERE a.experiment_id=e.id
+                      AND a.fingerprint IS NOT NULL AND trim(a.fingerprint)!=''
+                      AND a.kind IN (\(ResearchSchema.legacyMandatoryArtifactsSQL))
+                )!=\(CompatibilityResearchProtocol.mandatoryArtifacts(for: .crossOver).count)
+                AND (SELECT reference_backend FROM compatibility_research_cases
+                     WHERE id=e.case_id)='crossOver'
             );
             """
         )
@@ -690,9 +734,10 @@ extension CompatibilityRepository {
                 "un expediente solo se verifica mediante su puerta de cierre completa"
             )
         }
-        guard let current = try researchCases().first(where: { $0.id == id }) else {
+        guard let current = try researchCaseRecord(id: id) else {
             throw RegressionCoreError.invalidEvidence("el expediente no existe")
         }
+        try requireAutonomousResearchCase(current)
         guard current.state != .verified else {
             throw RegressionCoreError.invalidEvidence(
                 "un expediente verificado es histórico; abre uno nuevo para una regresión distinta"
@@ -729,14 +774,14 @@ extension CompatibilityRepository {
         experimentID: UUID,
         proposedExperiment: ResearchExperiment?
     ) throws -> ResearchCompletionDecision {
-        guard let researchCase = try researchCases().first(where: { $0.id == caseID }) else {
+        guard let researchCase = try researchCaseRecord(id: caseID) else {
             return ResearchCompletionDecision(
                 isEligible: false,
                 blockers: ["El expediente no existe."]
             )
         }
-        let storedExperiment = try researchExperiments(caseID: caseID)
-            .first(where: { $0.id == experimentID })
+        try requireAutonomousResearchCase(researchCase)
+        let storedExperiment = try researchExperimentRecord(id: experimentID)
         let experiment = proposedExperiment ?? storedExperiment
         guard let experiment, experiment.caseID == caseID else {
             return ResearchCompletionDecision(
@@ -773,20 +818,24 @@ extension CompatibilityRepository {
         }
 
         let passedGates = Set(
-            try researchGates(experimentID: experiment.id)
+            try researchGateRecords(experimentID: experiment.id)
                 .filter { $0.status == .passed && !$0.evidenceReference.isEmpty }
                 .map(\.gate)
         )
-        for gate in CompatibilityResearchProtocol.mandatoryGates where !passedGates.contains(gate) {
+        for gate in CompatibilityResearchProtocol.mandatoryGates(
+            for: researchCase.referenceBackend
+        ) where !passedGates.contains(gate) {
             blockers.append("Falta superar la puerta \(gate.rawValue).")
         }
 
         let artifactKinds = Set(
-            try researchArtifacts(experimentID: experiment.id)
+            try researchArtifactRecords(experimentID: experiment.id)
                 .filter { $0.fingerprint?.isEmpty == false }
                 .map(\.kind)
         )
-        for kind in CompatibilityResearchProtocol.mandatoryArtifacts
+        for kind in CompatibilityResearchProtocol.mandatoryArtifacts(
+            for: researchCase.referenceBackend
+        )
             where !artifactKinds.contains(kind) {
             blockers.append("Falta la evidencia \(kind.rawValue).")
         }
@@ -814,6 +863,24 @@ extension CompatibilityRepository {
         return ResearchCompletionDecision(isEligible: blockers.isEmpty, blockers: blockers)
     }
 
+    private func autonomousResearchCase(id: UUID) throws -> CompatibilityResearchCase {
+        guard let researchCase = try researchCaseRecord(id: id) else {
+            throw RegressionCoreError.invalidEvidence("el expediente no existe")
+        }
+        try requireAutonomousResearchCase(researchCase)
+        return researchCase
+    }
+
+    private func requireAutonomousResearchCase(
+        _ researchCase: CompatibilityResearchCase
+    ) throws {
+        guard researchCase.referenceBackend == .regression else {
+            throw RegressionCoreError.invalidEvidence(
+                "el expediente histórico es de solo lectura; abre uno nuevo con baseline Regression"
+            )
+        }
+    }
+
     private func researchExperimentBindings(_ experiment: ResearchExperiment) -> [Any] {
         [
             experiment.id.uuidString,
@@ -832,6 +899,132 @@ extension CompatibilityRepository {
             dateFormatter.string(from: experiment.createdAt),
             dateFormatter.string(from: experiment.updatedAt)
         ]
+    }
+
+    /// Acceso interno por identidad para terminar o corregir un expediente histórico conocido.
+    /// Las consultas públicas continúan ocultando ese grafo.
+    private func researchCaseRecord(id: UUID) throws -> CompatibilityResearchCase? {
+        try query(
+            """
+            SELECT c.id, c.app_id, g.name, c.symptom, c.expected_behavior,
+                   c.reference_backend, c.state, c.blocker, c.winning_experiment_id,
+                   c.resolution_summary, c.created_at, c.updated_at
+            FROM compatibility_research_cases c
+            JOIN games g ON g.app_id=c.app_id
+            WHERE c.id=?;
+            """,
+            bindings: [id.uuidString]
+        ) { statement -> CompatibilityResearchCase? in
+            guard
+                let recordID = UUID(uuidString: Self.text(statement, 0)),
+                let backend = BackendKind(rawValue: Self.text(statement, 5)),
+                let state = CompatibilityResearchCaseState(rawValue: Self.text(statement, 6)),
+                let createdAt = dateFormatter.date(from: Self.text(statement, 10)),
+                let updatedAt = dateFormatter.date(from: Self.text(statement, 11))
+            else { return nil }
+            return CompatibilityResearchCase(
+                id: recordID,
+                appID: Self.text(statement, 1),
+                gameName: Self.text(statement, 2),
+                symptom: Self.text(statement, 3),
+                expectedBehavior: Self.text(statement, 4),
+                referenceBackend: backend,
+                state: state,
+                blocker: Self.optionalText(statement, 7),
+                winningExperimentID: Self.optionalText(statement, 8).flatMap(UUID.init(uuidString:)),
+                resolutionSummary: Self.optionalText(statement, 9),
+                createdAt: createdAt,
+                updatedAt: updatedAt
+            )
+        }.first
+    }
+
+    private func researchExperimentRecord(id: UUID) throws -> ResearchExperiment? {
+        try query(
+            """
+            SELECT id, case_id, hypothesis_id, dimension, change_summary, state,
+                   is_isolated, rollback_reference, baseline_engine_fingerprint,
+                   candidate_engine_fingerprint, run_id, runtime_candidate_id,
+                   notes, created_at, updated_at
+            FROM research_experiments WHERE id=?;
+            """,
+            bindings: [id.uuidString]
+        ) { statement -> ResearchExperiment? in
+            guard
+                let recordID = UUID(uuidString: Self.text(statement, 0)),
+                let parentID = UUID(uuidString: Self.text(statement, 1)),
+                let dimension = ResearchExperimentDimension(rawValue: Self.text(statement, 3)),
+                let state = ResearchExperimentState(rawValue: Self.text(statement, 5)),
+                let createdAt = dateFormatter.date(from: Self.text(statement, 13)),
+                let updatedAt = dateFormatter.date(from: Self.text(statement, 14))
+            else { return nil }
+            return ResearchExperiment(
+                id: recordID,
+                caseID: parentID,
+                hypothesisID: Self.optionalText(statement, 2).flatMap(UUID.init(uuidString:)),
+                dimension: dimension,
+                changeSummary: Self.text(statement, 4),
+                state: state,
+                isIsolated: Self.optionalInt(statement, 6) == 1,
+                rollbackReference: Self.optionalText(statement, 7),
+                baselineEngineFingerprint: Self.optionalText(statement, 8),
+                candidateEngineFingerprint: Self.optionalText(statement, 9),
+                runID: Self.optionalText(statement, 10).flatMap(UUID.init(uuidString:)),
+                runtimeCandidateID: Self.optionalText(statement, 11).flatMap(UUID.init(uuidString:)),
+                notes: Self.text(statement, 12),
+                createdAt: createdAt,
+                updatedAt: updatedAt
+            )
+        }.first
+    }
+
+    private func researchGateRecords(experimentID: UUID) throws -> [ResearchGateResult] {
+        try query(
+            """
+            SELECT experiment_id, gate, status, evidence_reference, checked_at
+            FROM research_gate_results WHERE experiment_id=? ORDER BY gate;
+            """,
+            bindings: [experimentID.uuidString]
+        ) { statement in
+            guard
+                let parentID = UUID(uuidString: Self.text(statement, 0)),
+                let gate = ResearchValidationGate(rawValue: Self.text(statement, 1)),
+                let status = ResearchGateStatus(rawValue: Self.text(statement, 2)),
+                let checkedAt = dateFormatter.date(from: Self.text(statement, 4))
+            else { return nil }
+            return ResearchGateResult(
+                experimentID: parentID,
+                gate: gate,
+                status: status,
+                evidenceReference: Self.text(statement, 3),
+                checkedAt: checkedAt
+            )
+        }
+    }
+
+    private func researchArtifactRecords(experimentID: UUID) throws -> [ResearchArtifact] {
+        try query(
+            """
+            SELECT id, experiment_id, kind, reference, fingerprint, captured_at
+            FROM research_artifacts WHERE experiment_id=? ORDER BY captured_at, kind;
+            """,
+            bindings: [experimentID.uuidString]
+        ) { statement in
+            guard
+                let recordID = UUID(uuidString: Self.text(statement, 0)),
+                let parentID = UUID(uuidString: Self.text(statement, 1)),
+                let kind = ResearchArtifactKind(rawValue: Self.text(statement, 2)),
+                let capturedAt = dateFormatter.date(from: Self.text(statement, 5))
+            else { return nil }
+            return ResearchArtifact(
+                id: recordID,
+                experimentID: parentID,
+                kind: kind,
+                reference: Self.text(statement, 3),
+                fingerprint: Self.optionalText(statement, 4),
+                capturedAt: capturedAt
+            )
+        }
     }
 
     private func researchText(_ value: String, limit: Int) -> String {
@@ -855,10 +1048,20 @@ extension CompatibilityRepository {
 }
 
 enum ResearchSchema {
-    static let mandatoryGatesSQL = CompatibilityResearchProtocol.mandatoryGates
+    static let autonomousMandatoryGatesSQL = CompatibilityResearchProtocol.mandatoryGates
         .map { "'\($0.rawValue)'" }
         .joined(separator: ",")
-    static let mandatoryArtifactsSQL = CompatibilityResearchProtocol.mandatoryArtifacts
+    static let legacyMandatoryGatesSQL = CompatibilityResearchProtocol.mandatoryGates(
+        for: .crossOver
+    )
+        .map { "'\($0.rawValue)'" }
+        .joined(separator: ",")
+    static let autonomousMandatoryArtifactsSQL = CompatibilityResearchProtocol.mandatoryArtifacts
+        .map { "'\($0.rawValue)'" }
+        .joined(separator: ",")
+    static let legacyMandatoryArtifactsSQL = CompatibilityResearchProtocol.mandatoryArtifacts(
+        for: .crossOver
+    )
         .map { "'\($0.rawValue)'" }
         .joined(separator: ",")
 
@@ -868,7 +1071,8 @@ enum ResearchSchema {
             app_id TEXT NOT NULL REFERENCES games(app_id) ON DELETE CASCADE,
             symptom TEXT NOT NULL CHECK(trim(symptom)!=''),
             expected_behavior TEXT NOT NULL CHECK(trim(expected_behavior)!=''),
-            reference_backend TEXT NOT NULL CHECK(reference_backend='crossOver'),
+            reference_backend TEXT NOT NULL DEFAULT 'regression'
+                CHECK(reference_backend IN ('crossOver','regression')),
             state TEXT NOT NULL CHECK(state IN (
                 'open','investigating','validationPending','verified','pausedExternalDependency'
             )),
@@ -940,7 +1144,7 @@ enum ResearchSchema {
         CREATE TABLE IF NOT EXISTS research_gate_results(
             experiment_id TEXT NOT NULL REFERENCES research_experiments(id) ON DELETE CASCADE,
             gate TEXT NOT NULL CHECK(gate IN (
-                'crossOverReference','rendering','inputPrecision','graphicsSettings',
+                'crossOverReference','baselineReference','rendering','inputPrecision','graphicsSettings',
                 'gameplay','ownResources','regressionMatrix','rollbackVerified'
             )),
             status TEXT NOT NULL CHECK(status IN ('pending','passed','failed')),
@@ -954,7 +1158,7 @@ enum ResearchSchema {
             id TEXT PRIMARY KEY,
             experiment_id TEXT NOT NULL REFERENCES research_experiments(id) ON DELETE CASCADE,
             kind TEXT NOT NULL CHECK(kind IN (
-                'crossOverCapture','regressionCapture','moduleInventory',
+                'crossOverCapture','baselineCapture','regressionCapture','moduleInventory',
                 'configurationSnapshot','buildReport','testReport','signatureReport',
                 'rollbackManifest','logExcerpt','performanceCapture'
             )),
@@ -1011,14 +1215,33 @@ enum ResearchSchema {
             OR (
                 SELECT COUNT(DISTINCT gate) FROM research_gate_results g
                 WHERE g.experiment_id=NEW.id AND g.status='passed'
-                  AND g.gate IN (\(mandatoryGatesSQL))
+                  AND g.gate IN (\(autonomousMandatoryGatesSQL))
             )!=\(CompatibilityResearchProtocol.mandatoryGates.count)
+            AND (SELECT reference_backend FROM compatibility_research_cases
+                 WHERE id=NEW.case_id)='regression'
+            OR (
+                SELECT COUNT(DISTINCT gate) FROM research_gate_results g
+                WHERE g.experiment_id=NEW.id AND g.status='passed'
+                  AND g.gate IN (\(legacyMandatoryGatesSQL))
+            )!=\(CompatibilityResearchProtocol.mandatoryGates(for: .crossOver).count)
+            AND (SELECT reference_backend FROM compatibility_research_cases
+                 WHERE id=NEW.case_id)='crossOver'
             OR (
                 SELECT COUNT(DISTINCT kind) FROM research_artifacts a
                 WHERE a.experiment_id=NEW.id
                   AND a.fingerprint IS NOT NULL AND trim(a.fingerprint)!=''
-                  AND a.kind IN (\(mandatoryArtifactsSQL))
+                  AND a.kind IN (\(autonomousMandatoryArtifactsSQL))
             )!=\(CompatibilityResearchProtocol.mandatoryArtifacts.count)
+            AND (SELECT reference_backend FROM compatibility_research_cases
+                 WHERE id=NEW.case_id)='regression'
+            OR (
+                SELECT COUNT(DISTINCT kind) FROM research_artifacts a
+                WHERE a.experiment_id=NEW.id
+                  AND a.fingerprint IS NOT NULL AND trim(a.fingerprint)!=''
+                  AND a.kind IN (\(legacyMandatoryArtifactsSQL))
+            )!=\(CompatibilityResearchProtocol.mandatoryArtifacts(for: .crossOver).count)
+            AND (SELECT reference_backend FROM compatibility_research_cases
+                 WHERE id=NEW.case_id)='crossOver'
             OR NOT EXISTS (
                 SELECT 1 FROM runs r
                 JOIN run_verifications v ON v.run_id=r.id

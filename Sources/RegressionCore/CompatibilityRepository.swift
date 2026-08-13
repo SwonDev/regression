@@ -20,17 +20,22 @@ private struct CertificationEvidenceRecord {
 }
 
 public actor CompatibilityRepository {
-    public static let currentSchemaVersion = 12
+    public static let currentSchemaVersion = 14
 
     private let databaseURL: URL
+    let legacyCompiledRepairBottleURL: URL?
     private var database: OpaquePointer?
     private var migrationBackupURL: URL?
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
     let dateFormatter: ISO8601DateFormatter
 
-    public init(databaseURL: URL) {
+    public init(
+        databaseURL: URL,
+        legacyCompiledRepairBottleURL: URL? = nil
+    ) {
         self.databaseURL = databaseURL
+        self.legacyCompiledRepairBottleURL = legacyCompiledRepairBottleURL
         self.encoder = JSONEncoder()
         self.encoder.outputFormatting = [.sortedKeys]
         self.decoder = JSONDecoder()
@@ -83,6 +88,9 @@ public actor CompatibilityRepository {
                 migrationBackupURL = try createMigrationBackup(fromVersion: startingVersion)
             }
             try migrateSchema(from: startingVersion)
+            try transaction {
+                try inventoryLegacyCompiledRepairActivationsIfAvailable()
+            }
             try synchronizeEmbeddedCertifications()
             try synchronizeRuntimeTechnologyCatalog()
             try validateDatabase()
@@ -375,6 +383,25 @@ public actor CompatibilityRepository {
             throw RegressionCoreError.invalidEvidence(
                 "un perfil perfecto exige render, entrada, opciones gráficas y gameplay aprobados"
             )
+        }
+        if let endedAtText = try scalarText(
+            "SELECT ended_at FROM runs WHERE id=?;",
+            bindings: [verification.runID.uuidString]
+        ) {
+            // SQLite conserva estas fechas con la precisión milisegundo del
+            // contrato ISO-8601. Compara ambos lados en esa misma precisión:
+            // mezclar el cierre ya serializado con un Date en nanosegundos
+            // podía invertir dos eventos consecutivos por redondeo.
+            let normalizedVerifiedAt = dateFormatter.date(
+                from: dateFormatter.string(from: verification.verifiedAt)
+            )
+            guard let endedAt = dateFormatter.date(from: endedAtText),
+                  let normalizedVerifiedAt,
+                  normalizedVerifiedAt >= endedAt else {
+                throw RegressionCoreError.invalidEvidence(
+                    "una verificación no puede preceder al cierre de su ejecución"
+                )
+            }
         }
         if verification.verdict == .perfect {
             let eligible = try scalarInt(
@@ -689,6 +716,7 @@ public actor CompatibilityRepository {
             FROM compatibility_observations o
             JOIN games g ON g.app_id = o.app_id
             JOIN configuration_snapshots c ON c.fingerprint = o.configuration_fingerprint
+            WHERE o.backend='regression'
             ORDER BY o.observed_at DESC LIMIT ?;
             """
         return try query(sql, bindings: [max(1, limit)]) { statement in
@@ -735,6 +763,7 @@ public actor CompatibilityRepository {
             FROM runs r
             JOIN games g ON g.app_id = r.app_id
             LEFT JOIN run_verifications v ON v.run_id = r.id
+            WHERE r.backend='regression'
             ORDER BY r.started_at DESC LIMIT ?;
             """
         return try query(sql, bindings: [max(1, limit)]) { statement in
@@ -762,6 +791,56 @@ public actor CompatibilityRepository {
         }
     }
 
+    /// Frontera package-only para decisiones de custodia. Devuelve exclusivamente la ejecución
+    /// persistida que coincide simultáneamente con App ID y UUID; nunca acepta un RunSummary
+    /// construido por el caller como autoridad.
+    package func custodyValidationRun(
+        appID: String,
+        runID: UUID
+    ) throws -> RunSummary? {
+        try ensurePrepared()
+        guard let normalizedAppID = SteamAppID.normalized(appID), normalizedAppID == appID else {
+            return nil
+        }
+        let sql = """
+            SELECT r.id, r.app_id, g.name, r.backend, r.started_at, r.ended_at,
+                   r.result, r.exit_code, r.process_id, r.launch_ms, r.configuration_fingerprint,
+                   v.verdict, v.rendering, v.input_precision, v.graphics_settings,
+                   v.gameplay, v.source, v.notes, v.verified_at
+            FROM runs r
+            JOIN games g ON g.app_id = r.app_id
+            LEFT JOIN run_verifications v ON v.run_id = r.id
+            WHERE r.id=? AND r.app_id=?
+            LIMIT 1;
+            """
+        let matches: [RunSummary] = try query(
+            sql,
+            bindings: [runID.uuidString, normalizedAppID]
+        ) { statement -> RunSummary? in
+            guard
+                let id = UUID(uuidString: Self.text(statement, 0)),
+                let backend = BackendKind(rawValue: Self.text(statement, 3)),
+                let startedAt = dateFormatter.date(from: Self.text(statement, 4)),
+                let result = RunResult(rawValue: Self.text(statement, 6))
+            else { return nil }
+            return RunSummary(
+                id: id,
+                appID: Self.text(statement, 1),
+                gameName: Self.text(statement, 2),
+                backend: backend,
+                startedAt: startedAt,
+                endedAt: Self.optionalText(statement, 5).flatMap(dateFormatter.date(from:)),
+                result: result,
+                exitCode: Self.optionalInt32(statement, 7),
+                processID: Self.optionalInt32(statement, 8),
+                launchDurationMilliseconds: Self.optionalInt(statement, 9),
+                configurationFingerprint: Self.text(statement, 10),
+                verification: verification(statement, startingAt: 11, runID: id)
+            )
+        }
+        return matches.first
+    }
+
     public func compatibilityProfiles() throws -> [CompatibilityProfile] {
         try ensurePrepared()
         let sql = """
@@ -784,6 +863,7 @@ public actor CompatibilityRepository {
                             THEN v.verified_at END AS successful_at
                 FROM runs r
                 LEFT JOIN run_verifications v ON v.run_id = r.id
+                WHERE r.backend='regression'
                 UNION ALL
                 SELECT o.app_id, o.backend, o.configuration_fingerprint,
                        CASE WHEN o.verdict = 'perfect' THEN 1 ELSE 0 END,
@@ -792,6 +872,7 @@ public actor CompatibilityRepository {
                        0, NULL,
                        CASE WHEN o.verdict IN ('perfect','playableWithIssues') THEN o.observed_at END
                 FROM compatibility_observations o
+                WHERE o.backend='regression'
             )
             SELECT e.app_id, g.name, e.backend, e.configuration_fingerprint,
                    SUM(e.perfect + e.playable), SUM(e.failed),
@@ -838,6 +919,7 @@ public actor CompatibilityRepository {
                 FROM run_engine_snapshots re
                 JOIN runs r ON r.id=re.run_id
                 LEFT JOIN run_verifications v ON v.run_id=r.id
+                WHERE r.backend='regression'
                 UNION ALL
                 SELECT oe.engine_fingerprint, o.app_id, o.observed_at,
                        CASE WHEN o.verdict='perfect' THEN 1 ELSE 0 END,
@@ -846,6 +928,7 @@ public actor CompatibilityRepository {
                        0
                 FROM observation_engine_snapshots oe
                 JOIN compatibility_observations o ON o.id=oe.observation_id
+                WHERE o.backend='regression'
             )
             SELECT s.fingerprint, s.backend, s.provider_version, s.values_json,
                    COUNT(DISTINCT e.app_id),
@@ -854,6 +937,7 @@ public actor CompatibilityRepository {
                    MAX(e.observed_at)
             FROM engine_snapshots s
             LEFT JOIN evidence e ON e.engine_fingerprint=s.fingerprint
+            WHERE s.backend='regression'
             GROUP BY s.fingerprint
             ORDER BY 6 DESC, 7 DESC, 8 ASC, 10 DESC;
             """
@@ -892,6 +976,7 @@ public actor CompatibilityRepository {
             JOIN games g ON g.app_id = r.app_id
             JOIN configuration_snapshots c ON c.fingerprint = r.configuration_fingerprint
             LEFT JOIN run_verifications v ON v.run_id = r.id
+            WHERE r.backend='regression'
             ORDER BY r.started_at DESC LIMIT ?;
             """
         return try query(sql, bindings: [max(1, limit)]) { statement in
@@ -945,7 +1030,7 @@ public actor CompatibilityRepository {
         limit: Int = 100_000
     ) throws -> [RunProcessRecord] {
         try ensurePrepared()
-        let runFilter = runID == nil ? "" : "WHERE run_id=?"
+        let runFilter = runID == nil ? "" : "AND p.run_id=?"
         var bindings: [Any] = []
         if let runID {
             bindings.append(runID.uuidString)
@@ -953,11 +1038,13 @@ public actor CompatibilityRepository {
         bindings.append(max(1, limit))
         return try query(
             """
-            SELECT run_id, process_id, executable, started_at, ended_at, exit_code,
-                   is_representative
-            FROM run_processes
+            SELECT p.run_id, p.process_id, p.executable, p.started_at, p.ended_at, p.exit_code,
+                   p.is_representative
+            FROM run_processes p
+            JOIN runs r ON r.id=p.run_id
+            WHERE r.backend='regression'
             \(runFilter)
-            ORDER BY started_at DESC, process_id DESC
+            ORDER BY p.started_at DESC, p.process_id DESC
             LIMIT ?;
             """,
             bindings: bindings
@@ -981,7 +1068,7 @@ public actor CompatibilityRepository {
 
     public func certifications(activeOnly: Bool = true) throws -> [VerifiedGameCertification] {
         try ensurePrepared()
-        let activeClause = activeOnly ? "WHERE c.is_active=1" : ""
+        let activeClause = activeOnly ? "AND c.is_active=1" : ""
         return try query(
             """
             SELECT c.app_id, g.name, c.backend, c.verified_at, c.evidence, c.criteria_version,
@@ -990,6 +1077,7 @@ public actor CompatibilityRepository {
                    c.catalog_revision, c.is_active, c.synced_at
             FROM verified_game_certifications c
             JOIN games g ON g.app_id=c.app_id
+            WHERE c.backend='regression'
             \(activeClause)
             ORDER BY g.name COLLATE NOCASE, c.backend;
             """
@@ -1014,8 +1102,9 @@ public actor CompatibilityRepository {
         }
     }
 
-    public func registerExternalSource(_ source: ExternalCatalogSource) throws {
+    func registerExternalSource(_ source: ExternalCatalogSource) throws {
         try ensurePrepared()
+        try requireWritableExternalSource(source.id)
         let now = dateFormatter.string(from: Date())
         try execute(
             """
@@ -1046,7 +1135,7 @@ public actor CompatibilityRepository {
 
     /// Reserva de forma persistente el siguiente turno de red de una fuente pública.
     /// Si devuelve una fecha futura, el llamador debe esperar y volver a reservar.
-    public func reserveExternalRequest(
+    func reserveExternalRequest(
         source: ExternalCatalogSource,
         now: Date = Date()
     ) throws -> Date {
@@ -1066,8 +1155,9 @@ public actor CompatibilityRepository {
         return now
     }
 
-    public func externalSyncState(sourceID: String) throws -> ExternalCatalogSyncState {
+    func externalSyncState(sourceID: String) throws -> ExternalCatalogSyncState {
         try ensurePrepared()
+        try requireWritableExternalSource(sourceID)
         let rows: [ExternalCatalogSyncState] = try query(
             """
             SELECT source_id, last_attempt_at, last_success_at, next_request_at, last_error
@@ -1086,29 +1176,32 @@ public actor CompatibilityRepository {
         return rows.first ?? ExternalCatalogSyncState(sourceID: sourceID)
     }
 
-    public func recordExternalSyncSuccess(sourceID: String, at date: Date = Date()) throws {
+    func recordExternalSyncSuccess(sourceID: String, at date: Date = Date()) throws {
         try ensurePrepared()
+        try requireWritableExternalSource(sourceID)
         try execute(
             "UPDATE external_catalog_sync_state SET last_success_at=?, last_error=NULL WHERE source_id=?;",
             bindings: [dateFormatter.string(from: date), sourceID]
         )
     }
 
-    public func recordExternalSyncFailure(sourceID: String, message: String) throws {
+    func recordExternalSyncFailure(sourceID: String, message: String) throws {
         try ensurePrepared()
+        try requireWritableExternalSource(sourceID)
         try execute(
             "UPDATE external_catalog_sync_state SET last_error=? WHERE source_id=?;",
             bindings: [PrivacySanitizer.redactedLogExcerpt(message, limit: 500), sourceID]
         )
     }
 
-    public func upsertExternalRecord(
+    func upsertExternalRecord(
         _ record: ExternalGameRecord,
         for game: SteamGame,
         matchMethod: ExternalCatalogMatchMethod,
         confidence: Double
     ) throws {
         try ensurePrepared()
+        try requireWritableExternalSource(record.sourceID)
         let safeConfidence = min(1, max(0, confidence))
         try transaction {
             try upsertGame(appID: game.appID, name: game.name, at: record.fetchedAt)
@@ -1175,7 +1268,7 @@ public actor CompatibilityRepository {
         }
     }
 
-    public func recordExternalLookupStatus(
+    func recordExternalLookupStatus(
         sourceID: String,
         game: SteamGame,
         status: ExternalCatalogLinkStatus,
@@ -1183,6 +1276,7 @@ public actor CompatibilityRepository {
         at date: Date = Date()
     ) throws {
         try ensurePrepared()
+        try requireWritableExternalSource(sourceID)
         guard status != .linked else {
             throw RegressionCoreError.externalCatalog(
                 "Un vínculo confirmado debe guardar también su ficha pública"
@@ -1218,8 +1312,11 @@ public actor CompatibilityRepository {
 
     public func externalEntries(sourceID: String? = nil) throws -> [ExternalCompatibilityEntry] {
         try ensurePrepared()
-        let filter = sourceID == nil ? "" : "WHERE l.source_id=?"
-        let bindings: [Any] = sourceID.map { [$0] } ?? []
+        if sourceID == CodeWeaversCompatibilityProvider.historicalSourceID { return [] }
+        let filter = sourceID == nil ? "WHERE l.source_id!=?" : "WHERE l.source_id=?"
+        let bindings: [Any] = [
+            sourceID ?? CodeWeaversCompatibilityProvider.historicalSourceID
+        ]
         let sql = """
             SELECT l.source_id, l.app_id, g.name, l.status, l.match_method, l.confidence,
                    l.last_attempt_at, l.error_message,
@@ -1237,8 +1334,17 @@ public actor CompatibilityRepository {
         return try query(sql, bindings: bindings, transform: decodeExternalEntry)
     }
 
+    private func requireWritableExternalSource(_ sourceID: String) throws {
+        guard sourceID != CodeWeaversCompatibilityProvider.historicalSourceID else {
+            throw RegressionCoreError.externalCatalog(
+                "La fuente histórica de CodeWeavers es de solo lectura."
+            )
+        }
+    }
+
     public func externalEntry(sourceID: String, appID: String) throws -> ExternalCompatibilityEntry? {
         try ensurePrepared()
+        guard sourceID != CodeWeaversCompatibilityProvider.historicalSourceID else { return nil }
         let normalizedAppID = SteamAppID.normalized(appID) ?? appID
         let sql = """
             SELECT l.source_id, l.app_id, g.name, l.status, l.match_method, l.confidence,
@@ -1263,18 +1369,12 @@ public actor CompatibilityRepository {
 
     public func compatibilityComparisons() throws -> [CompatibilityComparison] {
         try ensurePrepared()
-        let storedProfiles = try compatibilityProfiles()
-        let activeCertifications = try certifications()
+        let storedProfiles = try compatibilityProfiles().filter { $0.backend == .regression }
+        let activeCertifications = try certifications().filter { $0.backend == .regression }
         let profilesByAppID = Dictionary(grouping: storedProfiles, by: \.appID)
         let certificationsByAppID = Dictionary(grouping: activeCertifications, by: \.appID)
-        // La comparación pública actual tiene una fuente semántica concreta.
-        // Filtrarla evita colisiones cuando se incorporen otros catálogos en el futuro.
-        let externalByAppID = Dictionary(
-            uniqueKeysWithValues: try externalEntries(
-                sourceID: CodeWeaversCompatibilityProvider.codeWeaversSource.id
-            ).map { ($0.appID, $0) }
-        )
-        let games = try storedGames()
+        let visibleAppIDs = Set(profilesByAppID.keys).union(certificationsByAppID.keys)
+        let games = try storedGames().filter { visibleAppIDs.contains($0.0) }
 
         return games.map { appID, name in
             let certification = certificationsByAppID[appID]?.first
@@ -1299,18 +1399,14 @@ public actor CompatibilityRepository {
                 localBackend = best?.backend
             }
 
-            let external = externalByAppID[appID]?.record
             return CompatibilityComparison(
                 appID: appID,
                 gameName: name,
                 localState: localState,
                 localBackend: localBackend,
-                publicMacRating: external?.macOSRating.value,
-                publicTestedVersion: external?.macOSRating.testedCrossOverVersion,
-                alignment: Self.alignment(
-                    localState: localState,
-                    publicRating: external?.macOSRating.value
-                ),
+                publicMacRating: nil,
+                publicTestedVersion: nil,
+                alignment: .insufficientEvidence,
                 comparedAt: Date()
             )
         }
@@ -1391,6 +1487,10 @@ public actor CompatibilityRepository {
             optimizationAssessmentCount: try scalarInt("SELECT COUNT(*) FROM optimization_assessments;"),
             runtimeRequirementCount: try scalarInt("SELECT COUNT(*) FROM game_runtime_requirements;"),
             repairReceiptCount: try scalarInt("SELECT COUNT(*) FROM repair_receipts;"),
+            repairAttemptCount: try scalarInt("SELECT COUNT(*) FROM repair_attempts;"),
+            legacyRepairActivationCount: try scalarInt(
+                "SELECT COUNT(*) FROM legacy_repair_activation_inventory;"
+            ),
             researchCaseCount: try scalarInt("SELECT COUNT(*) FROM compatibility_research_cases;"),
             researchHypothesisCount: try scalarInt("SELECT COUNT(*) FROM research_hypotheses;"),
             researchExperimentCount: try scalarInt("SELECT COUNT(*) FROM research_experiments;"),
@@ -1401,28 +1501,58 @@ public actor CompatibilityRepository {
     }
 
     public func exportJSON(to destinationURL: URL) throws {
+        let visibleRuns = try runDetails().filter { $0.backend == .regression }
+        let visibleRunIDs = Set(visibleRuns.map(\.id))
+        let visibleRepairAttempts = try repairAttempts().filter { attempt in
+            [attempt.sourceRunID, attempt.retryRunID]
+                .compactMap { $0 }
+                .allSatisfy { visibleRunIDs.contains($0) }
+        }
+        let visibleResearchCases = try researchCases().filter {
+            $0.referenceBackend == .regression
+        }
+        let visibleResearchCaseIDs = Set(visibleResearchCases.map(\.id))
+        let visibleResearchHypotheses = try researchHypotheses().filter {
+            visibleResearchCaseIDs.contains($0.caseID)
+        }
+        let visibleResearchExperiments = try researchExperiments().filter {
+            visibleResearchCaseIDs.contains($0.caseID)
+        }
+        let visibleResearchExperimentIDs = Set(visibleResearchExperiments.map(\.id))
         let payload = CompatibilityExport(
             schemaVersion: Self.currentSchemaVersion,
             exportedAt: Date(),
-            runs: try runDetails(),
-            processes: try runProcesses(),
-            observations: try observations(),
-            profiles: try compatibilityProfiles(),
-            engines: try engineProfiles(),
-            certifications: try certifications(activeOnly: false),
+            runs: visibleRuns,
+            processes: try runProcesses().filter { visibleRunIDs.contains($0.runID) },
+            observations: try observations().filter { $0.backend == .regression },
+            profiles: try compatibilityProfiles().filter { $0.backend == .regression },
+            engines: try engineProfiles().filter { $0.backend == .regression },
+            certifications: try certifications(activeOnly: false).filter {
+                $0.backend == .regression
+            },
             externalCatalog: try externalEntries(),
             comparisons: try compatibilityComparisons(),
             runtimeTechnologies: try runtimeTechnologies(),
             runtimeCandidates: try runtimeCandidates(),
-            optimizationAssessments: try optimizationAssessments(),
+            optimizationAssessments: try optimizationAssessments().filter {
+                $0.backend == .regression
+            },
             runtimeRequirements: try runtimeRequirements(),
-            repairReceipts: try repairReceipts(),
-            researchCases: try researchCases(),
-            researchHypotheses: try researchHypotheses(),
-            researchExperiments: try researchExperiments(),
-            researchGates: try researchGates(),
-            researchArtifacts: try researchArtifacts(),
-            preflightSnapshots: try preflightSnapshots(),
+            repairReceipts: try repairReceipts().filter { $0.backend == .regression },
+            repairAttempts: visibleRepairAttempts.map(RepairAttemptExport.init(attempt:)),
+            legacyRepairActivations: try legacyRepairActivationInventory(),
+            researchCases: visibleResearchCases,
+            researchHypotheses: visibleResearchHypotheses,
+            researchExperiments: visibleResearchExperiments,
+            researchGates: try researchGates().filter {
+                visibleResearchExperimentIDs.contains($0.experimentID)
+            },
+            researchArtifacts: try researchArtifacts().filter {
+                visibleResearchExperimentIDs.contains($0.experimentID)
+            },
+            preflightSnapshots: try preflightSnapshots().filter {
+                visibleRunIDs.contains($0.runID)
+            },
             databaseHealth: try databaseHealth()
         )
         let exportEncoder = JSONEncoder()
@@ -1544,6 +1674,22 @@ public actor CompatibilityRepository {
                 )
                 try execute("PRAGMA user_version=12;")
             }
+            if startingVersion < 13 {
+                try executeScript(RepairAttemptSchema.sql)
+                try recordMigration(
+                    version: 13,
+                    name: "ciclo durable de reparaciones compiladas"
+                )
+                try execute("PRAGMA user_version=13;")
+            }
+            if startingVersion < 14 {
+                try migrateResearchAuthorityToRegression()
+                try recordMigration(
+                    version: 14,
+                    name: "I+D autónoma y referencias históricas no operativas"
+                )
+                try execute("PRAGMA user_version=14;")
+            }
         }
     }
 
@@ -1581,6 +1727,165 @@ public actor CompatibilityRepository {
                 """
             )
         }
+    }
+
+    /// Reconstruye el subgrafo de I+D porque SQLite no permite ampliar un CHECK con ALTER.
+    /// Las tablas nuevas se rellenan antes de retirar las antiguas y las FK se difieren hasta
+    /// que todo el grafo circular caso↔experimento vuelve a estar presente.
+    private func migrateResearchAuthorityToRegression() throws {
+        // Los triggers de inmutabilidad protegen correctamente el uso normal, pero también
+        // observan las actualizaciones implícitas que SQLite ejecuta al retirar una tabla padre
+        // con ON DELETE SET NULL. Se retiran dentro de la misma transacción exclusiva de escritura
+        // justo antes de copiar el grafo, y ResearchSchema los reconstruye antes del COMMIT.
+        // Ante cualquier fallo el ROLLBACK restaura tablas, filas y triggers v13 conjuntamente.
+        try executeScript(
+            """
+            DROP TRIGGER IF EXISTS research_hypothesis_matches_case_insert;
+            DROP TRIGGER IF EXISTS research_hypothesis_matches_case_update;
+            DROP TRIGGER IF EXISTS research_experiment_pass_guard_insert;
+            DROP TRIGGER IF EXISTS research_experiment_pass_guard_update;
+            DROP TRIGGER IF EXISTS research_experiment_lock_passed;
+            DROP TRIGGER IF EXISTS research_case_verify_guard_insert;
+            DROP TRIGGER IF EXISTS research_case_verify_guard_update;
+            DROP TRIGGER IF EXISTS research_hypothesis_lock_verified;
+            DROP TRIGGER IF EXISTS research_hypothesis_insert_lock_verified;
+            DROP TRIGGER IF EXISTS research_hypothesis_delete_lock_verified;
+            DROP TRIGGER IF EXISTS research_gate_lock_update;
+            DROP TRIGGER IF EXISTS research_gate_lock_delete;
+            DROP TRIGGER IF EXISTS research_gate_lock_insert;
+            DROP TRIGGER IF EXISTS research_artifact_lock_update;
+            DROP TRIGGER IF EXISTS research_artifact_lock_delete;
+            DROP TRIGGER IF EXISTS research_artifact_lock_insert;
+            DROP TRIGGER IF EXISTS research_case_reopens_after_verdict_correction;
+            """
+        )
+        try execute("PRAGMA defer_foreign_keys=ON;")
+        try executeScript(
+            """
+            CREATE TABLE compatibility_research_cases_v14(
+                id TEXT PRIMARY KEY,
+                app_id TEXT NOT NULL REFERENCES games(app_id) ON DELETE CASCADE,
+                symptom TEXT NOT NULL CHECK(trim(symptom)!=''),
+                expected_behavior TEXT NOT NULL CHECK(trim(expected_behavior)!=''),
+                reference_backend TEXT NOT NULL DEFAULT 'regression'
+                    CHECK(reference_backend IN ('crossOver','regression')),
+                state TEXT NOT NULL CHECK(state IN (
+                    'open','investigating','validationPending','verified','pausedExternalDependency'
+                )),
+                blocker TEXT,
+                winning_experiment_id TEXT REFERENCES research_experiments_v14(id),
+                resolution_summary TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK(state!='pausedExternalDependency' OR (
+                    blocker IS NOT NULL AND trim(blocker)!=''
+                )),
+                CHECK(state!='verified' OR (
+                    winning_experiment_id IS NOT NULL
+                    AND resolution_summary IS NOT NULL AND trim(resolution_summary)!=''
+                ))
+            );
+            CREATE TABLE research_hypotheses_v14(
+                id TEXT PRIMARY KEY,
+                case_id TEXT NOT NULL
+                    REFERENCES compatibility_research_cases_v14(id) ON DELETE CASCADE,
+                rank INTEGER NOT NULL CHECK(rank > 0),
+                statement TEXT NOT NULL CHECK(trim(statement)!=''),
+                prediction TEXT NOT NULL CHECK(trim(prediction)!=''),
+                status TEXT NOT NULL CHECK(status IN ('proposed','testing','supported','falsified')),
+                evidence TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(case_id, rank)
+            );
+            CREATE TABLE research_experiments_v14(
+                id TEXT PRIMARY KEY,
+                case_id TEXT NOT NULL
+                    REFERENCES compatibility_research_cases_v14(id) ON DELETE CASCADE,
+                hypothesis_id TEXT REFERENCES research_hypotheses_v14(id) ON DELETE SET NULL,
+                dimension TEXT NOT NULL CHECK(dimension IN (
+                    'environment','windowsRuntime','graphicsBackend','dynamicLibraries',
+                    'dllOverride','registry','display','launcher','dependency','permission','sourcePatch'
+                )),
+                change_summary TEXT NOT NULL CHECK(trim(change_summary)!=''),
+                state TEXT NOT NULL CHECK(state IN (
+                    'planned','ready','running','validation','passed','failed','rolledBack'
+                )),
+                is_isolated INTEGER NOT NULL CHECK(is_isolated IN (0,1)),
+                rollback_reference TEXT,
+                baseline_engine_fingerprint TEXT,
+                candidate_engine_fingerprint TEXT,
+                run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+                runtime_candidate_id TEXT REFERENCES runtime_candidates(id) ON DELETE SET NULL,
+                notes TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK(state='planned' OR (
+                    is_isolated=1
+                    AND rollback_reference IS NOT NULL AND trim(rollback_reference)!=''
+                    AND baseline_engine_fingerprint IS NOT NULL
+                    AND trim(baseline_engine_fingerprint)!=''
+                )),
+                CHECK(state!='passed' OR (
+                    candidate_engine_fingerprint IS NOT NULL
+                    AND trim(candidate_engine_fingerprint)!=''
+                    AND candidate_engine_fingerprint!=baseline_engine_fingerprint
+                    AND run_id IS NOT NULL
+                ))
+            );
+            CREATE TABLE research_gate_results_v14(
+                experiment_id TEXT NOT NULL
+                    REFERENCES research_experiments_v14(id) ON DELETE CASCADE,
+                gate TEXT NOT NULL CHECK(gate IN (
+                    'crossOverReference','baselineReference','rendering','inputPrecision',
+                    'graphicsSettings','gameplay','ownResources','regressionMatrix','rollbackVerified'
+                )),
+                status TEXT NOT NULL CHECK(status IN ('pending','passed','failed')),
+                evidence_reference TEXT NOT NULL,
+                checked_at TEXT NOT NULL,
+                PRIMARY KEY(experiment_id, gate),
+                CHECK(status='pending' OR trim(evidence_reference)!='')
+            );
+            CREATE TABLE research_artifacts_v14(
+                id TEXT PRIMARY KEY,
+                experiment_id TEXT NOT NULL
+                    REFERENCES research_experiments_v14(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL CHECK(kind IN (
+                    'crossOverCapture','baselineCapture','regressionCapture','moduleInventory',
+                    'configurationSnapshot','buildReport','testReport','signatureReport',
+                    'rollbackManifest','logExcerpt','performanceCapture'
+                )),
+                reference TEXT NOT NULL CHECK(trim(reference)!=''),
+                fingerprint TEXT CHECK(fingerprint IS NULL OR (
+                    length(fingerprint)=71
+                    AND lower(substr(fingerprint, 1, 7))='sha256:'
+                    AND lower(substr(fingerprint, 8)) NOT GLOB '*[^0-9a-f]*'
+                )),
+                captured_at TEXT NOT NULL,
+                UNIQUE(experiment_id, kind, reference)
+            );
+
+            INSERT INTO compatibility_research_cases_v14
+            SELECT * FROM compatibility_research_cases;
+            INSERT INTO research_hypotheses_v14 SELECT * FROM research_hypotheses;
+            INSERT INTO research_experiments_v14 SELECT * FROM research_experiments;
+            INSERT INTO research_gate_results_v14 SELECT * FROM research_gate_results;
+            INSERT INTO research_artifacts_v14 SELECT * FROM research_artifacts;
+
+            DROP TABLE research_gate_results;
+            DROP TABLE research_artifacts;
+            DROP TABLE research_hypotheses;
+            DROP TABLE research_experiments;
+            DROP TABLE compatibility_research_cases;
+
+            ALTER TABLE compatibility_research_cases_v14 RENAME TO compatibility_research_cases;
+            ALTER TABLE research_hypotheses_v14 RENAME TO research_hypotheses;
+            ALTER TABLE research_experiments_v14 RENAME TO research_experiments;
+            ALTER TABLE research_gate_results_v14 RENAME TO research_gate_results;
+            ALTER TABLE research_artifacts_v14 RENAME TO research_artifacts;
+            """
+        )
+        try executeScript(ResearchSchema.sql)
     }
 
     private func recordMigration(version: Int, name: String) throws {
@@ -2739,6 +3044,8 @@ public struct CompatibilityExport: Codable, Sendable {
     public let optimizationAssessments: [OptimizationAssessment]
     public let runtimeRequirements: [GameRuntimeRequirement]
     public let repairReceipts: [RepairReceipt]
+    public let repairAttempts: [RepairAttemptExport]
+    public let legacyRepairActivations: [LegacyRepairActivationInventory]
     public let researchCases: [CompatibilityResearchCase]
     public let researchHypotheses: [ResearchHypothesis]
     public let researchExperiments: [ResearchExperiment]

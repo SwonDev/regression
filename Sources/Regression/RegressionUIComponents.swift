@@ -1,3 +1,6 @@
+import AppKit
+import Foundation
+import RegressionCore
 import SwiftUI
 
 extension ShapeStyle where Self == Color {
@@ -36,6 +39,11 @@ struct RegressionFontSpec {
     basePointSize: 13,
     defaultWeight: .semibold
   )
+  static let title3 = Self(
+    standardFont: .title3,
+    basePointSize: 15,
+    defaultWeight: .semibold
+  )
 
   func weight(_ weight: Font.Weight) -> Self {
     var copy = self
@@ -65,17 +73,8 @@ private struct RegressionAccessibleFontModifier: ViewModifier {
       return specification.standardFont
     }
 
-    let scale: CGFloat =
-      switch dynamicTypeSize {
-      case .accessibility1: 1.15
-      case .accessibility2: 1.28
-      case .accessibility3: 1.40
-      case .accessibility4: 1.52
-      case .accessibility5: 1.65
-      default: 1
-      }
     var font = Font.system(
-      size: specification.basePointSize * scale,
+      size: specification.basePointSize * dynamicTypeSize.regressionScale,
       weight: specification.selectedWeight ?? specification.defaultWeight
     )
     if specification.usesMonospacedDigits {
@@ -85,9 +84,40 @@ private struct RegressionAccessibleFontModifier: ViewModifier {
   }
 }
 
+private extension DynamicTypeSize {
+  var regressionScale: CGFloat {
+    switch self {
+    case .accessibility1: 1.15
+    case .accessibility2: 1.28
+    case .accessibility3: 1.40
+    case .accessibility4: 1.52
+    case .accessibility5: 1.65
+    default: 1
+    }
+  }
+}
+
 extension View {
   func regressionFont(_ specification: RegressionFontSpec) -> some View {
     modifier(RegressionAccessibleFontModifier(specification: specification))
+  }
+
+  func regressionAccessibleControl() -> some View {
+    modifier(RegressionAccessibleControlModifier())
+  }
+}
+
+private struct RegressionAccessibleControlModifier: ViewModifier {
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+  func body(content: Content) -> some View {
+    content
+      .padding(.vertical, dynamicTypeSize.isAccessibilitySize ? 7 : 3)
+      .padding(.horizontal, dynamicTypeSize.isAccessibilitySize ? 4 : 0)
+      .regressionFont(.callout)
+      .controlSize(dynamicTypeSize.isAccessibilitySize ? .large : .regular)
+      .frame(minHeight: dynamicTypeSize.isAccessibilitySize ? 40 : 32)
+      .contentShape(Rectangle())
   }
 }
 
@@ -107,9 +137,219 @@ struct RegressionCard<Content: View>: View {
       .overlay {
         if colorSchemeContrast == .increased {
           RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .stroke(.primary, lineWidth: 1.5)
+            .stroke(Color.primary, lineWidth: 1.5)
         }
       }
+  }
+}
+
+/// Presentación reutilizable para componentes sellados del runtime. La vista no decide rutas,
+/// hashes ni reparaciones: recibe un informe ya evaluado y una acción permitida por el modelo.
+/// La futura tarjeta de Apple GPTK debe reutilizar este mismo componente.
+struct RegressionComponentHealthView<Actions: View>: View {
+  let title: String
+  let systemImage: String
+  let color: Color
+  let summary: String
+  let detail: String?
+  let isRefreshing: Bool
+  let refreshingAccessibilityLabel: String
+  @ViewBuilder let actions: Actions
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 7) {
+      HStack(spacing: 8) {
+        Label {
+          Text(title)
+            .foregroundStyle(Color.primary)
+        } icon: {
+          Image(systemName: systemImage)
+            .foregroundStyle(color)
+        }
+        .regressionFont(.callout.weight(.medium))
+        Spacer()
+        if isRefreshing {
+          ProgressView()
+            .controlSize(.small)
+            .accessibilityLabel(refreshingAccessibilityLabel)
+        }
+      }
+
+      Text(summary)
+        .regressionFont(.caption)
+        .foregroundStyle(Color.primary)
+        .fixedSize(horizontal: false, vertical: true)
+
+      if let detail {
+        Text(detail)
+          .regressionFont(.caption2)
+          .foregroundStyle(.regressionSecondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+
+      actions
+    }
+    .accessibilityElement(children: .contain)
+  }
+}
+
+struct AppleGPTKLicenseSheet: View {
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+  @Bindable var model: RegressionAppModel
+  let review: AppleGPTKLicenseReview
+
+  @State private var confirmsLicenseReview = false
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      VStack(alignment: .leading, spacing: 4) {
+        Text("Licencia de Apple GPTK \(review.source.version)")
+          .regressionFont(.title3)
+          .accessibilityAddTraits(.isHeader)
+          .fixedSize(horizontal: false, vertical: true)
+        Text(review.source.sourceDescription)
+          .regressionFont(.caption)
+          .foregroundStyle(.regressionSecondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+
+      AppleGPTKRTFDocumentView(
+        data: review.licenseRTFData,
+        magnification: dynamicTypeSize.regressionScale
+      )
+        .frame(
+          minWidth: dynamicTypeSize.isAccessibilitySize ? 548 : 540,
+          idealWidth: dynamicTypeSize.isAccessibilitySize ? 652 : 540,
+          minHeight: dynamicTypeSize.isAccessibilitySize ? 330 : 390,
+          idealHeight: dynamicTypeSize.isAccessibilitySize ? 420 : 390
+        )
+        .layoutPriority(1)
+        .overlay {
+          RoundedRectangle(cornerRadius: 6)
+            .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+        }
+        .accessibilityLabel("Licencia exacta de Apple GPTK \(review.source.version)")
+
+      Toggle(
+        "He leído la licencia mostrada y confirmo expresamente su aceptación.",
+        isOn: $confirmsLicenseReview
+      )
+      .regressionAccessibleControl()
+      .fixedSize(horizontal: false, vertical: true)
+
+      ViewThatFits(in: .horizontal) {
+        HStack(spacing: 10) {
+          cancelButton
+          Spacer(minLength: 12)
+          authorizationProgress
+          authorizationButton
+        }
+
+        VStack(alignment: .trailing, spacing: 8) {
+          authorizationProgress
+          HStack(spacing: 10) {
+            cancelButton
+            Spacer(minLength: 12)
+            authorizationButton
+          }
+        }
+      }
+    }
+    .padding(dynamicTypeSize.isAccessibilitySize ? 16 : 20)
+    .frame(
+      minWidth: 580,
+      idealWidth: dynamicTypeSize.isAccessibilitySize ? 700 : 600,
+      maxWidth: dynamicTypeSize.isAccessibilitySize ? 760 : 620,
+      minHeight: dynamicTypeSize.isAccessibilitySize ? 620 : 540,
+      idealHeight: dynamicTypeSize.isAccessibilitySize ? 680 : nil,
+      maxHeight: dynamicTypeSize.isAccessibilitySize ? 760 : nil
+    )
+    .interactiveDismissDisabled()
+  }
+
+  private var cancelButton: some View {
+    Button("Cancelar") {
+      model.cancelAppleGPTKLicenseReview()
+    }
+    .keyboardShortcut(.cancelAction)
+    .regressionAccessibleControl()
+    .disabled(model.appleGPTKLicenseAuthorizationIsBusy)
+  }
+
+  @ViewBuilder
+  private var authorizationProgress: some View {
+    if model.appleGPTKLicenseAuthorizationIsBusy {
+      ProgressView()
+        .controlSize(dynamicTypeSize.isAccessibilitySize ? .regular : .small)
+        .accessibilityLabel(
+          review.source.isProtectedExisting
+            ? "Autorizando Apple GPTK 3.0"
+            : "Instalando Apple GPTK 4.0b2"
+        )
+    }
+  }
+
+  private var authorizationButton: some View {
+    Button(review.source.isProtectedExisting ? "Aceptar y autorizar" : "Aceptar e instalar") {
+      model.beginAppleGPTKAuthorization(
+        review,
+        explicitConfirmation: review.source.confirmationValue
+      )
+    }
+    .buttonStyle(.borderedProminent)
+    .keyboardShortcut(.defaultAction)
+    .regressionAccessibleControl()
+    .disabled(!confirmsLicenseReview || model.appleGPTKLicenseAuthorizationIsBusy)
+    .accessibilityHint(
+      review.source.isProtectedExisting
+        ? "Crea una autorización privada de un solo uso y vuelve a verificar el componente existente sin copiar ni modificar su payload"
+        : "Crea una autorización privada de un solo uso y vuelve a verificar el DMG antes de instalar"
+    )
+  }
+}
+
+private struct AppleGPTKRTFDocumentView: NSViewRepresentable {
+  let data: Data
+  let magnification: CGFloat
+
+  func makeNSView(context: Context) -> NSScrollView {
+    let scrollView = NSTextView.scrollableTextView()
+    guard let textView = scrollView.documentView as? NSTextView else { return scrollView }
+    textView.isEditable = false
+    textView.isSelectable = true
+    textView.isRichText = true
+    textView.drawsBackground = true
+    textView.backgroundColor = .textBackgroundColor
+    textView.textContainerInset = NSSize(width: 12, height: 12)
+    scrollView.allowsMagnification = true
+    scrollView.minMagnification = 1
+    scrollView.maxMagnification = 1.65
+    return scrollView
+  }
+
+  func updateNSView(_ scrollView: NSScrollView, context: Context) {
+    guard let textView = scrollView.documentView as? NSTextView else { return }
+    let sourceDocument = (try? NSAttributedString(
+      data: data,
+      options: [.documentType: NSAttributedString.DocumentType.rtf],
+      documentAttributes: nil
+    )) ?? NSAttributedString(
+      string: String(decoding: data, as: UTF8.self),
+      attributes: [.foregroundColor: NSColor.labelColor]
+    )
+    let document = NSMutableAttributedString(attributedString: sourceDocument)
+    let fullRange = NSRange(location: 0, length: document.length)
+    // La licencia conserva tipografía, peso y estructura del RTF oficial,
+    // pero usa colores semánticos del sistema para seguir siendo legible en
+    // claro, oscuro, alto contraste e Increase Contrast.
+    document.removeAttribute(.foregroundColor, range: fullRange)
+    document.addAttribute(.foregroundColor, value: NSColor.labelColor, range: fullRange)
+    if textView.attributedString() != document {
+      textView.textStorage?.setAttributedString(document)
+    }
+    if abs(scrollView.magnification - magnification) > 0.01 {
+      scrollView.magnification = magnification
+    }
   }
 }
 
@@ -119,9 +359,13 @@ struct RegressionStatusBadge: View {
   let color: Color
 
   var body: some View {
-    Label(title, systemImage: systemImage)
+    HStack(spacing: 5) {
+      Image(systemName: systemImage)
+        .foregroundStyle(color)
+      Text(title)
+        .foregroundStyle(Color.primary)
+    }
       .regressionFont(.caption.weight(.semibold))
-      .foregroundStyle(color)
       .padding(.horizontal, 8)
       .padding(.vertical, 4)
       .background(
@@ -247,7 +491,7 @@ struct RegressionCustodyProgress: View {
     Label {
       Text(title)
         .regressionFont(.caption2.weight(index == activeStage ? .semibold : .regular))
-        .foregroundStyle(index <= activeStage ? Color.primary : .regressionSecondary)
+        .foregroundStyle(index <= activeStage ? Color.primary : Color.regressionSecondary)
         .lineLimit(1)
         .fixedSize(horizontal: true, vertical: false)
     } icon: {

@@ -11,21 +11,6 @@ public struct SteamCommand: Equatable, Sendable {
 }
 
 public enum BackendCommandFactory {
-    private static let crossOverSteamPath = #"C:\Program Files (x86)\Steam\steam.exe"#
-
-    public static func crossOver(
-        installation: CrossOverInstallation,
-        steamArguments: [String]
-    ) -> SteamCommand {
-        SteamCommand(
-            executableURL: installation.wineCLIURL,
-            arguments: [
-                "--bottle", installation.bottleName,
-                "--cx-app", crossOverSteamPath
-            ] + steamArguments
-        )
-    }
-
     public static func regression(
         installation: RegressionInstallation,
         steamArguments: [String]
@@ -52,6 +37,16 @@ public enum BackendLaunchPolicy {
     }
 }
 
+public struct PhysicalLibraryCustodyValidationRequest: Equatable, Sendable {
+    public let appID: String
+    public let runID: UUID
+
+    public init(appID: String, runID: UUID) {
+        self.appID = appID
+        self.runID = runID
+    }
+}
+
 public enum PhysicalLibraryCustodyCommandPolicy {
     public static func authorizeMigration(arguments: [String]) throws {
         let required = [
@@ -66,23 +61,6 @@ public enum PhysicalLibraryCustodyCommandPolicy {
         }
     }
 
-    public static func authorizeFinalization(arguments: [String]) throws -> String {
-        guard arguments.contains("--validated"),
-              let evidenceIndex = arguments.firstIndex(of: "--evidence"),
-              arguments.indices.contains(evidenceIndex + 1) else {
-            throw RegressionCoreError.unsafeLibraryState(
-                "Finalizar exige --validated --evidence REFERENCIA"
-            )
-        }
-        let evidence = arguments[evidenceIndex + 1].trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !evidence.isEmpty, evidence.count <= 2_048 else {
-            throw RegressionCoreError.unsafeLibraryState(
-                "La referencia de evidencia no es válida"
-            )
-        }
-        return evidence
-    }
-
     public static func authorizeRollback(arguments: [String]) throws {
         guard arguments.contains("--confirm-rollback") else {
             throw RegressionCoreError.unsafeLibraryState(
@@ -91,15 +69,59 @@ public enum PhysicalLibraryCustodyCommandPolicy {
         }
     }
 
-    public static func validationAppID(arguments: [String]) throws -> String? {
-        guard arguments.count <= 2 else {
-            throw RegressionCoreError.launchFailed("Usa validate-library [APP_ID]")
+    public static func validationRequest(
+        arguments: [String]
+    ) throws -> PhysicalLibraryCustodyValidationRequest {
+        guard arguments.count == 4,
+              arguments.first == "validate-library",
+              arguments[2] == "--run",
+              let appID = SteamAppID.normalized(arguments[1]),
+              let runID = UUID(uuidString: arguments[3]) else {
+            throw RegressionCoreError.launchFailed(
+                "Usa validate-library APP_ID --run RUN_ID"
+            )
         }
-        guard let rawValue = arguments.dropFirst().first else { return nil }
-        guard let appID = SteamAppID.normalized(rawValue) else {
-            throw RegressionCoreError.launchFailed("Usa validate-library [APP_ID]")
+        return PhysicalLibraryCustodyValidationRequest(appID: appID, runID: runID)
+    }
+
+}
+
+public enum RegressionLaunchComponentGate {
+    public static func evaluate(
+        installation: RegressionInstallation
+    ) -> ComponentHealthReport {
+        let applicationURL = installation.applicationURL.standardizedFileURL
+        let bundle = Bundle(url: applicationURL)
+        let version = bundle?.object(
+            forInfoDictionaryKey: "CFBundleShortVersionString"
+        ) as? String ?? "desconocida"
+        let build = bundle?.object(
+            forInfoDictionaryKey: "CFBundleVersion"
+        ) as? String ?? "desconocida"
+        let isCanonicalPublicBuild = applicationURL.path == "/Applications/Regression.app"
+            && version == TrustedComponentCatalog.supportedApplicationVersion
+            && build == TrustedComponentCatalog.supportedBuildIdentifier
+        let descriptor = TrustedComponentCatalog.steamRuntimePrerequisitesDescriptor(
+            applicationVersion: version,
+            buildIdentifier: build,
+            variant: isCanonicalPublicBuild ? .publicInstalled : .development,
+            wineRootURL: applicationURL.appendingPathComponent(
+                "Contents/SharedSupport/wine-root",
+                isDirectory: true
+            )
+        )
+        return ComponentHealthService.evaluate(descriptor)
+    }
+
+    public static func requireReady(_ report: ComponentHealthReport) throws {
+        guard report.identity.componentID
+                == TrustedComponentCatalog.steamRuntimePrerequisitesComponentID,
+              report.status == .ready else {
+            throw RegressionCoreError.unsafeLibraryState(
+                "El runtime sellado de VC++/UCRT no supera ComponentHealth; "
+                    + "Regression no abrirá Steam ni juegos"
+            )
         }
-        return appID
     }
 }
 
@@ -109,6 +131,8 @@ public actor BackendCoordinator {
     private let inspector: any ProcessInspecting
     private let logDirectoryURL: URL
     private let custodyInterlock: (any PhysicalLibraryCustodyInterlocking)?
+    private let regressionComponentHealthProvider:
+        @Sendable (RegressionInstallation) -> ComponentHealthReport
 
     public init(
         processRunner: any ProcessRunning,
@@ -122,6 +146,25 @@ public actor BackendCoordinator {
         self.inspector = inspector
         self.logDirectoryURL = logDirectoryURL
         self.custodyInterlock = custodyInterlock
+        self.regressionComponentHealthProvider = RegressionLaunchComponentGate.evaluate
+    }
+
+    init(
+        processRunner: any ProcessRunning,
+        processLauncher: any ProcessLaunching,
+        inspector: any ProcessInspecting,
+        logDirectoryURL: URL,
+        custodyInterlock: (any PhysicalLibraryCustodyInterlocking)? = nil,
+        regressionComponentHealthProvider: @escaping @Sendable (
+            RegressionInstallation
+        ) -> ComponentHealthReport
+    ) {
+        self.processRunner = processRunner
+        self.processLauncher = processLauncher
+        self.inspector = inspector
+        self.logDirectoryURL = logDirectoryURL
+        self.custodyInterlock = custodyInterlock
+        self.regressionComponentHealthProvider = regressionComponentHealthProvider
     }
 
     public func runningState() async -> RunningBackendState {
@@ -134,11 +177,23 @@ public actor BackendCoordinator {
         appID: String? = nil,
         custodyValidationLease: PhysicalLibraryCustodyValidationLease? = nil
     ) async throws -> BackendLaunch {
+        try requireRegressionBackend(backend)
+        if backend == .regression {
+            try validateRegressionLaunchComponents(installations.regression)
+            try CompiledRepairActivationStore.validateLaunchSafety(
+                in: installations.regression.bottleURL
+            )
+        }
         let custodyPermit = try await acquireOperationalPermit(
             backend,
             custodyValidationLease: custodyValidationLease
         )
         defer { custodyPermit?.release() }
+        let processLaunchAuthority = ProcessLaunchAuthority(
+            regressionInstallation: backend == .regression ? installations.regression : nil,
+            custodyPermit: custodyPermit,
+            regressionComponentHealthProvider: regressionComponentHealthProvider
+        )
         let running = await inspector.runningBackends()
         if running.hasConflict {
             throw RegressionCoreError.backendConflict
@@ -177,7 +232,8 @@ public actor BackendCoordinator {
                 running: running,
                 installations: installations,
                 custodyValidationLease: custodyValidationLease,
-                launchIntent: launchIntent
+                launchIntent: launchIntent,
+                processLaunchAuthority: processLaunchAuthority
             )
             steamArguments = ["-applaunch", normalized]
         } else {
@@ -192,12 +248,19 @@ public actor BackendCoordinator {
         guard FileManager.default.isExecutableFile(atPath: command.executableURL.path) else {
             throw RegressionCoreError.launcherMissing(command.executableURL)
         }
+        if backend == .regression {
+            try validateRegressionLaunchComponents(installations.regression)
+            try CompiledRepairActivationStore.validateLaunchSafety(
+                in: installations.regression.bottleURL
+            )
+        }
         launchMayHaveOccurred = true
         let launch = try await processLauncher.launch(
             backend: backend,
             executableURL: command.executableURL,
             arguments: command.arguments,
-            logDirectoryURL: logDirectoryURL
+            logDirectoryURL: logDirectoryURL,
+            authority: processLaunchAuthority
         )
         if let launchIntent {
             try await custodyInterlock?.attachPhysicalLibraryLaunch(launch, to: launchIntent)
@@ -214,7 +277,8 @@ public actor BackendCoordinator {
         running: RunningBackendState,
         installations: InstallationSnapshot,
         custodyValidationLease: PhysicalLibraryCustodyValidationLease?,
-        launchIntent: PhysicalLibraryCustodyLaunchIntent?
+        launchIntent: PhysicalLibraryCustodyLaunchIntent?,
+        processLaunchAuthority: ProcessLaunchAuthority
     ) async throws {
         guard backend == .regression,
               running.activeBackend == nil,
@@ -240,11 +304,16 @@ public actor BackendCoordinator {
             backend,
             custodyValidationLease: custodyValidationLease
         )
+        try validateRegressionLaunchComponents(installations.regression)
+        try CompiledRepairActivationStore.validateLaunchSafety(
+            in: installations.regression.bottleURL
+        )
         let bootstrapLaunch = try await processLauncher.launch(
             backend: backend,
             executableURL: steamCommand.executableURL,
             arguments: steamCommand.arguments,
-            logDirectoryURL: logDirectoryURL
+            logDirectoryURL: logDirectoryURL,
+            authority: processLaunchAuthority
         )
         if let launchIntent {
             try await custodyInterlock?.attachPhysicalLibraryLaunch(bootstrapLaunch, to: launchIntent)
@@ -313,6 +382,7 @@ public actor BackendCoordinator {
         timeoutSeconds: Double = 30,
         custodyValidationLease: PhysicalLibraryCustodyValidationLease? = nil
     ) async throws {
+        try requireRegressionBackend(backend)
         let custodyPermit = try await acquireOperationalPermit(
             backend,
             custodyValidationLease: custodyValidationLease
@@ -351,6 +421,10 @@ public actor BackendCoordinator {
         installations: InstallationSnapshot,
         custodyValidationLease: PhysicalLibraryCustodyValidationLease? = nil
     ) async throws -> BackendLaunch {
+        try requireRegressionBackend(target)
+        if let current {
+            try requireRegressionBackend(current)
+        }
         try await validateOperationalSelection(
             target,
             custodyValidationLease: custodyValidationLease
@@ -386,11 +460,19 @@ public actor BackendCoordinator {
         _ backend: BackendKind,
         custodyValidationLease: PhysicalLibraryCustodyValidationLease?
     ) async throws -> PhysicalLibraryCustodyMutationPermit? {
+        try requireRegressionBackend(backend)
         guard let custodyInterlock else { return nil }
-        try await validateBackendAvailability(backend)
         return try await custodyInterlock.acquirePhysicalLibraryCustodyMutationPermit(
             backend: backend,
             validationLease: custodyValidationLease
+        )
+    }
+
+    private func validateRegressionLaunchComponents(
+        _ installation: RegressionInstallation
+    ) throws {
+        try RegressionLaunchComponentGate.requireReady(
+            regressionComponentHealthProvider(installation)
         )
     }
 
@@ -401,9 +483,15 @@ public actor BackendCoordinator {
         if let custodyInterlock {
             _ = await custodyInterlock.currentPhysicalLibraryCustodyInterlock()
         }
-        throw RegressionCoreError.unsafeLibraryState(
-            "CrossOver ya no es un backend operativo; usa Regression"
-        )
+        try requireRegressionBackend(backend)
+    }
+
+    private func requireRegressionBackend(_ backend: BackendKind) throws {
+        guard backend == .regression else {
+            throw RegressionCoreError.unsafeLibraryState(
+                "CrossOver ya no es un backend operativo; usa Regression"
+            )
+        }
     }
 
     private func waitUntilLaunchIsObservable(_ launch: BackendLaunch) async throws -> Bool {
@@ -427,26 +515,9 @@ public actor BackendCoordinator {
     ) throws -> SteamCommand {
         switch backend {
         case .crossOver:
-            guard let crossOver = installations.crossOver else {
-                switch installations.crossOverIssue?.code {
-                case .crossOverNotInstalled:
-                    throw RegressionCoreError.crossOverNotInstalled
-                case .steamBottleNotFound:
-                    throw RegressionCoreError.bottleNotFound
-                case .steamNotInstalled:
-                    throw RegressionCoreError.steamNotInstalled
-                case .bottleDamaged:
-                    throw RegressionCoreError.bottleDamaged(installations.crossOverIssue?.message ?? "Estado desconocido")
-                case nil:
-                    throw RegressionCoreError.crossOverNotInstalled
-                }
-            }
-            if crossOver.health == .damaged {
-                throw RegressionCoreError.bottleDamaged(crossOver.healthDetail)
-            }
-            return BackendCommandFactory.crossOver(
-                installation: crossOver,
-                steamArguments: steamArguments
+            try requireRegressionBackend(backend)
+            throw RegressionCoreError.unsafeLibraryState(
+                "CrossOver ya no es un backend operativo; usa Regression"
             )
         case .regression:
             guard installations.regression.health == .ready else {

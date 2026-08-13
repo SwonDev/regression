@@ -59,6 +59,7 @@ public actor TelemetryCoordinator {
         let beforeConfiguration: [String: String]
         let bottleURL: URL
         let providerVersion: String
+        let launchOrigin: RepairAttemptLaunchOrigin
         let configurationOverrides: [String: String]
         let game: SteamGame?
         let steamRootURL: URL
@@ -226,6 +227,7 @@ public actor TelemetryCoordinator {
                         beforeConfiguration: configuration,
                         bottleURL: pendingRun?.bottleURL ?? bottleURL,
                         providerVersion: providerVersion,
+                        launchOrigin: pendingRun == nil ? .steamObserved : .regression,
                         configurationOverrides: configurationOverrides,
                         game: gamesByID[appID],
                         steamRootURL: steamRootURL,
@@ -340,25 +342,22 @@ public actor TelemetryCoordinator {
                 ))
                 if result == .crashed, run.backend == .regression {
                     do {
-                        if let learned = try CompiledCrashRepairLearner.learn(
+                        if let detection = try CompiledCrashRepairLearner.detect(
                             appID: run.appID,
                             executable: run.representativeExecutable,
                             bottleURL: run.bottleURL,
                             startedAt: run.startedAt,
                             endedAt: termination.endedAt
                         ) {
-                            try await repository.recordRepairReceipt(RepairReceipt(
-                                appID: learned.appID,
-                                backend: .regression,
-                                recipeID: learned.recipe.rawValue,
+                            try await repository.recordRepairAttempt(RepairAttempt(
+                                sourceRunID: run.id,
+                                appID: detection.appID,
+                                executable: detection.executable,
+                                launchOrigin: run.launchOrigin,
+                                recipe: detection.recipe,
                                 recipeVersion: 1,
-                                beforeFingerprint: learned.activation.beforeFingerprint,
-                                afterFingerprint: learned.activation.afterFingerprint,
-                                rollbackReference: PrivacySanitizer.normalizedPath(
-                                    learned.activation.rollbackURL.path
-                                ),
-                                result: .succeeded,
-                                notes: "Activación tipada aprendida desde una firma de crash estricta en \(PrivacySanitizer.normalizedPath(learned.crashLogURL.path))."
+                                state: .detected,
+                                notes: "Firma de crash estricta detectada en \(PrivacySanitizer.normalizedPath(detection.crashLogURL.path)). Pendiente de autorización y aislamiento App ID+ejecutable."
                             ))
                         }
                     } catch {

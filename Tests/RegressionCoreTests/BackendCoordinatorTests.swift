@@ -3,6 +3,79 @@ import Foundation
 import XCTest
 
 final class BackendCoordinatorTests: XCTestCase {
+    func testLegacyRepairActivationBlocksEveryRegressionLaunchBeforeSpawn() async throws {
+        let root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let bottle = root.appendingPathComponent("Bottle", isDirectory: true)
+        let activationDirectory = bottle.appendingPathComponent(".regression", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: activationDirectory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let legacy = activationDirectory
+            .appendingPathComponent("compiled-repair-activations-v1.tsv")
+        try Data("REGRESSION-COMPILED-REPAIRS\t1\n".utf8).write(to: legacy)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: legacy.path
+        )
+
+        let launcher = StubProcessLauncher()
+        let coordinator = coordinator(
+            inspector: StubProcessInspector(states: [.init()]),
+            launcher: launcher
+        )
+
+        do {
+            _ = try await coordinator.launchSteam(
+                backend: .regression,
+                installations: installations(regressionBottleURL: bottle)
+            )
+            XCTFail("Una activación v1 viva debía bloquear el lanzamiento")
+        } catch RegressionCoreError.unsafeLibraryState {
+            let commands = await launcher.commands()
+            XCTAssertTrue(commands.isEmpty)
+        } catch {
+            XCTFail("Error inesperado: \(error)")
+        }
+    }
+
+    func testLegacyRepairCreatedDuringAwaitIsRecheckedImmediatelyBeforeSpawn() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let bottle = root.appendingPathComponent("Bottle", isDirectory: true)
+        let activationDirectory = bottle.appendingPathComponent(".regression", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: activationDirectory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let legacy = activationDirectory
+            .appendingPathComponent("compiled-repair-activations-v1.tsv")
+        let injector = LegacyActivationInjector(url: legacy)
+        let launcher = StubProcessLauncher()
+        let coordinator = coordinator(
+            inspector: StubProcessInspector(states: [.init()], onObservation: {
+                injector.installOnce()
+            }),
+            launcher: launcher
+        )
+
+        do {
+            _ = try await coordinator.launchSteam(
+                backend: .regression,
+                installations: installations(regressionBottleURL: bottle)
+            )
+            XCTFail("La revalidación debía detectar la activación creada durante el await")
+        } catch RegressionCoreError.unsafeLibraryState {
+            let commands = await launcher.commands()
+            XCTAssertTrue(commands.isEmpty)
+        } catch {
+            XCTFail("Error inesperado: \(error)")
+        }
+    }
+
     func testCustodyInterlockPreventsLaunchingEitherBackend() async throws {
         for backend in BackendKind.allCases {
             let inspector = StubProcessInspector(states: [RunningBackendState()])
@@ -65,6 +138,51 @@ final class BackendCoordinatorTests: XCTestCase {
         }
     }
 
+    func testCrossOverAPIsRejectWithoutCustodyInterlockBeforeAnyCommand() async throws {
+        let runner = StubProcessRunner()
+        let launcher = StubProcessLauncher()
+        let coordinator = BackendCoordinator(
+            processRunner: runner,
+            processLauncher: launcher,
+            inspector: StubProcessInspector(states: [.init()]),
+            logDirectoryURL: FileManager.default.temporaryDirectory
+        )
+
+        do {
+            _ = try await coordinator.launchSteam(
+                backend: .crossOver,
+                installations: installations()
+            )
+            XCTFail("launchSteam no debe aceptar CrossOver sin interlock")
+        } catch RegressionCoreError.unsafeLibraryState {
+            // esperado
+        }
+        do {
+            try await coordinator.requestShutdown(
+                backend: .crossOver,
+                installations: installations()
+            )
+            XCTFail("requestShutdown no debe aceptar CrossOver sin interlock")
+        } catch RegressionCoreError.unsafeLibraryState {
+            // esperado
+        }
+        do {
+            _ = try await coordinator.switchBackend(
+                from: nil,
+                to: .crossOver,
+                installations: installations()
+            )
+            XCTFail("switchBackend no debe aceptar CrossOver sin interlock")
+        } catch RegressionCoreError.unsafeLibraryState {
+            // esperado
+        }
+
+        let launchedCommands = await launcher.commands()
+        let runCommands = await runner.commands()
+        XCTAssertTrue(launchedCommands.isEmpty)
+        XCTAssertTrue(runCommands.isEmpty)
+    }
+
     func testIndependentCustodyStillAllowsRegressionLaunch() async throws {
         let inspector = StubProcessInspector(states: [RunningBackendState()])
         let launcher = StubProcessLauncher()
@@ -97,7 +215,7 @@ final class BackendCoordinatorTests: XCTestCase {
             RunningBackendState(),
             RunningBackendState(regressionPIDs: [999]),
         ], onObservation: { tracker.observe() })
-        let launcher = StubProcessLauncher()
+        let launcher = StubProcessLauncher(onLaunch: { tracker.observeSpawn() })
         let interlock = TrackingCustodyInterlock(tracker: tracker)
         let coordinator = coordinator(
             inspector: inspector,
@@ -111,6 +229,7 @@ final class BackendCoordinatorTests: XCTestCase {
         )
 
         XCTAssertTrue(tracker.observedWhilePermitHeld)
+        XCTAssertTrue(tracker.spawnedWhilePermitHeld)
         XCTAssertTrue(tracker.wasReleased)
     }
 
@@ -198,22 +317,16 @@ final class BackendCoordinatorTests: XCTestCase {
         )
     }
 
-    func testCustodyFinalizationRequiresValidationAndNonEmptyEvidence() throws {
+    func testCustodyFinalizationRejectsFreeFormEvidenceAuthority() throws {
         XCTAssertThrowsError(
-            try PhysicalLibraryCustodyCommandPolicy.authorizeFinalization(
-                arguments: ["--validated"]
+            try PhysicalLibraryCustodyCommandPolicy.validationRequest(
+                arguments: ["finalize-library", "--validated"]
             )
         )
         XCTAssertThrowsError(
-            try PhysicalLibraryCustodyCommandPolicy.authorizeFinalization(
-                arguments: ["--validated", "--evidence", "  "]
-            )
-        )
-        XCTAssertEqual(
-            try PhysicalLibraryCustodyCommandPolicy.authorizeFinalization(
+            try PhysicalLibraryCustodyCommandPolicy.validationRequest(
                 arguments: ["--validated", "--evidence", "captura://steam-regression"]
-            ),
-            "captura://steam-regression"
+            )
         )
     }
 
@@ -228,28 +341,56 @@ final class BackendCoordinatorTests: XCTestCase {
         )
     }
 
-    func testValidateLibraryAcceptsOnlyAnOptionalNormalizedAppID() throws {
-        XCTAssertNil(
-            try PhysicalLibraryCustodyCommandPolicy.validationAppID(
+    func testValidateLibraryRequiresNormalizedAppIDAndTypedRunID() throws {
+        let runID = UUID(uuidString: "8F217BFC-0952-4194-A08C-D4720CB0D421")!
+        XCTAssertEqual(
+            try PhysicalLibraryCustodyCommandPolicy.validationRequest(
+                arguments: ["validate-library", "000219990", "--run", runID.uuidString]
+            ),
+            PhysicalLibraryCustodyValidationRequest(appID: "219990", runID: runID)
+        )
+        XCTAssertThrowsError(
+            try PhysicalLibraryCustodyCommandPolicy.validationRequest(
                 arguments: ["validate-library"]
             )
         )
-        XCTAssertEqual(
-            try PhysicalLibraryCustodyCommandPolicy.validationAppID(
-                arguments: ["validate-library", "000219990"]
-            ),
-            "219990"
-        )
         XCTAssertThrowsError(
-            try PhysicalLibraryCustodyCommandPolicy.validationAppID(
-                arguments: ["validate-library", "no-es-app-id"]
+            try PhysicalLibraryCustodyCommandPolicy.validationRequest(
+                arguments: ["validate-library", "219990", "--run", "no-es-uuid"]
             )
         )
         XCTAssertThrowsError(
-            try PhysicalLibraryCustodyCommandPolicy.validationAppID(
-                arguments: ["validate-library", "219990", "otro"]
+            try PhysicalLibraryCustodyCommandPolicy.validationRequest(
+                arguments: [
+                    "validate-library", "219990", "--run", runID.uuidString,
+                    "--evidence", "texto libre",
+                ]
             )
         )
+    }
+
+    func testSealedRuntimeComponentGateIsRecheckedAtSpawnBoundary() async throws {
+        let health = SequencedComponentHealthProvider(statuses: [.ready, .drifted])
+        let launcher = StubProcessLauncher()
+        let coordinator = coordinator(
+            inspector: StubProcessInspector(states: [.init()]),
+            launcher: launcher,
+            componentHealthProvider: { _ in health.next() }
+        )
+
+        do {
+            _ = try await coordinator.launchSteam(
+                backend: .regression,
+                installations: installations()
+            )
+            XCTFail("El drift aparecido antes del spawn debía bloquear el lanzamiento")
+        } catch RegressionCoreError.unsafeLibraryState {
+            let commands = await launcher.commands()
+            XCTAssertTrue(commands.isEmpty)
+            XCTAssertEqual(health.observations, 2)
+        } catch {
+            XCTFail("Error inesperado: \(error)")
+        }
     }
 
     func testConflictPreventsLaunchingAnotherSteam() async throws {
@@ -371,7 +512,7 @@ final class BackendCoordinatorTests: XCTestCase {
         XCTAssertEqual(commands[0].arguments, ["-applaunch", "219990"])
     }
 
-    func testShutdownUsesOfficialCommandAndWaitsUntilBackendDisappears() async throws {
+    func testShutdownRejectsCrossOverWithoutRunningOfficialCommand() async throws {
         let runner = StubProcessRunner(result: ProcessResult(
             exitCode: 0,
             standardOutput: "",
@@ -388,22 +529,19 @@ final class BackendCoordinatorTests: XCTestCase {
             logDirectoryURL: FileManager.default.temporaryDirectory
         )
 
-        try await coordinator.requestShutdown(
-            backend: .crossOver,
-            installations: installations(),
-            timeoutSeconds: 1
-        )
+        do {
+            try await coordinator.requestShutdown(
+                backend: .crossOver,
+                installations: installations(),
+                timeoutSeconds: 1
+            )
+            XCTFail("Regression no debe seguir administrando el Steam de CrossOver")
+        } catch RegressionCoreError.unsafeLibraryState {
+            // esperado
+        }
 
         let commands = await runner.commands()
-        XCTAssertEqual(commands.count, 1)
-        XCTAssertEqual(
-            commands.first?.arguments,
-            [
-                "--bottle", "Steam",
-                "--cx-app", #"C:\Program Files (x86)\Steam\steam.exe"#,
-                "-shutdown",
-            ]
-        )
+        XCTAssertTrue(commands.isEmpty)
     }
 
     func testDamagedBottleIsRejectedBeforeLauncherRuns() async throws {
@@ -418,7 +556,7 @@ final class BackendCoordinatorTests: XCTestCase {
                 installations: damaged
             )
             XCTFail("Una botella dañada no debe iniciarse")
-        } catch RegressionCoreError.bottleDamaged {
+        } catch RegressionCoreError.unsafeLibraryState {
             let commands = await launcher.commands()
             XCTAssertTrue(commands.isEmpty)
         } catch {
@@ -429,14 +567,49 @@ final class BackendCoordinatorTests: XCTestCase {
     private func coordinator(
         inspector: StubProcessInspector,
         launcher: StubProcessLauncher,
-        custodyInterlock: (any PhysicalLibraryCustodyInterlocking)? = nil
+        custodyInterlock: (any PhysicalLibraryCustodyInterlocking)? = nil,
+        componentHealthProvider: @escaping @Sendable (RegressionInstallation) -> ComponentHealthReport = {
+            _ in testComponentHealth(status: .ready)
+        }
     ) -> BackendCoordinator {
         BackendCoordinator(
             processRunner: StubProcessRunner(),
             processLauncher: launcher,
             inspector: inspector,
             logDirectoryURL: FileManager.default.temporaryDirectory,
-            custodyInterlock: custodyInterlock
+            custodyInterlock: custodyInterlock,
+            regressionComponentHealthProvider: componentHealthProvider
+        )
+    }
+
+    private func validationRun(
+        id: UUID,
+        appID: String,
+        boundary: Date,
+        source: VerificationSource
+    ) -> RunSummary {
+        RunSummary(
+            id: id,
+            appID: appID,
+            gameName: "Prueba",
+            backend: .regression,
+            startedAt: boundary.addingTimeInterval(1),
+            endedAt: boundary.addingTimeInterval(100),
+            result: .succeeded,
+            exitCode: 0,
+            processID: 123,
+            launchDurationMilliseconds: 50,
+            configurationFingerprint: "config",
+            verification: RunVerification(
+                runID: id,
+                verdict: .perfect,
+                rendering: .passed,
+                inputPrecision: .passed,
+                graphicsSettings: .passed,
+                gameplay: .passed,
+                source: source,
+                verifiedAt: boundary.addingTimeInterval(120)
+            )
         )
     }
 
@@ -466,6 +639,43 @@ final class BackendCoordinatorTests: XCTestCase {
             healthDetail: "ok"
         )
         return InstallationSnapshot(crossOver: crossOver, regression: regression)
+    }
+}
+
+private func testComponentHealth(status: ComponentHealthStatus) -> ComponentHealthReport {
+    ComponentHealthReport(
+        identity: ComponentIdentity(
+            componentID: TrustedComponentCatalog.steamRuntimePrerequisitesComponentID,
+            componentVersion: TrustedComponentCatalog.steamRuntimePrerequisitesComponentVersion,
+            variant: .development,
+            buildIdentifier: TrustedComponentCatalog.supportedBuildIdentifier
+        ),
+        status: status,
+        recovery: status == .ready ? .none : .reinstallTrustedArtifact
+    )
+}
+
+private final class SequencedComponentHealthProvider: @unchecked Sendable {
+    private let lock = NSLock()
+    private var statuses: [ComponentHealthStatus]
+    private var count = 0
+
+    init(statuses: [ComponentHealthStatus]) {
+        self.statuses = statuses
+    }
+
+    func next() -> ComponentHealthReport {
+        lock.lock()
+        defer { lock.unlock() }
+        count += 1
+        let status = statuses.count > 1 ? statuses.removeFirst() : statuses[0]
+        return testComponentHealth(status: status)
+    }
+
+    var observations: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
     }
 }
 
@@ -550,6 +760,7 @@ private final class PermitObservationTracker: @unchecked Sendable {
     private let lock = NSLock()
     private var released = false
     private var observedHeld = false
+    private var spawnedHeld = false
 
     func observe() {
         lock.lock()
@@ -563,6 +774,12 @@ private final class PermitObservationTracker: @unchecked Sendable {
         lock.unlock()
     }
 
+    func observeSpawn() {
+        lock.lock()
+        defer { lock.unlock() }
+        if !released { spawnedHeld = true }
+    }
+
     var observedWhilePermitHeld: Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -573,6 +790,12 @@ private final class PermitObservationTracker: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return released
+    }
+
+    var spawnedWhilePermitHeld: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return spawnedHeld
     }
 }
 
@@ -621,6 +844,11 @@ private actor StubProcessLauncher: ProcessLaunching {
     }
 
     private var recordedCommands: [Command] = []
+    private let onLaunch: (@Sendable () -> Void)?
+
+    init(onLaunch: (@Sendable () -> Void)? = nil) {
+        self.onLaunch = onLaunch
+    }
 
     func launch(
         backend: BackendKind,
@@ -628,6 +856,7 @@ private actor StubProcessLauncher: ProcessLaunching {
         arguments: [String],
         logDirectoryURL: URL
     ) async throws -> BackendLaunch {
+        onLaunch?()
         recordedCommands.append(Command(
             backend: backend,
             executableURL: executableURL,
@@ -666,5 +895,27 @@ private actor StubProcessInspector: ProcessInspecting {
         onObservation?()
         guard states.count > 1 else { return states.first ?? RunningBackendState() }
         return states.removeFirst()
+    }
+}
+
+private final class LegacyActivationInjector: @unchecked Sendable {
+    private let lock = NSLock()
+    private let url: URL
+    private var installed = false
+
+    init(url: URL) {
+        self.url = url
+    }
+
+    func installOnce() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !installed else { return }
+        installed = true
+        try? Data("REGRESSION-COMPILED-REPAIRS\t1\n".utf8).write(to: url)
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: url.path
+        )
     }
 }

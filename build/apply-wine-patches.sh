@@ -23,17 +23,36 @@ PATCHES=(
     exit 1
 }
 
+# El tar FOSS oficial no incluye metadatos Git. En un volumen macOS
+# case-insensitive, dejar que `git -C` ascienda hasta el repositorio padre puede
+# hacer que `git apply --check` trate este árbol de build como una ruta ignorada
+# y devuelva un falso positivo. Anclamos un repositorio efímero dentro del árbol
+# Wine para que la aplicabilidad y la reversibilidad se midan contra esos bytes.
+wine_source_root="$(cd "$WINE_SOURCE" && pwd -P)"
+git_root="$(git -C "$wine_source_root" rev-parse --show-toplevel 2>/dev/null || true)"
+if [[ "$git_root" != "$wine_source_root" ]]; then
+    git -C "$wine_source_root" init -q
+    git_root="$(git -C "$wine_source_root" rev-parse --show-toplevel)"
+fi
+[[ "$git_root" == "$wine_source_root" ]] || {
+    echo "ERROR: git apply no quedó anclado al árbol Wine: $git_root" >&2
+    exit 1
+}
+
 for patch_file in "${PATCHES[@]}"; do
     [[ -f "$patch_file" ]] || {
         echo "ERROR: falta el parche requerido: $patch_file" >&2
         exit 1
     }
 
-    if patch --forward --batch --dry-run --silent -p1 -d "$WINE_SOURCE" < "$patch_file" \
+    if git -C "$WINE_SOURCE" apply --check --whitespace=error-all "$patch_file" \
         >/dev/null 2>&1; then
-        patch --forward --batch --silent -p1 -d "$WINE_SOURCE" < "$patch_file"
+        # `git apply` never guesses with fuzz. A patch whose context no longer
+        # identifies the intended function is rejected instead of being moved
+        # to a merely similar brace block elsewhere in loader.c.
+        git -C "$WINE_SOURCE" apply --whitespace=error-all "$patch_file"
         echo "Parche aplicado: $(basename "$patch_file")"
-    elif patch --reverse --batch --dry-run --silent -p1 -d "$WINE_SOURCE" < "$patch_file" \
+    elif git -C "$WINE_SOURCE" apply --reverse --check --whitespace=error-all "$patch_file" \
         >/dev/null 2>&1; then
         echo "Parche ya aplicado: $(basename "$patch_file")"
     elif [[ "$(basename "$patch_file")" == "wine-26.3.0-per-process-graphics-routing.patch" ]] &&
@@ -64,6 +83,16 @@ for patch_file in "${PATCHES[@]}"; do
         # medios. Verificar los dos símbolos conserva la idempotencia sin
         # aceptar un parche de GStreamer parcial.
         echo "Parche ya aplicado y extendido: $(basename "$patch_file")"
+    elif [[ "$(basename "$patch_file")" == "wine-26.3.0-process-scoped-dll-isolation.patch" ]] &&
+         rg -q 'static void regression_set_process_dll_isolation\(void\)' \
+             "$WINE_SOURCE/dlls/ntdll/unix/loader.c" &&
+         rg -q 'regression_apply_learned_process_repair\(\);' \
+             "$WINE_SOURCE/dlls/ntdll/unix/loader.c" &&
+         rg -q 'regression_set_process_dll_isolation\(\);' \
+             "$WINE_SOURCE/dlls/ntdll/unix/loader.c"; then
+        # El parche ABI posterior se inserta inmediatamente junto a esta
+        # llamada, por lo que el hunk original ya no es reversible literalmente.
+        echo "Parche ya aplicado y extendido: $(basename "$patch_file")"
     elif [[ "$(basename "$patch_file")" == "wine-26.3.0-unreal-bootstrap-autodetect.patch" ]] &&
          rg -q 'static int regression_bootstrap_target_is_safe' \
              "$WINE_SOURCE/dlls/ntdll/unix/loader.c" &&
@@ -81,3 +110,95 @@ for patch_file in "${PATCHES[@]}"; do
         exit 1
     fi
 done
+
+# La aplicabilidad textual no basta: varios bloques de loader.c contienen
+# cierres casi idénticos. Este parser estructural de llaves garantiza que las
+# llamadas solo viven en start_main_thread y en su orden de inicialización.
+python3 - "$WINE_SOURCE/dlls/ntdll/unix/loader.c" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+source = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+
+def function_body(signature: str) -> str:
+    match = re.search(signature, source)
+    if not match:
+        raise SystemExit(f"ERROR: no se encontró la función requerida: {signature}")
+    start = source.find("{", match.end())
+    if start < 0:
+        raise SystemExit(f"ERROR: la función no abre un cuerpo: {signature}")
+
+    depth = 0
+    state = "code"
+    index = start
+    while index < len(source):
+        char = source[index]
+        next_char = source[index + 1] if index + 1 < len(source) else ""
+        if state == "code":
+            if char == '"':
+                state = "string"
+            elif char == "'":
+                state = "character"
+            elif char == "/" and next_char == "*":
+                state = "block-comment"
+                index += 1
+            elif char == "/" and next_char == "/":
+                state = "line-comment"
+                index += 1
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return source[start + 1:index]
+        elif state in {"string", "character"}:
+            if char == "\\":
+                index += 1
+            elif (state == "string" and char == '"') or (
+                state == "character" and char == "'"
+            ):
+                state = "code"
+        elif state == "block-comment" and char == "*" and next_char == "/":
+            state = "code"
+            index += 1
+        elif state == "line-comment" and char == "\n":
+            state = "code"
+        index += 1
+    raise SystemExit(f"ERROR: cuerpo sin cerrar: {signature}")
+
+
+start_main = function_body(r"static\s+void\s+start_main_thread\s*\(\s*void\s*\)")
+ordered_calls = [
+    "regression_set_process_dll_isolation();",
+    "regression_set_process_abi_compatibility();",
+    "regression_set_windows_media_compatibility();",
+    "regression_set_graphics_backend();",
+]
+positions = []
+for call in ordered_calls:
+    if source.count(call) != 1:
+        raise SystemExit(f"ERROR: {call} debe aparecer exactamente una vez en loader.c")
+    position = start_main.find(call)
+    if position < 0:
+        raise SystemExit(f"ERROR: {call} quedó fuera de start_main_thread")
+    positions.append(position)
+
+load_position = start_main.find("load_wow64_ntdll( main_image_info.Machine );")
+api_position = start_main.find("load_apiset_dll();")
+done_position = start_main.find("server_init_process_done();")
+if min(load_position, api_position, done_position) < 0:
+    raise SystemExit("ERROR: start_main_thread perdió sus anclas de arranque")
+if not (load_position < api_position < positions[0] < positions[1] < positions[2]
+        < positions[3] < done_position):
+    raise SystemExit("ERROR: el orden de inicialización de Regression es incorrecto")
+
+wine_main = function_body(
+    r"DECLSPEC_EXPORT\s+void\s+__wine_main\s*\(\s*int\s+argc\s*,\s*char\s*\*argv\[\]\s*\)"
+)
+if wine_main.count("regression_redirect_bootstrap( argc, argv );") != 1:
+    raise SystemExit("ERROR: el redirector bootstrap no está dentro de __wine_main")
+PY
+
+echo "Layout de loader Wine verificado."

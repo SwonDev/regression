@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC=$ROOT/sources-26.3.0
+SRC="$ROOT/sources-26.3.0"
 PREFIX=$ROOT/toolchain/x86
 WORK=$ROOT/build/toolchain
 mkdir -p "$PREFIX" "$WORK" "$ROOT/build/logs"

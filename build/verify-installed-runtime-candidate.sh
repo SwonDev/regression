@@ -4,13 +4,20 @@
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ "${1:-}" == "--baseline-public-1.11" ]]; then
+    [[ $# -eq 4 ]] || {
+        printf 'ERROR: uso: %s --baseline-public-1.11 ASSET CHECKSUM BASELINE_APP\n' "$0" >&2
+        exit 64
+    }
+    exec "$ROOT/build/verify-installed-runtime-public-1.11-candidate.sh" "$2" "$3" "$4"
+fi
 ASSET="${1:-}"
 CHECKSUM="${2:-}"
 BASELINE_APP="${3:-/Applications/Regression.app}"
-BASELINE_VERSION="1.10.0"
-BASELINE_BUILD_NUMBER="35"
-TARGET_VERSION="1.10.1"
-TARGET_BUILD_NUMBER="36"
+BASELINE_VERSION="1.10.1"
+BASELINE_BUILD_NUMBER="36"
+TARGET_VERSION="1.11.0"
+TARGET_BUILD_NUMBER="37"
 VERIFY_SCRATCH=""
 GPTK_PROFILE_LINKS=(
     grim-dawn dragonsword
@@ -32,6 +39,15 @@ fail()
 {
     printf 'ERROR: %s\n' "$*" >&2
     exit 1
+}
+
+verify_hash()
+{
+    local expected="$1" path="$2" actual
+    [[ -f "$path" ]] || fail "falta el recurso candidato: $path"
+    actual="$(shasum -a 256 "$path" | awk '{ print $1 }')"
+    [[ "$actual" == "$expected" ]] \
+        || fail "hash inesperado en $path (esperado $expected, actual $actual)"
 }
 
 cleanup()
@@ -98,33 +114,70 @@ file "$CANDIDATE_APP/Contents/MacOS/Regression" | grep -q 'Mach-O 64-bit.*arm64'
 "$ROOT/build/verify-plist-version-promotion.sh" \
     "$BASELINE_APP/Contents/Info.plist" "$CANDIDATE_APP/Contents/Info.plist" \
     "$BASELINE_VERSION" "$BASELINE_BUILD_NUMBER" "$TARGET_VERSION" "$TARGET_BUILD_NUMBER" \
+    --remove-apple-events-description \
     >/dev/null
-cmp -s \
-    "$BASELINE_APP/Contents/MacOS/regression-engine" \
-    "$CANDIDATE_APP/Contents/MacOS/regression-engine" \
-    || fail "el candidato cambió regression-engine"
+verify_hash 0aa2c39d5476d8b5767d9a1979af5ecaf96f36648cbe15d376a761aad06e7ca4 \
+    "$CANDIDATE_APP/Contents/MacOS/regression-engine"
 "$ROOT/build/verify-byte-identical-tree.sh" \
     "$BASELINE_APP/Contents/MacOS" \
     "$CANDIDATE_APP/Contents/MacOS" \
     Regression regression-engine >/dev/null
-cmp -s \
-    "$BASELINE_APP/Contents/MacOS/regression-engine" \
-    "$CANDIDATE_APP/Contents/MacOS/regression-engine" \
-    || fail "la release pública cambió los bytes de regression-engine"
 "$ROOT/build/verify-byte-identical-tree.sh" \
     "$BASELINE_APP/Contents/Resources" \
     "$CANDIDATE_APP/Contents/Resources" >/dev/null
 "$ROOT/build/verify-byte-identical-tree.sh" \
     "$BASELINE_APP/Contents/SharedSupport" \
     "$CANDIDATE_APP/Contents/SharedSupport" \
-    bin/regressionctl wine-root/lib/apple_gptk/ \
+    bin/regressionctl bin/install-apple-gptk-component \
+    Switch2Bridge/Switch2Bridge.app/Contents/MacOS/Switch2Bridge \
+    wine-root/bin/wine wine-root/bin/wineserver \
+    wine-root/lib/wine/x86_64-unix/wine \
+    wine-root/lib/wine/x86_64-unix/ntdll.so \
+    wine-root/lib/dxvk/x86_64-windows/d3d11.dll.bak-gcc16-ucrt-20260726-162839 \
+    wine-root/lib/wine/x86_64-unix/winevulkan.so.bak-absolute-toolchain-rpath-20260726-1645 \
+    wine-root/lib/profiles/heroes-hammerwatch-2/x86_64-unix/winemac.so \
+    wine-root/lib/apple_gptk/ \
     "${GPTK_PROFILE_EXCLUSIONS[@]}" >/dev/null
+
+for removed_laboratory_copy in \
+    wine-root/lib/dxvk/x86_64-windows/d3d11.dll.bak-gcc16-ucrt-20260726-162839 \
+    wine-root/lib/wine/x86_64-unix/winevulkan.so.bak-absolute-toolchain-rpath-20260726-1645
+do
+    [[ ! -e "$CANDIDATE_APP/Contents/SharedSupport/$removed_laboratory_copy" ]] \
+        || fail "el candidato conserva la copia de laboratorio: $removed_laboratory_copy"
+done
+
+# Cada excepción de la transición pública queda sellada explícitamente. No se acepta una
+# diferencia genérica entre 1.10.1 y 1.11.0.
+verify_hash cfcad4b7ce914877d1a20df4dcd1f2215aac826fdefe2b91483c6c278f5e6690 \
+    "$CANDIDATE_APP/Contents/SharedSupport/bin/regressionctl"
+verify_hash 291bc4ecf61dc9c7efdebbe9e8e5737baff594ee4bfa626b90b1647a64333073 \
+    "$CANDIDATE_APP/Contents/SharedSupport/bin/install-apple-gptk-component"
+BRIDGE_APP="$CANDIDATE_APP/Contents/SharedSupport/Switch2Bridge/Switch2Bridge.app"
+file "$BRIDGE_APP/Contents/MacOS/Switch2Bridge" | grep -q 'Mach-O 64-bit.*arm64' \
+    || fail "Switch2Bridge candidato no es Mach-O arm64"
+[[ "$(plutil -extract Switch2BridgeCommit raw "$BRIDGE_APP/Contents/Info.plist")" == \
+      "ff2e1a1d99c8529a8f693fa4ab7cf82583cd3d7d" ]] \
+    || fail "Switch2Bridge no declara el commit público fijado"
+codesign --verify --strict "$BRIDGE_APP"
+verify_hash b7bc2eb61356ce14d8a290a4b95b0831185bd8a9b4e53767a3e1299690d4498a \
+    "$CANDIDATE_APP/Contents/SharedSupport/wine-root/bin/wine"
+verify_hash d893d2e3df2678dfc192dfe102047de8ef4afc009271f33acce4555828eaf4c7 \
+    "$CANDIDATE_APP/Contents/SharedSupport/wine-root/bin/wineserver"
+verify_hash 44158083e51393abfe42fb9cd0beeb52ba0ca005a919f4303f5af5eb4cf06587 \
+    "$CANDIDATE_APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/wine"
+verify_hash 8fb847f4f71ae120609c963fc588d3ea77b0887f173858c2d462e424a2d8fd8e \
+    "$CANDIDATE_APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+verify_hash d86aafb6d73fd472ce4615bad47e97aa51d9a49549e73074b4e17d38968af3e8 \
+    "$CANDIDATE_APP/Contents/SharedSupport/wine-root/lib/profiles/heroes-hammerwatch-2/x86_64-unix/winemac.so"
 
 BASELINE_GPTK="$BASELINE_APP/Contents/SharedSupport/wine-root/lib/apple_gptk"
 CANDIDATE_GPTK="$CANDIDATE_APP/Contents/SharedSupport/wine-root/lib/apple_gptk"
 [[ -d "$BASELINE_GPTK/external/D3DMetal.framework" ]] \
     || fail "el baseline no contiene el GPTK local esperado"
-if find "$CANDIDATE_GPTK" \( -type f -o -type l \) | grep -q .; then
+FIRST_CANDIDATE_GPTK_PAYLOAD="$(find "$CANDIDATE_GPTK" \
+    \( -type f -o -type l \) -print -quit)"
+if [[ -n "$FIRST_CANDIDATE_GPTK_PAYLOAD" ]]; then
     fail "el candidato contiene archivos o enlaces GPTK que no pueden viajar en el asset"
 fi
 actual_gptk_directories="$(
@@ -178,7 +231,7 @@ done
 
 codesign --verify --deep --strict "$CANDIDATE_APP"
 REGRESSION_APP_PATH="$CANDIDATE_APP" \
-    "$ROOT/build/verify-public-installed-state.sh" --release-1.10.1
+    "$ROOT/build/verify-public-installed-state.sh" --release-1.11.0
 baseline_identifier="$(plutil -extract CFBundleIdentifier raw "$BASELINE_APP/Contents/Info.plist")"
 candidate_identifier="$(plutil -extract CFBundleIdentifier raw "$CANDIDATE_APP/Contents/Info.plist")"
 [[ "$candidate_identifier" == "$baseline_identifier" ]] \
@@ -195,7 +248,6 @@ if rg -a -l '/Users/adrianpereradelgado|aperdel\.esi@gmail\.com' \
 fi
 
 for entitlement in \
-    'com.apple.security.automation.apple-events' \
     'com.apple.security.cs.allow-unsigned-executable-memory' \
     'com.apple.security.device.audio-input' \
     'com.apple.security.device.camera'
@@ -205,5 +257,10 @@ do
         | plutil -extract "$entitlement_key" raw -o - -- -)"
     [[ "$value" == "true" ]] || fail "la firma perdió la capacidad $entitlement"
 done
+if codesign -d --entitlements :- "$CANDIDATE_APP" 2>/dev/null \
+    | plutil -extract 'com\.apple\.security\.automation\.apple-events' raw -o - -- - \
+        >/dev/null 2>&1; then
+    fail "la release conserva una capacidad de Apple Events no autorizada"
+fi
 
 printf 'Candidato local verificado sin ejecutar código: %s\n' "$actual_sha"

@@ -28,7 +28,63 @@ public protocol ProcessLaunching: Sendable {
         logDirectoryURL: URL
     ) async throws -> BackendLaunch
 
+    func launch(
+        backend: BackendKind,
+        executableURL: URL,
+        arguments: [String],
+        logDirectoryURL: URL,
+        authority: ProcessLaunchAuthority
+    ) async throws -> BackendLaunch
+
     func reapFinishedProcesses() async
+}
+
+public struct ProcessLaunchAuthority: Sendable {
+    private let regressionInstallation: RegressionInstallation?
+    private let custodyPermit: PhysicalLibraryCustodyMutationPermit?
+    private let regressionComponentHealthProvider:
+        @Sendable (RegressionInstallation) -> ComponentHealthReport
+
+    init(
+        regressionInstallation: RegressionInstallation?,
+        custodyPermit: PhysicalLibraryCustodyMutationPermit?,
+        regressionComponentHealthProvider: @escaping @Sendable (
+            RegressionInstallation
+        ) -> ComponentHealthReport
+    ) {
+        self.regressionInstallation = regressionInstallation
+        self.custodyPermit = custodyPermit
+        self.regressionComponentHealthProvider = regressionComponentHealthProvider
+    }
+
+    func validateImmediatelyBeforeSpawn() throws {
+        _ = custodyPermit
+        guard let regressionInstallation else { return }
+        try CompiledRepairActivationStore.validateLaunchSafety(
+            in: regressionInstallation.bottleURL
+        )
+        try RegressionLaunchComponentGate.requireReady(
+            regressionComponentHealthProvider(regressionInstallation)
+        )
+    }
+}
+
+public extension ProcessLaunching {
+    func launch(
+        backend: BackendKind,
+        executableURL: URL,
+        arguments: [String],
+        logDirectoryURL: URL,
+        authority: ProcessLaunchAuthority
+    ) async throws -> BackendLaunch {
+        try authority.validateImmediatelyBeforeSpawn()
+        return try await launch(
+            backend: backend,
+            executableURL: executableURL,
+            arguments: arguments,
+            logDirectoryURL: logDirectoryURL
+        )
+    }
 }
 
 public protocol ProcessInspecting: Sendable {
@@ -93,14 +149,58 @@ public actor ProcessLauncher: ProcessLaunching {
     }
 
     private var ownedProcesses: [Int32: OwnedLaunch] = [:]
+    private let immediatelyBeforeProcessRun: @Sendable () -> Void
 
-    public init() {}
+    public init() {
+        immediatelyBeforeProcessRun = {}
+    }
+
+    init(immediatelyBeforeProcessRun: @escaping @Sendable () -> Void) {
+        self.immediatelyBeforeProcessRun = immediatelyBeforeProcessRun
+    }
 
     public func launch(
         backend: BackendKind,
         executableURL: URL,
         arguments: [String],
         logDirectoryURL: URL
+    ) async throws -> BackendLaunch {
+        guard backend != .regression else {
+            throw RegressionCoreError.unsafeLibraryState(
+                "Un lanzamiento de Regression exige autoridad sellada en el último boundary"
+            )
+        }
+        return try await launchImpl(
+            backend: backend,
+            executableURL: executableURL,
+            arguments: arguments,
+            logDirectoryURL: logDirectoryURL,
+            authority: nil
+        )
+    }
+
+    public func launch(
+        backend: BackendKind,
+        executableURL: URL,
+        arguments: [String],
+        logDirectoryURL: URL,
+        authority: ProcessLaunchAuthority
+    ) async throws -> BackendLaunch {
+        return try await launchImpl(
+            backend: backend,
+            executableURL: executableURL,
+            arguments: arguments,
+            logDirectoryURL: logDirectoryURL,
+            authority: authority
+        )
+    }
+
+    private func launchImpl(
+        backend: BackendKind,
+        executableURL: URL,
+        arguments: [String],
+        logDirectoryURL: URL,
+        authority: ProcessLaunchAuthority?
     ) async throws -> BackendLaunch {
         let executablePath = executableURL.standardizedFileURL.path
         if let existing = ownedProcesses.values.first(where: {
@@ -131,6 +231,8 @@ public actor ProcessLauncher: ProcessLaunching {
         process.standardOutput = handle
         process.standardError = handle
         do {
+            immediatelyBeforeProcessRun()
+            try authority?.validateImmediatelyBeforeSpawn()
             try process.run()
         } catch {
             try? FileManager.default.removeItem(at: logURL)

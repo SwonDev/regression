@@ -7,10 +7,10 @@ MACOS_DIR="$APP/Contents/MacOS"
 PLIST="$APP/Contents/Info.plist"
 RESOURCES_DIR="$APP/Contents/Resources"
 STATE_ICON_DIR="$ROOT/assets/menubar/states"
-VERSION="1.10.1"
-BUILD_NUMBER="36"
+VERSION="1.11.0"
+BUILD_NUMBER="37"
 BACKUP_ROOT="$ROOT/backups/native-packaging"
-COMPATIBILITY_ROOT="$HOME/Library/Application Support/Regression/Compatibility"
+COMPATIBILITY_ROOT="${REGRESSION_COMPATIBILITY_ROOT:-$HOME/Library/Application Support/Regression/Compatibility}"
 COMPATIBILITY_DB="$COMPATIBILITY_ROOT/compatibility.sqlite"
 COMPATIBILITY_BACKUP_ROOT="$COMPATIBILITY_ROOT/Backups"
 COMPATIBILITY_BACKUP=""
@@ -20,9 +20,12 @@ MUTATION_STARTED=false
 verify_protected_state()
 {
     local phase="${1:-final}"
-    local bottle="$HOME/Library/Application Support/Regression/Bottles/Steam"
     local arguments=()
-    if [[ "$phase" == "before-tq2-route-unification" ]]; then
+    if [[ "$phase" == "before-1.11-promotion" ]]; then
+        arguments+=(--before-1.11-promotion)
+    elif [[ "$phase" == "release-1.11-development-candidate" ]]; then
+        arguments+=(--release-1.11-development-candidate)
+    elif [[ "$phase" == "before-tq2-route-unification" ]]; then
         arguments+=(--before-tq2-route-unification)
     elif [[ "$phase" == "before-windows-media-promotion" ]]; then
         arguments+=(--before-windows-media-promotion)
@@ -37,11 +40,10 @@ verify_protected_state()
     elif [[ "$phase" == "before-borderlands4-process-isolation" ]]; then
         arguments+=(--before-borderlands4-process-isolation)
     fi
-    if [[ -d "$bottle" ]]; then
-        arguments+=(--include-bottle)
-        "$ROOT/build/verify-protected-state.sh" "${arguments[@]}"
+    if [[ ${#arguments[@]} -eq 0 ]]; then
+        REGRESSION_APP_PATH="$APP" "$ROOT/build/verify-protected-state.sh"
     else
-        "$ROOT/build/verify-protected-state.sh" "${arguments[@]}"
+        REGRESSION_APP_PATH="$APP" "$ROOT/build/verify-protected-state.sh" "${arguments[@]}"
     fi
 }
 
@@ -58,7 +60,14 @@ verify_prepackage_state()
     source_hash="$(shasum -a 256 "$source_engine" | awk '{print $1}')"
     installed_ntdll_hash="$(shasum -a 256 "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so" | awk '{print $1}')"
 
-    if [[ "$installed_hash" == "$source_hash" ]]; then
+    if [[ "$installed_hash" == "0aa2c39d5476d8b5767d9a1979af5ecaf96f36648cbe15d376a761aad06e7ca4" &&
+          "$source_hash" == "$installed_hash" &&
+          "$installed_ntdll_hash" == "d41e2468e46ef1993fa124f5b759716d67618989f5304501ccde21fbf4c5eef8" ]]; then
+        verify_protected_state release-1.11-development-candidate
+    elif [[ "$installed_hash" == "ccd590e7e5d395757add0b561bf9fa76d54deb56c491706e28004259c0df913e" &&
+          "$source_hash" == "0aa2c39d5476d8b5767d9a1979af5ecaf96f36648cbe15d376a761aad06e7ca4" ]]; then
+        verify_protected_state before-1.11-promotion
+    elif [[ "$installed_hash" == "$source_hash" ]]; then
         installed_component_hash="$(shasum -a 256 "$APP/Contents/SharedSupport/components/windows-media/1/manifest.sha256" | awk '{print $1}')"
         source_component_hash="$(shasum -a 256 "$ROOT/build/windows-media-component/1/manifest.sha256" | awk '{print $1}')"
         if [[ "$installed_component_hash" == "d93847ced54536cbaaf8ed7922537dfb043448e0168184375c552e774fe35199" &&
@@ -195,9 +204,9 @@ fi
 
 # Valida todos los insumos antes de crear el rollback o modificar el bundle. Un
 # requisito ausente debe dejar Regression.app exactamente como estaba.
-CANDIDATE_NTDLL="$ROOT/build/wine64/dlls/ntdll/ntdll.so"
+CANDIDATE_NTDLL="${REGRESSION_CANDIDATE_NTDLL:-$ROOT/build/wine64/dlls/ntdll/ntdll.so}"
 [[ -f "$CANDIDATE_NTDLL" &&
-   "$(shasum -a 256 "$CANDIDATE_NTDLL" | awk '{print $1}')" == "e3d336ec0691a2025546318cb65f37d868458ed9786fbc10e20a2a7bdd4fcfcc" ]] || {
+   "$(shasum -a 256 "$CANDIDATE_NTDLL" | awk '{print $1}')" == "${REGRESSION_CANDIDATE_NTDLL_SHA256:-PENDING_1_11_NTDLL_SHA256}" ]] || {
     echo "ERROR: falta el ntdll candidato exacto de las reparaciones compiladas." >&2
     exit 1
 }
@@ -215,7 +224,7 @@ COMPONENT_INSTALLER_SOURCE="$ROOT/Scripts/install_apple_gptk_component.sh"
     echo "ERROR: falta el instalador autorreparable de Apple GPTK." >&2
     exit 1
 }
-WINDOWS_MEDIA_BUILD="$ROOT/build/windows-media-component/1"
+WINDOWS_MEDIA_BUILD="${REGRESSION_WINDOWS_MEDIA_BUILD:-$ROOT/build/windows-media-component/1}"
 WINDOWS_MEDIA_INSTALLER_SOURCE="$ROOT/Scripts/install_windows_media_component.sh"
 [[ -f "$WINDOWS_MEDIA_BUILD/manifest.sha256" ]] || {
     echo "ERROR: falta el componente Windows Media; ejecuta build/build-windows-media-component.sh" >&2
@@ -244,6 +253,10 @@ NATIVE_BACKUP_PATHS=(
     Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so
     Contents/_CodeSignature
 )
+if [[ -e "$APP/Contents/SharedSupport/bin/install-apple-gptk-component" \
+      || -L "$APP/Contents/SharedSupport/bin/install-apple-gptk-component" ]]; then
+    NATIVE_BACKUP_PATHS+=(Contents/SharedSupport/bin/install-apple-gptk-component)
+fi
 if [[ -e "$APP/Contents/SharedSupport/bin/install-windows-media-component" ]]; then
     NATIVE_BACKUP_PATHS+=(Contents/SharedSupport/bin/install-windows-media-component)
 fi
@@ -335,16 +348,25 @@ set_plist_value CFBundleVersion string "$BUILD_NUMBER"
 set_plist_value LSMinimumSystemVersion string 14.0
 set_plist_value LSUIElement bool true
 set_plist_value NSHighResolutionCapable bool true
-set_plist_value NSAppleEventsUsageDescription string "Regression usa automatización únicamente para iniciar, mostrar y cerrar Steam o CrossOver cuando tú lo solicitas."
 set_plist_value NSMicrophoneUsageDescription string "Regression permite que los juegos de Windows usen el micrófono cuando activas funciones de voz o chat."
 set_plist_value NSCameraUsageDescription string "Regression permite que los juegos de Windows usen la cámara cuando activas una función que la necesita."
 set_plist_value NSDesktopFolderUsageDescription string "Regression permite que los juegos accedan al Escritorio para abrir o guardar archivos que tú elijas."
 set_plist_value NSDocumentsFolderUsageDescription string "Regression permite que los juegos accedan a Documentos para partidas guardadas, mods y archivos que tú elijas."
 set_plist_value NSDownloadsFolderUsageDescription string "Regression permite que los juegos accedan a Descargas para instaladores, mods y archivos que tú elijas."
+
+# Regression inicia y controla únicamente sus propios procesos; no automatiza aplicaciones
+# externas mediante Apple Events. Conservar esta clave pediría un permiso que no usa y mantendría
+# una referencia operativa obsoleta a CrossOver.
+if /usr/libexec/PlistBuddy -c "Print :NSAppleEventsUsageDescription" "$TEMP_PLIST" >/dev/null 2>&1; then
+    /usr/libexec/PlistBuddy -c "Delete :NSAppleEventsUsageDescription" "$TEMP_PLIST"
+fi
+if plutil -extract NSAppleEventsUsageDescription raw "$TEMP_PLIST" >/dev/null 2>&1; then
+    echo "ERROR: Regression no debe declarar permiso de Apple Events." >&2
+    exit 1
+fi
 mv "$TEMP_PLIST" "$PLIST"
 
 for key in \
-    NSAppleEventsUsageDescription \
     NSMicrophoneUsageDescription \
     NSCameraUsageDescription \
     NSDesktopFolderUsageDescription \
@@ -363,7 +385,7 @@ done
 # anterior; el mtime del directorio no forma parte del sello de código.
 touch "$APP"
 "$ROOT/Scripts/sign_regression.sh" "$APP"
-verify_protected_state
+verify_protected_state release-1.11-development-candidate
 
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 if [[ -x "$LSREGISTER" ]]; then

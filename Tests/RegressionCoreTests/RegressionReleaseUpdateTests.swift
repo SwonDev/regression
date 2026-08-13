@@ -4,6 +4,85 @@ import Foundation
 import XCTest
 
 final class RegressionReleaseUpdateTests: XCTestCase {
+    func testRepairNeverDowngradesAndOnlySpawnsForTheInstalledRelease() async {
+        var spawnCount = 0
+        let downgrade = await RegressionManualRepairPolicy.runIfAuthorized(
+            installedVersion: "1.11.0",
+            releaseVersion: "1.10.1"
+        ) {
+            spawnCount += 1
+        }
+        XCTAssertEqual(downgrade, .rejectDowngrade)
+        XCTAssertEqual(spawnCount, 0)
+        XCTAssertFalse(downgrade.permitsInstallerSpawn)
+
+        let sameVersion = await RegressionManualRepairPolicy.runIfAuthorized(
+            installedVersion: "1.11.0",
+            releaseVersion: "1.11.0"
+        ) {
+            spawnCount += 1
+        }
+        XCTAssertEqual(sameVersion, .repairNow)
+        XCTAssertEqual(spawnCount, 1)
+        XCTAssertTrue(sameVersion.permitsInstallerSpawn)
+    }
+
+    func testRepairExposesANewerReleaseForExplicitUpdateWithoutSpawning() async {
+        var spawnCount = 0
+        let decision = await RegressionManualRepairPolicy.runIfAuthorized(
+            installedVersion: "1.11.0",
+            releaseVersion: "1.12.0"
+        ) {
+            spawnCount += 1
+        }
+
+        XCTAssertEqual(decision, .newerUpdateAvailable)
+        XCTAssertEqual(spawnCount, 0)
+        XCTAssertFalse(decision.permitsInstallerSpawn)
+    }
+
+    func testInvalidRepairVersionsFailClosedWithoutSpawning() async {
+        var spawnCount = 0
+        let decision = await RegressionManualRepairPolicy.runIfAuthorized(
+            installedVersion: "desconocida",
+            releaseVersion: "1.11.0"
+        ) {
+            spawnCount += 1
+        }
+
+        XCTAssertEqual(decision, .rejectDowngrade)
+        XCTAssertEqual(spawnCount, 0)
+    }
+
+    func testRepairDecisionRemainsAClosedThreeWayContract() {
+        XCTAssertEqual(
+            RegressionManualRepairPolicy.decision(
+                installedVersion: "1.11.0",
+                releaseVersion: "1.10.1"
+            ),
+            .rejectDowngrade
+        )
+        XCTAssertFalse(
+            RegressionManualRepairPolicy.decision(
+                installedVersion: "1.11.0",
+                releaseVersion: "1.10.1"
+            ).permitsInstallerSpawn
+        )
+        XCTAssertEqual(
+            RegressionManualRepairPolicy.decision(
+                installedVersion: "1.11.0",
+                releaseVersion: "1.11.0"
+            ),
+            .repairNow
+        )
+        XCTAssertTrue(
+            RegressionManualRepairPolicy.decision(
+                installedVersion: "1.11.0",
+                releaseVersion: "1.11.0"
+            ).permitsInstallerSpawn
+        )
+    }
+
     func testAutomaticUpdateInstallsOnlyFromCanonicalIdleApplication() {
         let status = RegressionReleaseUpdateStatus.available(
             installedVersion: "1.9.0",
@@ -131,13 +210,30 @@ final class RegressionReleaseUpdateTests: XCTestCase {
         XCTAssertEqual(installedVersion, "1.7.3")
         XCTAssertEqual(release.version, "1.7.4")
 
-        let directory = FileManager.default.temporaryDirectory
+        let directory = Self.secureTemporaryRoot
             .appendingPathComponent("regression-update-test-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let downloaded = try await service.downloadInstaller(for: release, to: directory)
         XCTAssertEqual(try Data(contentsOf: downloaded), installer)
         let permissions = try FileManager.default.attributesOfItem(atPath: downloaded.path)[.posixPermissions] as? NSNumber
         XCTAssertEqual((permissions?.intValue ?? 0) & 0o777, 0o700)
+    }
+
+    func testLatestReleaseCanRepairTheCurrentVersionWithoutWeakeningAssetValidation() async throws {
+        let installer = Data("#!/bin/bash\nexit 0\n".utf8)
+        let digest = SHA256.hash(data: installer).map { String(format: "%02x", $0) }.joined()
+        let service = RegressionReleaseUpdateService(fetch: { request in
+            (
+                Self.releaseJSON(version: "v1.10.1", digest: digest, size: installer.count),
+                Self.response(url: request.url!)
+            )
+        })
+
+        let release = try await service.latestRelease(clientVersion: "1.10.1")
+
+        XCTAssertEqual(release.version, "1.10.1")
+        XCTAssertEqual(release.installerSHA256, digest)
+        XCTAssertEqual(release.installerURL.lastPathComponent, "install_regression.sh")
     }
 
     func testDraftPrereleaseAndMalformedVersionsAreRejected() async throws {
@@ -169,7 +265,7 @@ final class RegressionReleaseUpdateTests: XCTestCase {
         guard case let .available(_, release) = status else {
             return XCTFail("Faltó la actualización de prueba.")
         }
-        let directory = FileManager.default.temporaryDirectory
+        let directory = Self.secureTemporaryRoot
             .appendingPathComponent("regression-update-test-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
@@ -233,13 +329,14 @@ final class RegressionReleaseUpdateTests: XCTestCase {
         let service = RegressionReleaseUpdateService(fetch: { request in
             (installer, Self.response(url: request.url!))
         })
-        let root = FileManager.default.temporaryDirectory
+        let root = Self.secureTemporaryRoot
             .appendingPathComponent("regression-update-test-\(UUID().uuidString)", isDirectory: true)
         let target = root.appendingPathComponent("target", isDirectory: true)
         let linked = root.appendingPathComponent("linked", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(at: linked, withDestinationURL: target)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: root.path)
 
         do {
             _ = try await service.downloadInstaller(for: release, to: linked)
@@ -258,6 +355,42 @@ final class RegressionReleaseUpdateTests: XCTestCase {
         let permissions = try FileManager.default.attributesOfItem(atPath: target.path)[.posixPermissions]
             as? NSNumber
         XCTAssertEqual((permissions?.intValue ?? 0) & 0o777, 0o700)
+        let ancestorPermissions = try FileManager.default.attributesOfItem(atPath: root.path)[.posixPermissions]
+            as? NSNumber
+        XCTAssertEqual((ancestorPermissions?.intValue ?? 0) & 0o777, 0o755)
+    }
+
+    func testInstallerStagingRejectsASymbolicLinkInTheParentChainBeforeCreatingAChild() async throws {
+        let installer = Data("#!/bin/bash\nexit 0\n".utf8)
+        let digest = SHA256.hash(data: installer).map { String(format: "%02x", $0) }.joined()
+        let release = Self.release(
+            version: "1.9.1",
+            digest: digest,
+            size: installer.count
+        )
+        let service = RegressionReleaseUpdateService(fetch: { request in
+            (installer, Self.response(url: request.url!))
+        })
+        let root = Self.secureTemporaryRoot
+            .appendingPathComponent("regression-update-test-\(UUID().uuidString)", isDirectory: true)
+        let physicalParent = root.appendingPathComponent("physical", isDirectory: true)
+        let linkedParent = root.appendingPathComponent("linked", isDirectory: true)
+        let child = linkedParent.appendingPathComponent("child", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: physicalParent, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: linkedParent, withDestinationURL: physicalParent)
+
+        do {
+            _ = try await service.downloadInstaller(for: release, to: child)
+            XCTFail("El staging no debe atravesar un padre simbólico para crear el hijo.")
+        } catch {
+            XCTAssertEqual(error as? RegressionReleaseUpdateError, .unsafeUpdateDirectory)
+            XCTAssertFalse(
+                FileManager.default.fileExists(
+                    atPath: physicalParent.appendingPathComponent("child").path
+                )
+            )
+        }
     }
 
     func testCurrentOrOlderReleaseLeavesInstallationUpToDate() async throws {
@@ -301,6 +434,11 @@ final class RegressionReleaseUpdateTests: XCTestCase {
         }
         """#.utf8)
     }
+
+    private static let secureTemporaryRoot = URL(
+        fileURLWithPath: "/private/tmp",
+        isDirectory: true
+    )
 
     private static func release(
         version: String,

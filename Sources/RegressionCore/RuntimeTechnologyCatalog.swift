@@ -4,6 +4,7 @@ import Foundation
 public enum RuntimeTechnologyCatalog {
     public static let revision = "2026-07-28.1"
     public static let checkedAt = Date(timeIntervalSince1970: 1_785_196_800)
+    public static let retiredCrossOverTechnologyID = "crossover"
 
     public static let all: [RuntimeTechnology] = [
         RuntimeTechnology(
@@ -106,18 +107,6 @@ public enum RuntimeTechnologyCatalog {
             latestKnownVersion: "3.0.1",
             checkedAt: checkedAt,
             notes: "Línea de investigación independiente; no se considera una actualización directa de Wine vkd3d."
-        ),
-        RuntimeTechnology(
-            id: "crossover",
-            displayName: "CrossOver",
-            category: .referenceRuntime,
-            officialURL: URL(string: "https://www.codeweavers.com/crossover")!,
-            distributionPolicy: .licensedReference,
-            updatePolicy: .referenceOnly,
-            stableVersion: "26.3.0 (referencia observada)",
-            latestKnownVersion: nil,
-            checkedAt: checkedAt,
-            notes: "Referencia temporal mediante su CLI oficial. El motor propio no enlaza ni copia componentes propietarios."
         )
     ]
 }

@@ -36,7 +36,6 @@ fi
 codesign --verify --deep --strict "$APP"
 
 for key in \
-    'com\.apple\.security\.automation\.apple-events' \
     'com\.apple\.security\.cs\.allow-unsigned-executable-memory' \
     'com\.apple\.security\.device\.audio-input' \
     'com\.apple\.security\.device\.camera'
@@ -48,6 +47,13 @@ do
         exit 1
     }
 done
+
+if codesign -d --entitlements :- "$APP" 2>/dev/null \
+    | plutil -extract 'com\.apple\.security\.automation\.apple-events' raw -o - -- - \
+        >/dev/null 2>&1; then
+    echo "ERROR: la firma final conserva una capacidad de Apple Events no autorizada." >&2
+    exit 1
+fi
 
 if [[ "$signing_mode" == "development" ]]; then
     requirement="$(codesign -d -r- "$APP" 2>&1)"

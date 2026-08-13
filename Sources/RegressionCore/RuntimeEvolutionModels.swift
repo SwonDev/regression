@@ -256,6 +256,158 @@ public struct GameRuntimeRequirement: Codable, Equatable, Identifiable, Sendable
     }
 }
 
+/// Resultado cerrado al consumir un requisito observado.
+///
+/// Solo estas tres salidas son posibles. En particular, ningún identificador procedente del
+/// inventario puede convertirse en una ruta, URL, comando o instalador ejecutable.
+public enum GameRuntimeRequirementResolution: Codable, Equatable, Sendable {
+    case sealedComponent(componentID: String, componentVersion: String)
+    case compiledProfile(identifier: String, revision: Int)
+    case informational
+}
+
+public struct ResolvedGameRuntimeRequirement: Codable, Equatable, Sendable {
+    public let requirement: GameRuntimeRequirement
+    public let resolution: GameRuntimeRequirementResolution
+
+    public init(
+        requirement: GameRuntimeRequirement,
+        resolution: GameRuntimeRequirementResolution
+    ) {
+        self.requirement = requirement
+        self.resolution = resolution
+    }
+
+    /// La evidencia de inventario no autoriza mutaciones ni relanzamientos automáticos.
+    public var automaticRetryEligible: Bool { false }
+}
+
+/// Resuelve exclusivamente identidades que ya forman parte del código firmado de Regression.
+public enum GameRuntimeRequirementResolver {
+    public static func resolve(
+        _ requirement: GameRuntimeRequirement
+    ) -> ResolvedGameRuntimeRequirement {
+        guard requirement.source == .automatic,
+              SteamAppID.normalized(requirement.appID) == requirement.appID else {
+            return ResolvedGameRuntimeRequirement(
+                requirement: requirement,
+                resolution: .informational
+            )
+        }
+
+        if requirement.kind == .runtimeComponent,
+           ["microsoft-vc-runtime-x86", "microsoft-vc-runtime-x64"]
+            .contains(requirement.identifier) {
+            return ResolvedGameRuntimeRequirement(
+                requirement: requirement,
+                resolution: .sealedComponent(
+                    componentID: TrustedComponentCatalog.steamRuntimePrerequisitesComponentID,
+                    componentVersion: TrustedComponentCatalog
+                        .steamRuntimePrerequisitesComponentVersion
+                )
+            )
+        }
+
+        if let profile = GameRuntimeProfileCatalog.profile(
+               for: requirement.appID,
+               backend: .regression
+           ), profileMatches(requirement, profile: profile) {
+            return ResolvedGameRuntimeRequirement(
+                requirement: requirement,
+                resolution: .compiledProfile(
+                    identifier: profile.identifier,
+                    revision: profile.revision
+                )
+            )
+        }
+
+        return ResolvedGameRuntimeRequirement(
+            requirement: requirement,
+            resolution: .informational
+        )
+    }
+
+    private static func profileMatches(
+        _ requirement: GameRuntimeRequirement,
+        profile: CompiledGameRuntimeProfile
+    ) -> Bool {
+        let family = profile.configurationValues["profile.engine.family"]
+        return switch (requirement.kind, requirement.identifier) {
+        case (.dependency, "unity-player"):
+            family?.hasPrefix("unity") == true
+        case (.dependency, "unreal-engine"):
+            family == "unreal"
+        case (.dependency, "gamemaker-runner"):
+            family == "gamemaker"
+        default:
+            false
+        }
+    }
+}
+
+public enum GameTechnologyScanFreshness: String, Codable, Equatable, Sendable {
+    case current
+    case stale
+}
+
+/// Estado durable del último intento de inventario para un App ID.
+///
+/// `generation` avanza en cada intento. `lastSuccessfulGeneration` identifica la generación de
+/// los requisitos automáticos conservados; tras un fallo ambas dejan de coincidir y el estado es
+/// necesariamente `stale`.
+public struct GameTechnologyScanState: Codable, Equatable, Sendable {
+    public let appID: String
+    public let generation: Int
+    public let lastSuccessfulGeneration: Int?
+    public let freshness: GameTechnologyScanFreshness
+    public let attemptedAt: Date
+    public let lastSuccessfulAt: Date?
+    public let error: String?
+
+    public init(
+        appID: String,
+        generation: Int,
+        lastSuccessfulGeneration: Int?,
+        freshness: GameTechnologyScanFreshness,
+        attemptedAt: Date,
+        lastSuccessfulAt: Date?,
+        error: String?
+    ) {
+        self.appID = appID
+        self.generation = generation
+        self.lastSuccessfulGeneration = lastSuccessfulGeneration
+        self.freshness = freshness
+        self.attemptedAt = attemptedAt
+        self.lastSuccessfulAt = lastSuccessfulAt
+        self.error = error
+    }
+}
+
+/// Proyección que mantiene accesible la evidencia anterior sin presentarla como vigente.
+public struct GameTechnologyRequirementProjection: Codable, Equatable, Sendable {
+    public let scanState: GameTechnologyScanState?
+    public let requirements: [ResolvedGameRuntimeRequirement]
+
+    public init(
+        scanState: GameTechnologyScanState?,
+        requirements: [ResolvedGameRuntimeRequirement]
+    ) {
+        self.scanState = scanState
+        self.requirements = requirements
+    }
+
+    public var currentRequirements: [ResolvedGameRuntimeRequirement] {
+        requirements.filter { resolved in
+            resolved.requirement.source != .automatic || scanState?.freshness == .current
+        }
+    }
+
+    public var staleAutomaticRequirements: [ResolvedGameRuntimeRequirement] {
+        guard scanState?.freshness != .current else { return [] }
+        return requirements.filter { $0.requirement.source == .automatic }
+    }
+}
+
 public enum RepairReceiptResult: String, Codable, CaseIterable, Sendable {
     case succeeded
     case failed
@@ -301,6 +453,246 @@ public struct RepairReceipt: Codable, Equatable, Identifiable, Sendable {
         self.result = result
         self.notes = notes
         self.createdAt = createdAt
+    }
+}
+
+/// Estado durable de un intento de reparación compilada.
+///
+/// La detección y la planificación no implican que se haya mutado la botella. Los estados
+/// terminales tampoco se reinterpretan como una certificación perfecta: esa decisión continúa
+/// perteneciendo a la verificación funcional explícita de la ejecución de reintento.
+public enum RepairAttemptState: String, Codable, CaseIterable, Sendable {
+    case detected
+    case planned
+    case appliedAwaitingRelaunch
+    case relaunching
+    case awaitingVerification
+    case verified
+    case acceptedWithIssues
+    case failed
+    case rollbackPending
+    case rollbackFailed
+    case rolledBack
+    case blocked
+    case legacyAppliedUnverified
+
+    public var isActive: Bool {
+        switch self {
+        case .detected, .planned, .appliedAwaitingRelaunch, .relaunching, .awaitingVerification:
+            true
+        case .verified, .acceptedWithIssues, .failed, .rollbackFailed, .rolledBack, .blocked,
+             .legacyAppliedUnverified:
+            false
+        case .rollbackPending:
+            true
+        }
+    }
+
+    public func canTransition(to next: RepairAttemptState) -> Bool {
+        switch (self, next) {
+        case (.detected, .planned),
+             (.detected, .blocked),
+             (.detected, .failed),
+             (.planned, .appliedAwaitingRelaunch),
+             (.planned, .blocked),
+             (.planned, .failed),
+             (.appliedAwaitingRelaunch, .relaunching),
+             (.appliedAwaitingRelaunch, .rollbackPending),
+             (.appliedAwaitingRelaunch, .blocked),
+             (.relaunching, .awaitingVerification),
+             (.relaunching, .rollbackPending),
+             (.relaunching, .blocked),
+             (.awaitingVerification, .verified),
+             (.awaitingVerification, .acceptedWithIssues),
+             (.awaitingVerification, .rollbackPending),
+             (.awaitingVerification, .blocked),
+             (.verified, .blocked),
+             (.acceptedWithIssues, .blocked),
+             (.rollbackPending, .rollbackFailed),
+             (.rollbackFailed, .rollbackPending):
+            true
+        default:
+            false
+        }
+    }
+}
+
+public struct RepairRollbackEntry: Codable, Equatable, Sendable {
+    public let targetPath: String
+    public let backupPath: String
+    public let beforeFingerprint: String
+    public let afterFingerprint: String
+
+    public init(
+        targetPath: String,
+        backupPath: String,
+        beforeFingerprint: String,
+        afterFingerprint: String
+    ) {
+        self.targetPath = targetPath
+        self.backupPath = backupPath
+        self.beforeFingerprint = beforeFingerprint
+        self.afterFingerprint = afterFingerprint
+    }
+}
+
+/// Manifiesto privado completo necesario para restaurar una activación compuesta. No se exporta
+/// en recibos públicos ni se sustituye por una ruta saneada que pierda la identidad del backup.
+public struct RepairRollbackManifest: Codable, Equatable, Sendable {
+    public let entries: [RepairRollbackEntry]
+    public let createdAt: Date
+
+    public init(entries: [RepairRollbackEntry], createdAt: Date = Date()) {
+        self.entries = entries
+        self.createdAt = createdAt
+    }
+}
+
+public enum RepairAttemptLaunchOrigin: String, Codable, CaseIterable, Sendable {
+    /// Regression preparó y lanzó la ejecución fuente, por lo que puede orquestar un reintento.
+    case regression
+    /// La ejecución se observó dentro de Steam y requiere un nuevo gesto explícito del usuario.
+    case steamObserved
+}
+
+/// Registro tipado de una reparación conocida. Solo contiene identidades, huellas y rollback;
+/// nunca comandos, URLs, rutas de DLL aprendidas ni acciones ejecutables.
+public struct RepairAttempt: Codable, Equatable, Identifiable, Sendable {
+    public let id: UUID
+    public let sourceRunID: UUID?
+    public let retryRunID: UUID?
+    public let verificationID: UUID?
+    public let appID: String
+    public let executable: String
+    public let launchOrigin: RepairAttemptLaunchOrigin
+    public let recipe: CompiledRepairRecipe
+    public let recipeVersion: Int
+    public let state: RepairAttemptState
+    public let beforeFingerprint: String?
+    public let afterFingerprint: String?
+    public let rollbackReference: String?
+    public let rollbackManifest: RepairRollbackManifest?
+    public let appliedAt: Date?
+    public let notes: String
+    public let createdAt: Date
+    public let updatedAt: Date
+
+    public init(
+        id: UUID = UUID(),
+        sourceRunID: UUID?,
+        retryRunID: UUID? = nil,
+        verificationID: UUID? = nil,
+        appID: String,
+        executable: String,
+        launchOrigin: RepairAttemptLaunchOrigin = .regression,
+        recipe: CompiledRepairRecipe,
+        recipeVersion: Int,
+        state: RepairAttemptState,
+        beforeFingerprint: String? = nil,
+        afterFingerprint: String? = nil,
+        rollbackReference: String? = nil,
+        rollbackManifest: RepairRollbackManifest? = nil,
+        appliedAt: Date? = nil,
+        notes: String = "",
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.sourceRunID = sourceRunID
+        self.retryRunID = retryRunID
+        self.verificationID = verificationID
+        self.appID = appID
+        self.executable = executable
+        self.launchOrigin = launchOrigin
+        self.recipe = recipe
+        self.recipeVersion = recipeVersion
+        self.state = state
+        self.beforeFingerprint = beforeFingerprint
+        self.afterFingerprint = afterFingerprint
+        self.rollbackReference = rollbackReference
+        self.rollbackManifest = rollbackManifest
+        self.appliedAt = appliedAt
+        self.notes = notes
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+
+    public var automaticRetryEligible: Bool { launchOrigin == .regression }
+}
+
+/// Inventario en cuarentena de una activación v1. El formato histórico no llevaba App ID ni run;
+/// ambos permanecen ausentes en vez de fabricar procedencia.
+public struct LegacyRepairActivationInventory: Codable, Equatable, Identifiable, Sendable {
+    public let id: UUID
+    public let sourceRunID: UUID?
+    public let appID: String?
+    public let executable: String
+    public let recipe: CompiledRepairRecipe
+    public let state: RepairAttemptState
+    public let sourceFingerprint: String
+    public let observedAt: Date
+
+    public init(
+        id: UUID = UUID(),
+        sourceRunID: UUID? = nil,
+        appID: String? = nil,
+        executable: String,
+        recipe: CompiledRepairRecipe,
+        state: RepairAttemptState = .legacyAppliedUnverified,
+        sourceFingerprint: String,
+        observedAt: Date = Date()
+    ) {
+        self.id = id
+        self.sourceRunID = sourceRunID
+        self.appID = appID
+        self.executable = executable
+        self.recipe = recipe
+        self.state = state
+        self.sourceFingerprint = sourceFingerprint
+        self.observedAt = observedAt
+    }
+}
+
+/// Proyección exportable del ciclo de reparación. Conserva trazabilidad y huellas, pero nunca
+/// publica las rutas privadas del manifiesto ni de sus backups.
+public struct RepairAttemptExport: Codable, Equatable, Identifiable, Sendable {
+    public let id: UUID
+    public let sourceRunID: UUID?
+    public let retryRunID: UUID?
+    public let verificationID: UUID?
+    public let appID: String
+    public let executable: String
+    public let launchOrigin: RepairAttemptLaunchOrigin
+    public let recipe: CompiledRepairRecipe
+    public let recipeVersion: Int
+    public let state: RepairAttemptState
+    public let beforeFingerprint: String?
+    public let afterFingerprint: String?
+    public let hasRollbackManifest: Bool
+    public let appliedAt: Date?
+    public let notes: String
+    public let createdAt: Date
+    public let updatedAt: Date
+
+    public init(attempt: RepairAttempt) {
+        id = attempt.id
+        sourceRunID = attempt.sourceRunID
+        retryRunID = attempt.retryRunID
+        verificationID = attempt.verificationID
+        appID = attempt.appID
+        executable = attempt.executable
+        launchOrigin = attempt.launchOrigin
+        recipe = attempt.recipe
+        recipeVersion = attempt.recipeVersion
+        state = attempt.state
+        beforeFingerprint = attempt.beforeFingerprint
+        afterFingerprint = attempt.afterFingerprint
+        hasRollbackManifest = attempt.rollbackManifest != nil
+        appliedAt = attempt.appliedAt
+        notes = attempt.notes
+        createdAt = attempt.createdAt
+        updatedAt = attempt.updatedAt
     }
 }
 

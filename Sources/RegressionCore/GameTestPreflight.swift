@@ -282,7 +282,7 @@ public actor GameTestPreflight {
         installations: InstallationSnapshot,
         runningState: RunningBackendState,
         databaseHealth: CompatibilityDatabaseHealth,
-        sharedLibraryAssessment: SharedLibraryAssessment?,
+        sharedLibraryAssessment _: SharedLibraryAssessment?,
         physicalCustodyAssessment: PhysicalLibraryCustodyAssessment? = nil,
         game: SteamGame? = nil,
         targetAppID: String? = nil,
@@ -342,8 +342,6 @@ public actor GameTestPreflight {
         checks.append(storageCheck(steamRootURL: steamRootURL))
         checks.append(telemetryCheck(steamRootURL: steamRootURL))
         checks.append(sharedLibraryCheck(
-            installations: installations,
-            assessment: sharedLibraryAssessment,
             physicalCustody: physicalCustodyAssessment
         ))
 
@@ -389,7 +387,7 @@ public actor GameTestPreflight {
         installations: InstallationSnapshot
     ) -> URL? {
         switch backend {
-        case .crossOver: installations.crossOver?.steamRootURL
+        case .crossOver: nil
         case .regression: installations.regression.steamRootURL
         }
     }
@@ -420,42 +418,13 @@ public actor GameTestPreflight {
     ) -> GameTestPreflightCheck {
         switch backend {
         case .crossOver:
-            guard let installation = installations.crossOver else {
-                return GameTestPreflightCheck(
-                    checkID: .backendAvailability,
-                    status: .blocked,
-                    title: "Motor CrossOver",
-                    detail: installations.crossOverIssue?.message
-                        ?? "No se detectó una instalación utilizable.",
-                    recoveryAction: installations.crossOverIssue?.recoveryAction
-                        ?? "Abre CrossOver para revisar la instalación."
-                )
-            }
-            switch installation.health {
-            case .ready:
-                return GameTestPreflightCheck(
-                    checkID: .backendAvailability,
-                    status: .ready,
-                    title: "Motor CrossOver",
-                    detail: "La botella \(installation.bottleName) y su CLI oficial están disponibles."
-                )
-            case .updateRequired, .unknown:
-                return GameTestPreflightCheck(
-                    checkID: .backendAvailability,
-                    status: .warning,
-                    title: "Motor CrossOver",
-                    detail: installation.healthDetail,
-                    recoveryAction: "Permite que CrossOver complete cualquier actualización antes de validar el juego."
-                )
-            case .missing, .damaged:
-                return GameTestPreflightCheck(
-                    checkID: .backendAvailability,
-                    status: .blocked,
-                    title: "Motor CrossOver",
-                    detail: installation.healthDetail,
-                    recoveryAction: "Repara la instalación desde CrossOver."
-                )
-            }
+            return GameTestPreflightCheck(
+                checkID: .backendAvailability,
+                status: .blocked,
+                title: "Backend no operativo",
+                detail: "Regression no ejecuta ni administra backends externos.",
+                recoveryAction: "Selecciona Regression para comprobar o iniciar el juego."
+            )
         case .regression:
             let installation = installations.regression
             guard installation.health == .ready,
@@ -634,7 +603,7 @@ public actor GameTestPreflight {
             title: "Aislamiento de Wine",
             detail: wineServers.isEmpty
                 ? "No hay wineservers activos."
-                : "Todos los wineservers activos pertenecen a Regression o CrossOver."
+                : "Todos los wineservers activos pertenecen a runtimes reconocidos."
         )
     }
 
@@ -788,8 +757,6 @@ public actor GameTestPreflight {
     }
 
     private func sharedLibraryCheck(
-        installations: InstallationSnapshot,
-        assessment: SharedLibraryAssessment?,
         physicalCustody: PhysicalLibraryCustodyAssessment?
     ) -> GameTestPreflightCheck {
         if let physicalCustody {
@@ -829,48 +796,12 @@ public actor GameTestPreflight {
                 break
             }
         }
-        guard installations.crossOver != nil else {
-            return GameTestPreflightCheck(
-                checkID: .sharedLibrary,
-                status: .ready,
-                title: "Biblioteca de Regression",
-                detail: "Regression usa su propia ubicación para los archivos de los juegos."
-            )
-        }
-        guard let assessment else {
-            return GameTestPreflightCheck(
-                checkID: .sharedLibrary,
-                status: .warning,
-                title: "Biblioteca compartida",
-                detail: "No se pudo evaluar si ambos backends usan los mismos archivos.",
-                recoveryAction: "Actualiza el estado de Regression."
-            )
-        }
-        switch assessment.status {
-        case .ready:
-            return GameTestPreflightCheck(
-                checkID: .sharedLibrary,
-                status: .ready,
-                title: "Biblioteca compartida",
-                detail: "CrossOver y Regression usan una única instalación física de los juegos."
-            )
-        case .notConfigured:
-            return GameTestPreflightCheck(
-                checkID: .sharedLibrary,
-                status: .warning,
-                title: "Biblioteca compartida",
-                detail: "Las bibliotecas aún no están unificadas.",
-                recoveryAction: "Unifícalas desde Regression para que la comparación A/B use exactamente los mismos archivos."
-            )
-        case let .blocked(reason):
-            return GameTestPreflightCheck(
-                checkID: .sharedLibrary,
-                status: .warning,
-                title: "Biblioteca compartida",
-                detail: "La unificación necesita atención: \(PrivacySanitizer.redactedLogExcerpt(reason, limit: 300))",
-                recoveryAction: "No muevas archivos manualmente; revisa la sección Motor y biblioteca."
-            )
-        }
+        return GameTestPreflightCheck(
+            checkID: .sharedLibrary,
+            status: .ready,
+            title: "Biblioteca de Regression",
+            detail: "Regression usa su propia ubicación para los archivos de los juegos."
+        )
     }
 
     private static func isContained(_ candidate: URL, in root: URL) -> Bool {

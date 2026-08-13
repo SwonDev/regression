@@ -1,6 +1,35 @@
+import CSQLite
 import Foundation
 
 extension CompatibilityRepository {
+    func inventoryLegacyCompiledRepairActivationsIfAvailable() throws {
+        guard let bottleURL = legacyCompiledRepairBottleURL,
+              let snapshot = try CompiledRepairActivationStore.legacySnapshot(in: bottleURL) else {
+            return
+        }
+        let observedAt = dateFormatter.string(from: Date())
+        for activation in snapshot.activations {
+            try execute(
+                """
+                INSERT OR IGNORE INTO legacy_repair_activation_inventory(
+                    id, executable, recipe_id, state, source_fingerprint, observed_at
+                ) VALUES(?, ?, ?, 'legacyAppliedUnverified', ?, ?);
+                """,
+                bindings: [
+                    UUID().uuidString,
+                    activation.executable,
+                    activation.recipe.rawValue,
+                    snapshot.fingerprint,
+                    observedAt
+                ]
+            )
+        }
+        try CompiledRepairActivationStore.quarantineLegacyActivation(
+            expectedFingerprint: snapshot.fingerprint,
+            in: bottleURL
+        )
+    }
+
     func synchronizeRuntimeTechnologyCatalog() throws {
         let syncedAt = dateFormatter.string(from: Date())
         try transaction {
@@ -54,8 +83,10 @@ extension CompatibilityRepository {
                    distribution_policy, update_policy, stable_version,
                    latest_known_version, checked_at, notes
             FROM runtime_technologies
+            WHERE id != ?
             ORDER BY category, display_name COLLATE NOCASE;
-            """
+            """,
+            bindings: [RuntimeTechnologyCatalog.retiredCrossOverTechnologyID]
         ) { statement in
             guard
                 let category = RuntimeTechnologyCategory(rawValue: Self.text(statement, 2)),
@@ -311,6 +342,14 @@ extension CompatibilityRepository {
 
     public func recordRuntimeRequirement(_ requirement: GameRuntimeRequirement) throws {
         try ensurePrepared()
+        guard let normalizedAppID = SteamAppID.normalized(requirement.appID),
+              normalizedAppID == requirement.appID,
+              !requirement.identifier.isEmpty,
+              requirement.identifier.utf8.count <= 160 else {
+            throw RegressionCoreError.invalidEvidence(
+                "el requisito de runtime no es canónico"
+            )
+        }
         try execute(
             """
             INSERT INTO game_runtime_requirements(
@@ -334,8 +373,219 @@ extension CompatibilityRepository {
         )
     }
 
-    public func runtimeRequirements(appID: String? = nil) throws -> [GameRuntimeRequirement] {
+    /// Sustituye únicamente la proyección automática de un juego después de un escaneo completo.
+    /// Compatibilidad para consumidores existentes; el momento de la generación se toma aquí.
+    public func replaceAutomaticRuntimeRequirements(
+        appID: String,
+        with requirements: [GameRuntimeRequirement]
+    ) throws {
+        try recordSuccessfulGameTechnologyScan(
+            appID: appID,
+            requirements: requirements,
+            scannedAt: Date()
+        )
+    }
+
+    /// Publica una generación automática completa y su estado actual en una única transacción.
+    /// Las observaciones humanas/importadas se conservan.
+    public func recordSuccessfulGameTechnologyScan(
+        appID: String,
+        requirements: [GameRuntimeRequirement],
+        scannedAt: Date = Date()
+    ) throws {
         try ensurePrepared()
+        guard let normalizedAppID = SteamAppID.normalized(appID),
+              requirements.allSatisfy({
+                  $0.appID == normalizedAppID
+                    && $0.source == .automatic
+                    && !$0.identifier.isEmpty
+                    && $0.identifier.utf8.count <= 160
+              }),
+              Set(requirements.map(\.id)).count == requirements.count else {
+            throw RegressionCoreError.invalidEvidence(
+                "la proyección automática de requisitos no es canónica"
+            )
+        }
+        try ensureGameTechnologyScanStateSchema()
+        try transaction {
+            let generation = try nextGameTechnologyScanGeneration(appID: normalizedAppID)
+            try execute(
+                "DELETE FROM game_runtime_requirements WHERE app_id=? AND source=?;",
+                bindings: [normalizedAppID, VerificationSource.automatic.rawValue]
+            )
+            for requirement in requirements {
+                try execute(
+                    """
+                    INSERT INTO game_runtime_requirements(
+                        app_id, kind, identifier, version_constraint, source, notes, observed_at
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(app_id, kind, identifier) DO UPDATE SET
+                        version_constraint=excluded.version_constraint,
+                        notes=excluded.notes,
+                        observed_at=excluded.observed_at
+                    WHERE game_runtime_requirements.source=?;
+                    """,
+                    bindings: [
+                        requirement.appID,
+                        requirement.kind.rawValue,
+                        requirement.identifier,
+                        requirement.versionConstraint ?? NSNull(),
+                        requirement.source.rawValue,
+                        PrivacySanitizer.redactedLogExcerpt(
+                            requirement.notes,
+                            limit: 2_000
+                        ),
+                        dateFormatter.string(from: requirement.observedAt),
+                        VerificationSource.automatic.rawValue,
+                    ]
+                )
+            }
+            let timestamp = dateFormatter.string(from: scannedAt)
+            try execute(
+                """
+                INSERT INTO game_technology_scan_states(
+                    app_id, generation, last_successful_generation, freshness,
+                    attempted_at, last_successful_at, error
+                ) VALUES(?, ?, ?, 'current', ?, ?, NULL)
+                ON CONFLICT(app_id) DO UPDATE SET
+                    generation=excluded.generation,
+                    last_successful_generation=excluded.last_successful_generation,
+                    freshness='current',
+                    attempted_at=excluded.attempted_at,
+                    last_successful_at=excluded.last_successful_at,
+                    error=NULL;
+                """,
+                bindings: [normalizedAppID, generation, generation, timestamp, timestamp]
+            )
+        }
+    }
+
+    /// Conserva la última generación buena, pero la retira explícitamente de la proyección
+    /// vigente. El texto de error se sanea y nunca se interpreta como una acción.
+    public func recordFailedGameTechnologyScan(
+        appID: String,
+        error: String,
+        attemptedAt: Date = Date()
+    ) throws {
+        try ensurePrepared()
+        guard let normalizedAppID = SteamAppID.normalized(appID) else {
+            throw RegressionCoreError.invalidEvidence(
+                "el Steam App ID del inventario fallido no es válido"
+            )
+        }
+        try ensureGameTechnologyScanStateSchema()
+        var safeError = PrivacySanitizer.redactedLogExcerpt(error, limit: 1_000)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if safeError.isEmpty {
+            safeError = "Error de inventario no especificado."
+        }
+        try transaction {
+            let generation = try nextGameTechnologyScanGeneration(appID: normalizedAppID)
+            try execute(
+                """
+                INSERT INTO game_technology_scan_states(
+                    app_id, generation, last_successful_generation, freshness,
+                    attempted_at, last_successful_at, error
+                ) VALUES(?, ?, NULL, 'stale', ?, NULL, ?)
+                ON CONFLICT(app_id) DO UPDATE SET
+                    generation=excluded.generation,
+                    freshness='stale',
+                    attempted_at=excluded.attempted_at,
+                    error=excluded.error;
+                """,
+                bindings: [
+                    normalizedAppID,
+                    generation,
+                    dateFormatter.string(from: attemptedAt),
+                    safeError,
+                ]
+            )
+        }
+    }
+
+    public func gameTechnologyScanState(
+        appID: String
+    ) throws -> GameTechnologyScanState? {
+        try ensurePrepared()
+        guard let normalizedAppID = SteamAppID.normalized(appID) else {
+            throw RegressionCoreError.invalidEvidence(
+                "el Steam App ID del estado de inventario no es válido"
+            )
+        }
+        try ensureGameTechnologyScanStateSchema()
+        let states: [GameTechnologyScanState] = try query(
+            """
+            SELECT app_id, generation, last_successful_generation, freshness,
+                   attempted_at, last_successful_at, error
+            FROM game_technology_scan_states
+            WHERE app_id=?;
+            """,
+            bindings: [normalizedAppID]
+        ) { statement in
+            guard
+                let freshness = GameTechnologyScanFreshness(
+                    rawValue: Self.text(statement, 3)
+                ),
+                let attemptedAt = dateFormatter.date(from: Self.text(statement, 4))
+            else { return nil }
+            return GameTechnologyScanState(
+                appID: Self.text(statement, 0),
+                generation: Int(Self.optionalInt(statement, 1) ?? 0),
+                lastSuccessfulGeneration: Self.optionalInt(statement, 2),
+                freshness: freshness,
+                attemptedAt: attemptedAt,
+                lastSuccessfulAt: Self.optionalText(statement, 5).flatMap(
+                    dateFormatter.date(from:)
+                ),
+                error: Self.optionalText(statement, 6)
+            )
+        }
+        return states.first
+    }
+
+    public func gameTechnologyRequirementProjection(
+        appID: String
+    ) throws -> GameTechnologyRequirementProjection {
+        let state = try gameTechnologyScanState(appID: appID)
+        let requirements = try storedRuntimeRequirements(appID: appID).map(
+            GameRuntimeRequirementResolver.resolve
+        )
+        return GameTechnologyRequirementProjection(
+            scanState: state,
+            requirements: requirements
+        )
+    }
+
+    public func runtimeRequirements(appID: String? = nil) throws -> [GameRuntimeRequirement] {
+        if let appID {
+            guard let normalizedAppID = SteamAppID.normalized(appID),
+                  normalizedAppID == appID else {
+                throw RegressionCoreError.invalidEvidence(
+                    "el Steam App ID de los requisitos no es válido"
+                )
+            }
+        }
+        let stored = try storedRuntimeRequirements(appID: appID)
+        let currentAutomaticAppIDs: Set<String> = try Set(query(
+            """
+            SELECT app_id
+            FROM game_technology_scan_states
+            WHERE freshness='current';
+            """
+        ) { statement in
+            Self.text(statement, 0)
+        })
+        return stored.filter { requirement in
+            requirement.source != .automatic
+                || currentAutomaticAppIDs.contains(requirement.appID)
+        }
+    }
+
+    private func storedRuntimeRequirements(
+        appID: String? = nil
+    ) throws -> [GameRuntimeRequirement] {
+        try ensurePrepared()
+        try ensureGameTechnologyScanStateSchema()
         let filter = appID == nil ? "" : "WHERE app_id=?"
         let bindings: [Any] = appID.map { [$0] } ?? []
         return try query(
@@ -362,6 +612,18 @@ extension CompatibilityRepository {
                 observedAt: observedAt
             )
         }
+    }
+
+    private func ensureGameTechnologyScanStateSchema() throws {
+        try executeScript(RuntimeEvolutionSchema.gameTechnologyScanStateSQL)
+    }
+
+    private func nextGameTechnologyScanGeneration(appID: String) throws -> Int {
+        try scalarInt(
+            "SELECT COALESCE(MAX(generation), 0) + 1 "
+                + "FROM game_technology_scan_states WHERE app_id=?;",
+            bindings: [appID]
+        )
     }
 
     public func recordRepairReceipt(_ receipt: RepairReceipt) throws {
@@ -432,6 +694,419 @@ extension CompatibilityRepository {
                 createdAt: createdAt
             )
         }
+    }
+
+    public func recordRepairAttempt(_ attempt: RepairAttempt) throws {
+        try ensurePrepared()
+        guard attempt.state == .detected,
+              attempt.sourceRunID != nil,
+              let appID = SteamAppID.normalized(attempt.appID),
+              appID == attempt.appID,
+              attempt.recipeVersion > 0,
+              !attempt.executable.isEmpty,
+              attempt.executable == attempt.executable.lowercased(),
+              !attempt.executable.contains("/"),
+              !attempt.executable.contains("\\"),
+              attempt.executable.hasSuffix(".exe") else {
+            throw RegressionCoreError.invalidEvidence(
+                "un intento nuevo exige identidad cerrada y estado detectado"
+            )
+        }
+        try validateRepairSource(attempt)
+        let manifestJSON = try rollbackManifestJSON(attempt.rollbackManifest)
+        let bindings: [Any] = [
+            attempt.id.uuidString,
+            attempt.sourceRunID?.uuidString ?? NSNull(),
+            attempt.retryRunID?.uuidString ?? NSNull(),
+            attempt.verificationID?.uuidString ?? NSNull(),
+            appID,
+            attempt.executable,
+            attempt.launchOrigin.rawValue,
+            attempt.recipe.rawValue,
+            attempt.recipeVersion,
+            attempt.state.rawValue,
+            attempt.beforeFingerprint ?? NSNull(),
+            attempt.afterFingerprint ?? NSNull(),
+            attempt.rollbackReference ?? NSNull(),
+            manifestJSON,
+            attempt.appliedAt.map(dateFormatter.string(from:)) ?? NSNull(),
+            PrivacySanitizer.redactedLogExcerpt(attempt.notes, limit: 2_000),
+            dateFormatter.string(from: attempt.createdAt),
+            dateFormatter.string(from: attempt.updatedAt)
+        ]
+        try execute(
+            """
+            INSERT INTO repair_attempts(
+                id, source_run_id, retry_run_id, verification_id, app_id, executable,
+                launch_origin, recipe_id, recipe_version, state, before_fingerprint,
+                after_fingerprint, rollback_reference, rollback_manifest_json, applied_at,
+                notes, created_at, updated_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            bindings: bindings
+        )
+    }
+
+    public func repairAttempt(id: UUID) throws -> RepairAttempt? {
+        try repairAttempts().first { $0.id == id }
+    }
+
+    public func activeRepairAttempt(
+        appID: String,
+        recipe: CompiledRepairRecipe
+    ) throws -> RepairAttempt? {
+        try repairAttempts(appID: appID, activeOnly: true).first { $0.recipe == recipe }
+    }
+
+    public func repairAttempts(
+        appID: String? = nil,
+        activeOnly: Bool = false
+    ) throws -> [RepairAttempt] {
+        try ensurePrepared()
+        var predicates: [String] = []
+        var bindings: [Any] = []
+        if let appID {
+            guard let normalized = SteamAppID.normalized(appID) else { return [] }
+            predicates.append("app_id=?")
+            bindings.append(normalized)
+        }
+        if activeOnly {
+            predicates.append(
+                "state IN ('detected','planned','appliedAwaitingRelaunch','relaunching'," +
+                "'awaitingVerification','rollbackPending')"
+            )
+        }
+        let filter = predicates.isEmpty ? "" : "WHERE " + predicates.joined(separator: " AND ")
+        return try query(
+            """
+            SELECT id, source_run_id, retry_run_id, verification_id, app_id, executable,
+                   launch_origin, recipe_id, recipe_version, state, before_fingerprint,
+                   after_fingerprint, rollback_reference, rollback_manifest_json, applied_at,
+                   notes, created_at, updated_at
+            FROM repair_attempts
+            \(filter)
+            ORDER BY created_at DESC, id;
+            """,
+            bindings: bindings
+        ) { statement in
+            guard let id = UUID(uuidString: Self.text(statement, 0)),
+                  let launchOrigin = RepairAttemptLaunchOrigin(rawValue: Self.text(statement, 6)),
+                  let recipe = CompiledRepairRecipe(rawValue: Self.text(statement, 7)),
+                  let state = RepairAttemptState(rawValue: Self.text(statement, 9)),
+                  let createdAt = dateFormatter.date(from: Self.text(statement, 16)),
+                  let updatedAt = dateFormatter.date(from: Self.text(statement, 17)) else {
+                return nil
+            }
+            return RepairAttempt(
+                id: id,
+                sourceRunID: Self.optionalText(statement, 1).flatMap(UUID.init(uuidString:)),
+                retryRunID: Self.optionalText(statement, 2).flatMap(UUID.init(uuidString:)),
+                verificationID: Self.optionalText(statement, 3).flatMap(UUID.init(uuidString:)),
+                appID: Self.text(statement, 4),
+                executable: Self.text(statement, 5),
+                launchOrigin: launchOrigin,
+                recipe: recipe,
+                recipeVersion: Self.optionalInt(statement, 8) ?? 0,
+                state: state,
+                beforeFingerprint: Self.optionalText(statement, 10),
+                afterFingerprint: Self.optionalText(statement, 11),
+                rollbackReference: Self.optionalText(statement, 12),
+                rollbackManifest: try decodeRollbackManifest(Self.optionalText(statement, 13)),
+                appliedAt: Self.optionalText(statement, 14).flatMap(dateFormatter.date(from:)),
+                notes: Self.text(statement, 15),
+                createdAt: createdAt,
+                updatedAt: updatedAt
+            )
+        }
+    }
+
+    public func transitionRepairAttempt(
+        id: UUID,
+        to nextState: RepairAttemptState,
+        retryRunID: UUID? = nil,
+        verificationID: UUID? = nil,
+        beforeFingerprint: String? = nil,
+        afterFingerprint: String? = nil,
+        rollbackReference: String? = nil,
+        rollbackManifest: RepairRollbackManifest? = nil,
+        notes: String? = nil,
+        at date: Date = Date()
+    ) throws {
+        try ensurePrepared()
+        guard let current = try repairAttempt(id: id),
+              current.state.canTransition(to: nextState) else {
+            throw RegressionCoreError.invalidEvidence("la transición de reparación no es válida")
+        }
+        let mergedRetryRunID = retryRunID ?? current.retryRunID
+        let mergedVerificationID = verificationID ?? current.verificationID
+        let mergedBefore = beforeFingerprint ?? current.beforeFingerprint
+        let mergedAfter = afterFingerprint ?? current.afterFingerprint
+        let mergedRollback = rollbackReference ?? current.rollbackReference
+        let mergedManifest = rollbackManifest ?? current.rollbackManifest
+        let mergedAppliedAt = nextState == .appliedAwaitingRelaunch
+            ? (current.appliedAt ?? date)
+            : current.appliedAt
+        if nextState == .appliedAwaitingRelaunch,
+           [mergedBefore, mergedAfter].contains(where: { value in
+               value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
+           }) || nextState == .appliedAwaitingRelaunch && !isCompleteRollbackManifest(mergedManifest) {
+            throw RegressionCoreError.invalidEvidence(
+                "una reparación aplicada exige huellas antes/después y rollback"
+            )
+        }
+        if current.launchOrigin == .steamObserved,
+           nextState == .relaunching,
+           mergedRetryRunID == nil {
+            throw RegressionCoreError.invalidEvidence(
+                "una ejecución observada en Steam requiere un nuevo gesto registrado"
+            )
+        }
+        if [.relaunching, .awaitingVerification, .verified, .acceptedWithIssues].contains(nextState) {
+            try validateRepairRetry(
+                attempt: current,
+                retryRunID: mergedRetryRunID,
+                verificationID: mergedVerificationID,
+                targetState: nextState,
+                appliedAt: mergedAppliedAt
+            )
+        }
+        if nextState == .rolledBack {
+            throw RegressionCoreError.invalidEvidence(
+                "rolledBack solo puede registrarse mediante restore verificado"
+            )
+        }
+        let manifestJSON = try rollbackManifestJSON(mergedManifest)
+        let bindings: [Any] = [
+            nextState.rawValue,
+            mergedRetryRunID?.uuidString ?? NSNull(),
+            mergedVerificationID?.uuidString ?? NSNull(),
+            mergedBefore ?? NSNull(),
+            mergedAfter ?? NSNull(),
+            mergedRollback ?? NSNull(),
+            manifestJSON,
+            mergedAppliedAt.map(dateFormatter.string(from:)) ?? NSNull(),
+            PrivacySanitizer.redactedLogExcerpt(notes ?? current.notes, limit: 2_000),
+            dateFormatter.string(from: date),
+            id.uuidString
+        ]
+        try execute(
+            """
+            UPDATE repair_attempts
+            SET state=?, retry_run_id=?, verification_id=?, before_fingerprint=?,
+                after_fingerprint=?, rollback_reference=?, rollback_manifest_json=?,
+                applied_at=?, notes=?, updated_at=?
+            WHERE id=?;
+            """,
+            bindings: bindings
+        )
+    }
+
+    public func legacyRepairActivationInventory() throws -> [LegacyRepairActivationInventory] {
+        try ensurePrepared()
+        return try query(
+            """
+            SELECT id, executable, recipe_id, state, source_fingerprint, observed_at
+            FROM legacy_repair_activation_inventory
+            ORDER BY executable, recipe_id;
+            """
+        ) { statement in
+            guard let id = UUID(uuidString: Self.text(statement, 0)),
+                  let recipe = CompiledRepairRecipe(rawValue: Self.text(statement, 2)),
+                  let state = RepairAttemptState(rawValue: Self.text(statement, 3)),
+                  let observedAt = dateFormatter.date(from: Self.text(statement, 5)) else {
+                return nil
+            }
+            return LegacyRepairActivationInventory(
+                id: id,
+                executable: Self.text(statement, 1),
+                recipe: recipe,
+                state: state,
+                sourceFingerprint: Self.text(statement, 4),
+                observedAt: observedAt
+            )
+        }
+    }
+
+    public func completeVerifiedRepairRollback(
+        id: UUID,
+        restoredFingerprints: [String: String],
+        at date: Date = Date()
+    ) throws {
+        _ = id
+        _ = restoredFingerprints
+        _ = date
+        throw RegressionCoreError.invalidEvidence(
+            "el rollback permanece pendiente hasta disponer de verificación filesystem anclada"
+        )
+    }
+
+    /// Tras un cierre inesperado, un relanzamiento sin verificación vuelve a la puerta durable
+    /// anterior. No se considera fallido ni aplicado con éxito y puede reanudarse de forma segura.
+    @discardableResult
+    public func reconcileInterruptedRepairAttempts(at date: Date = Date()) throws -> [UUID] {
+        try ensurePrepared()
+        let interrupted = try repairAttempts(activeOnly: true).filter { $0.state == .relaunching }
+        var changed: [UUID] = []
+        for attempt in interrupted {
+            guard let retryRunID = attempt.retryRunID else {
+                try execute(
+                    "UPDATE repair_attempts SET state='rollbackPending', updated_at=? WHERE id=?;",
+                    bindings: [dateFormatter.string(from: date), attempt.id.uuidString]
+                )
+                changed.append(attempt.id)
+                continue
+            }
+            do {
+                try validateRepairRetry(
+                    attempt: attempt,
+                    retryRunID: retryRunID,
+                    verificationID: attempt.verificationID,
+                    targetState: .relaunching,
+                    appliedAt: attempt.appliedAt
+                )
+            } catch {
+                try execute(
+                    "UPDATE repair_attempts SET state='rollbackPending', updated_at=? WHERE id=?;",
+                    bindings: [dateFormatter.string(from: date), attempt.id.uuidString]
+                )
+                changed.append(attempt.id)
+                continue
+            }
+            let runState: [(ended: Bool, result: String, executable: String?)] = try query(
+                "SELECT ended_at IS NOT NULL, result, executable FROM runs WHERE id=?;",
+                bindings: [retryRunID.uuidString]
+            ) { statement in
+                (
+                    sqlite3_column_int(statement, 0) == 1,
+                    Self.text(statement, 1),
+                    Self.optionalText(statement, 2)
+                )
+            }
+            guard let run = runState.first else { continue }
+            if run.ended {
+                try execute(
+                    "UPDATE repair_attempts SET state='awaitingVerification', updated_at=? WHERE id=?;",
+                    bindings: [dateFormatter.string(from: date), attempt.id.uuidString]
+                )
+                changed.append(attempt.id)
+            }
+        }
+        return changed.sorted { $0.uuidString < $1.uuidString }
+    }
+
+    private func rollbackManifestJSON(_ manifest: RepairRollbackManifest?) throws -> Any {
+        guard let manifest else { return NSNull() }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return String(decoding: try encoder.encode(manifest), as: UTF8.self)
+    }
+
+    private func decodeRollbackManifest(_ json: String?) throws -> RepairRollbackManifest? {
+        guard let json else { return nil }
+        return try JSONDecoder().decode(RepairRollbackManifest.self, from: Data(json.utf8))
+    }
+
+    private func isCompleteRollbackManifest(_ manifest: RepairRollbackManifest?) -> Bool {
+        guard let manifest, manifest.entries.count == 2 else { return false }
+        return manifest.entries.allSatisfy { entry in
+            entry.targetPath.hasPrefix("/")
+                && entry.backupPath.hasPrefix("/")
+                && !entry.beforeFingerprint.isEmpty
+                && !entry.afterFingerprint.isEmpty
+        }
+    }
+
+    private func validateRepairRetry(
+        attempt: RepairAttempt,
+        retryRunID: UUID?,
+        verificationID: UUID?,
+        targetState: RepairAttemptState,
+        appliedAt: Date?
+    ) throws {
+        guard let retryRunID, let appliedAt else {
+            throw RegressionCoreError.invalidEvidence("el reintento exige run posterior a la aplicación")
+        }
+        let rows: [(
+            startedAt: Date,
+            endedAt: Date?,
+            result: String,
+            executable: String?,
+            verdict: String?,
+            verifiedAt: Date?
+        )] = try query(
+            """
+            SELECT r.started_at, r.ended_at, r.result, r.executable, v.verdict, v.verified_at
+            FROM runs r LEFT JOIN run_verifications v ON v.run_id=r.id
+            WHERE r.id=? AND r.app_id=? AND r.backend='regression';
+            """,
+            bindings: [retryRunID.uuidString, attempt.appID]
+        ) { statement in
+            guard let startedAt = dateFormatter.date(from: Self.text(statement, 0)) else { return nil }
+            return (
+                startedAt,
+                Self.optionalText(statement, 1).flatMap(dateFormatter.date(from:)),
+                Self.text(statement, 2),
+                Self.optionalText(statement, 3),
+                Self.optionalText(statement, 4),
+                Self.optionalText(statement, 5).flatMap(dateFormatter.date(from:))
+            )
+        }
+        guard let row = rows.first,
+              row.startedAt > appliedAt,
+              row.executable.map(Self.executableBasename) == attempt.executable else {
+            throw RegressionCoreError.invalidEvidence("el run de reintento no coincide con el intento")
+        }
+        if [.awaitingVerification, .verified, .acceptedWithIssues].contains(targetState),
+           row.endedAt == nil || row.result == RunResult.preparing.rawValue {
+            throw RegressionCoreError.invalidEvidence("el reintento debe haber terminado")
+        }
+        if targetState == .verified {
+            guard verificationID == retryRunID,
+                  row.verdict == VerificationVerdict.perfect.rawValue,
+                  let endedAt = row.endedAt,
+                  let verifiedAt = row.verifiedAt,
+                  verifiedAt >= endedAt else {
+                throw RegressionCoreError.invalidEvidence("verified exige veredicto perfecto exacto")
+            }
+        }
+        if targetState == .acceptedWithIssues {
+            guard verificationID == retryRunID,
+                  row.verdict == VerificationVerdict.playableWithIssues.rawValue,
+                  let endedAt = row.endedAt,
+                  let verifiedAt = row.verifiedAt,
+                  verifiedAt >= endedAt else {
+                throw RegressionCoreError.invalidEvidence("acceptedWithIssues exige su veredicto exacto")
+            }
+        }
+    }
+
+    private func validateRepairSource(_ attempt: RepairAttempt) throws {
+        guard let sourceRunID = attempt.sourceRunID else {
+            throw RegressionCoreError.invalidEvidence("la detección exige un crash fuente")
+        }
+        let rows: [(endedAt: Date, executable: String?)] = try query(
+            """
+            SELECT ended_at, executable FROM runs
+            WHERE id=? AND app_id=? AND backend='regression' AND result='crashed'
+              AND ended_at IS NOT NULL;
+            """,
+            bindings: [sourceRunID.uuidString, attempt.appID]
+        ) { statement in
+            guard let endedAt = dateFormatter.date(from: Self.text(statement, 0)) else { return nil }
+            return (endedAt, Self.optionalText(statement, 1))
+        }
+        guard let source = rows.first,
+              source.endedAt <= attempt.createdAt,
+              source.executable.map(Self.executableBasename) == attempt.executable else {
+            throw RegressionCoreError.invalidEvidence(
+                "la detección exige un crash Regression finalizado del ejecutable exacto"
+            )
+        }
+    }
+
+    private static func executableBasename(_ executable: String) -> String {
+        executable.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last
+            .map { String($0).lowercased() } ?? ""
     }
 
     func validateRuntimeEvolutionData() throws {
@@ -509,11 +1184,63 @@ extension CompatibilityRepository {
                     AND (frame_time_p95_ms<=0 OR frame_time_p95_ms>=1000000));
             """
         )
+        let invalidRepairAttempts = try scalarInt(
+            """
+            SELECT COUNT(*) FROM repair_attempts attempt
+            WHERE NOT EXISTS (
+                SELECT 1 FROM runs source
+                WHERE source.id=attempt.source_run_id AND source.app_id=attempt.app_id
+                  AND source.backend='regression' AND source.result='crashed'
+                  AND source.ended_at IS NOT NULL AND source.ended_at<=attempt.created_at
+                  AND (
+                      lower(source.executable)=attempt.executable
+                      OR lower(replace(source.executable, char(92), '/'))
+                         LIKE '%/' || attempt.executable
+                  )
+            ) OR (
+                attempt.retry_run_id IS NOT NULL AND NOT EXISTS (
+                    SELECT 1 FROM runs retry
+                    WHERE retry.id=attempt.retry_run_id AND retry.app_id=attempt.app_id
+                      AND retry.backend='regression' AND retry.id!=attempt.source_run_id
+                )
+            ) OR (
+                attempt.state IN (
+                    'appliedAwaitingRelaunch','relaunching','awaitingVerification',
+                    'verified','acceptedWithIssues','rollbackPending','rolledBack'
+                ) AND (
+                    attempt.before_fingerprint IS NULL OR attempt.before_fingerprint=''
+                    OR attempt.after_fingerprint IS NULL OR attempt.after_fingerprint=''
+                    OR attempt.rollback_manifest_json IS NULL OR attempt.rollback_manifest_json=''
+                    OR attempt.applied_at IS NULL OR attempt.applied_at=''
+                )
+            ) OR (
+                attempt.state IN ('awaitingVerification','verified','acceptedWithIssues')
+                AND attempt.retry_run_id IS NULL
+            ) OR (
+                attempt.state IN ('verified','acceptedWithIssues')
+                AND (attempt.verification_id IS NULL
+                     OR attempt.verification_id!=attempt.retry_run_id
+                     OR NOT EXISTS (
+                         SELECT 1 FROM run_verifications verification
+                         JOIN runs retry ON retry.id=verification.run_id
+                         WHERE verification.run_id=attempt.verification_id
+                           AND retry.ended_at IS NOT NULL
+                           AND verification.verified_at>=retry.ended_at
+                           AND (
+                               (attempt.state='verified' AND verification.verdict='perfect')
+                               OR (attempt.state='acceptedWithIssues'
+                                   AND verification.verdict='playableWithIssues')
+                           )
+                     ))
+            );
+            """
+        )
         guard invalidPromotions == 0,
               invalidBestKnown == 0,
-              invalidMeasurements == 0 else {
+              invalidMeasurements == 0,
+              invalidRepairAttempts == 0 else {
             throw RegressionCoreError.database(
-                "Hay candidatos promovidos o métricas óptimas sin evidencia suficiente"
+                "Hay candidatos, métricas o reparaciones sin evidencia suficiente"
             )
         }
     }
@@ -543,6 +1270,25 @@ extension CompatibilityRepository {
 }
 
 enum RuntimeEvolutionSchema {
+    static let gameTechnologyScanStateSQL = """
+        CREATE TABLE IF NOT EXISTS game_technology_scan_states(
+            app_id TEXT PRIMARY KEY REFERENCES games(app_id) ON DELETE CASCADE,
+            generation INTEGER NOT NULL CHECK(generation > 0),
+            last_successful_generation INTEGER,
+            freshness TEXT NOT NULL CHECK(freshness IN ('current','stale')),
+            attempted_at TEXT NOT NULL,
+            last_successful_at TEXT,
+            error TEXT,
+            CHECK(last_successful_generation IS NULL OR last_successful_generation > 0),
+            CHECK(freshness!='current' OR (
+                last_successful_generation=generation
+                AND last_successful_at IS NOT NULL
+                AND error IS NULL
+            )),
+            CHECK(freshness!='stale' OR error IS NOT NULL)
+        );
+        """
+
     static let metricIntegritySQL = """
         DROP TRIGGER IF EXISTS optimization_best_known_requires_measurement_insert;
         DROP TRIGGER IF EXISTS optimization_best_known_requires_measurement_update;
@@ -786,6 +1532,8 @@ enum RuntimeEvolutionSchema {
             PRIMARY KEY(app_id, kind, identifier)
         );
 
+        \(gameTechnologyScanStateSQL)
+
         CREATE TABLE IF NOT EXISTS repair_receipts(
             id TEXT PRIMARY KEY,
             app_id TEXT NOT NULL REFERENCES games(app_id) ON DELETE CASCADE,
@@ -804,5 +1552,296 @@ enum RuntimeEvolutionSchema {
 
         \(metricIntegritySQL)
         \(promotionGuardsSQL)
+        """
+}
+
+enum RepairAttemptSchema {
+    static let sql = """
+        CREATE TABLE IF NOT EXISTS repair_attempts(
+            id TEXT PRIMARY KEY,
+            source_run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE RESTRICT,
+            retry_run_id TEXT REFERENCES runs(id) ON DELETE RESTRICT,
+            verification_id TEXT REFERENCES run_verifications(run_id) ON DELETE RESTRICT,
+            app_id TEXT NOT NULL REFERENCES games(app_id) ON DELETE CASCADE,
+            executable TEXT NOT NULL CHECK(executable!=''),
+            launch_origin TEXT NOT NULL CHECK(launch_origin IN ('regression','steamObserved')),
+            recipe_id TEXT NOT NULL CHECK(recipe_id IN (
+                'unreal-d3d11-dual-overlay-isolation-v1',
+                'unity-intro-winegstreamer-isolation-v1',
+                'unity-macos-focus-borderless-v1',
+                'gamemaker-retina-fullscreen-v1'
+            )),
+            recipe_version INTEGER NOT NULL CHECK(recipe_version > 0),
+            state TEXT NOT NULL CHECK(state IN (
+                'detected','planned','appliedAwaitingRelaunch','relaunching',
+                'awaitingVerification','verified','acceptedWithIssues','failed',
+                'rollbackPending','rollbackFailed','rolledBack','blocked',
+                'legacyAppliedUnverified'
+            )),
+            before_fingerprint TEXT,
+            after_fingerprint TEXT,
+            rollback_reference TEXT,
+            rollback_manifest_json TEXT,
+            applied_at TEXT,
+            notes TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS repair_attempts_source_run_idx
+            ON repair_attempts(source_run_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS repair_attempts_retry_run_idx
+            ON repair_attempts(retry_run_id, updated_at DESC);
+        CREATE UNIQUE INDEX IF NOT EXISTS repair_attempts_one_active_recipe
+            ON repair_attempts(app_id, recipe_id)
+            WHERE state IN (
+                'detected','planned','appliedAwaitingRelaunch','relaunching',
+                'awaitingVerification','rollbackPending'
+            );
+
+        CREATE TABLE IF NOT EXISTS legacy_repair_activation_inventory(
+            id TEXT PRIMARY KEY,
+            executable TEXT NOT NULL,
+            recipe_id TEXT NOT NULL,
+            state TEXT NOT NULL CHECK(state='legacyAppliedUnverified'),
+            source_fingerprint TEXT NOT NULL,
+            observed_at TEXT NOT NULL,
+            UNIQUE(executable, recipe_id, source_fingerprint)
+        );
+
+        CREATE TRIGGER IF NOT EXISTS repair_attempt_identity_guard_insert
+        BEFORE INSERT ON repair_attempts
+        WHEN NOT EXISTS (
+            SELECT 1 FROM runs source
+            WHERE source.id=NEW.source_run_id AND source.app_id=NEW.app_id
+              AND source.backend='regression' AND source.result='crashed'
+              AND source.ended_at IS NOT NULL AND source.ended_at<=NEW.created_at
+              AND (
+                  lower(source.executable)=NEW.executable
+                  OR lower(replace(source.executable, char(92), '/'))
+                     LIKE '%/' || NEW.executable
+              )
+        ) OR (
+            NEW.retry_run_id IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM runs retry
+                WHERE retry.id=NEW.retry_run_id AND retry.app_id=NEW.app_id
+                  AND retry.backend='regression' AND retry.id!=NEW.source_run_id
+            )
+        ) OR (
+            NEW.verification_id IS NOT NULL AND (
+                NEW.retry_run_id IS NULL OR NEW.verification_id!=NEW.retry_run_id
+                OR NOT EXISTS (
+                    SELECT 1 FROM run_verifications verification
+                    WHERE verification.run_id=NEW.verification_id
+                )
+            )
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'repair attempt evidence identity mismatch');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS repair_attempt_identity_guard_update
+        BEFORE UPDATE OF retry_run_id, verification_id, app_id, source_run_id ON repair_attempts
+        WHEN NOT EXISTS (
+            SELECT 1 FROM runs source
+            WHERE source.id=NEW.source_run_id AND source.app_id=NEW.app_id
+              AND source.backend='regression' AND source.result='crashed'
+              AND source.ended_at IS NOT NULL AND source.ended_at<=NEW.created_at
+              AND (
+                  lower(source.executable)=NEW.executable
+                  OR lower(replace(source.executable, char(92), '/'))
+                     LIKE '%/' || NEW.executable
+              )
+        ) OR (
+            NEW.retry_run_id IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM runs retry
+                WHERE retry.id=NEW.retry_run_id AND retry.app_id=NEW.app_id
+                  AND retry.backend='regression' AND retry.id!=NEW.source_run_id
+            )
+        ) OR (
+            NEW.verification_id IS NOT NULL AND (
+                NEW.retry_run_id IS NULL OR NEW.verification_id!=NEW.retry_run_id
+                OR NOT EXISTS (
+                    SELECT 1 FROM run_verifications verification
+                    WHERE verification.run_id=NEW.verification_id
+                )
+            )
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'repair attempt evidence identity mismatch');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS repair_attempt_transition_guard
+        BEFORE UPDATE OF state ON repair_attempts
+        WHEN OLD.state!=NEW.state AND NOT (
+            (OLD.state='detected' AND NEW.state IN ('planned','blocked','failed'))
+            OR (OLD.state='planned' AND NEW.state IN (
+                'appliedAwaitingRelaunch','blocked','failed'
+            ))
+            OR (OLD.state='appliedAwaitingRelaunch' AND NEW.state IN (
+                'relaunching','rollbackPending','blocked'
+            ))
+            OR (OLD.state='relaunching' AND NEW.state IN (
+                'awaitingVerification','rollbackPending','blocked'
+            ))
+            OR (OLD.state='awaitingVerification' AND NEW.state IN (
+                'verified','acceptedWithIssues','rollbackPending','blocked'
+            ))
+            OR (OLD.state IN ('verified','acceptedWithIssues') AND NEW.state='blocked')
+            OR (OLD.state='rollbackPending' AND NEW.state IN ('rolledBack','rollbackFailed'))
+            OR (OLD.state='rollbackFailed' AND NEW.state='rollbackPending')
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'invalid repair attempt transition');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS repair_attempt_evidence_guard_insert
+        BEFORE INSERT ON repair_attempts
+        WHEN (
+            NEW.state IN ('appliedAwaitingRelaunch','relaunching','awaitingVerification',
+                          'verified','acceptedWithIssues','rollbackPending','rolledBack')
+            AND (NEW.before_fingerprint IS NULL OR NEW.before_fingerprint=''
+                 OR NEW.after_fingerprint IS NULL OR NEW.after_fingerprint=''
+                 OR NEW.rollback_manifest_json IS NULL OR NEW.rollback_manifest_json=''
+                 OR NEW.applied_at IS NULL OR NEW.applied_at='')
+        ) OR (
+            NEW.state IN ('awaitingVerification','verified','acceptedWithIssues')
+            AND NEW.retry_run_id IS NULL
+        ) OR (
+            NEW.state IN ('verified','acceptedWithIssues') AND NEW.verification_id IS NULL
+        ) OR (
+            NEW.rollback_manifest_json IS NOT NULL AND json_valid(NEW.rollback_manifest_json)!=1
+        ) OR (
+            NEW.state IN ('relaunching','awaitingVerification','verified','acceptedWithIssues')
+            AND NOT EXISTS (
+                SELECT 1 FROM runs retry
+                WHERE retry.id=NEW.retry_run_id AND retry.app_id=NEW.app_id
+                  AND retry.backend='regression' AND retry.started_at>NEW.applied_at
+                  AND (
+                      lower(retry.executable)=NEW.executable
+                      OR lower(retry.executable) LIKE '%/' || NEW.executable
+                      OR lower(replace(retry.executable, char(92), '/'))
+                         LIKE '%/' || NEW.executable
+                  )
+                  AND (
+                      NEW.state='relaunching'
+                      OR (retry.ended_at IS NOT NULL AND retry.result!='preparing')
+                  )
+            )
+        ) OR (
+            NEW.state='verified' AND NOT EXISTS (
+                SELECT 1 FROM run_verifications verification
+                JOIN runs retry ON retry.id=verification.run_id
+                WHERE verification.run_id=NEW.retry_run_id
+                  AND verification.run_id=NEW.verification_id
+                  AND verification.verdict='perfect'
+                  AND retry.ended_at IS NOT NULL
+                  AND verification.verified_at>=retry.ended_at
+            )
+        ) OR (
+            NEW.state='acceptedWithIssues' AND NOT EXISTS (
+                SELECT 1 FROM run_verifications verification
+                JOIN runs retry ON retry.id=verification.run_id
+                WHERE verification.run_id=NEW.retry_run_id
+                  AND verification.run_id=NEW.verification_id
+                  AND verification.verdict='playableWithIssues'
+                  AND retry.ended_at IS NOT NULL
+                  AND verification.verified_at>=retry.ended_at
+            )
+        ) OR (
+            NEW.state='legacyAppliedUnverified'
+            AND (NEW.before_fingerprint IS NOT NULL OR NEW.after_fingerprint IS NOT NULL)
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'repair attempt lacks required evidence');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS repair_attempt_evidence_guard_update
+        BEFORE UPDATE ON repair_attempts
+        WHEN (
+            NEW.state IN ('appliedAwaitingRelaunch','relaunching','awaitingVerification',
+                          'verified','acceptedWithIssues','rollbackPending','rolledBack')
+            AND (NEW.before_fingerprint IS NULL OR NEW.before_fingerprint=''
+                 OR NEW.after_fingerprint IS NULL OR NEW.after_fingerprint=''
+                 OR NEW.rollback_manifest_json IS NULL OR NEW.rollback_manifest_json=''
+                 OR NEW.applied_at IS NULL OR NEW.applied_at='')
+        ) OR (
+            NEW.state IN ('awaitingVerification','verified','acceptedWithIssues')
+            AND NEW.retry_run_id IS NULL
+        ) OR (
+            NEW.state IN ('verified','acceptedWithIssues') AND NEW.verification_id IS NULL
+        ) OR (
+            NEW.rollback_manifest_json IS NOT NULL AND json_valid(NEW.rollback_manifest_json)!=1
+        ) OR (
+            NEW.state IN ('relaunching','awaitingVerification','verified','acceptedWithIssues')
+            AND NOT EXISTS (
+                SELECT 1 FROM runs retry
+                WHERE retry.id=NEW.retry_run_id AND retry.app_id=NEW.app_id
+                  AND retry.backend='regression' AND retry.started_at>NEW.applied_at
+                  AND (
+                      lower(retry.executable)=NEW.executable
+                      OR lower(retry.executable) LIKE '%/' || NEW.executable
+                      OR lower(replace(retry.executable, char(92), '/'))
+                         LIKE '%/' || NEW.executable
+                  )
+                  AND (
+                      NEW.state='relaunching'
+                      OR (retry.ended_at IS NOT NULL AND retry.result!='preparing')
+                  )
+            )
+        ) OR (
+            NEW.state='verified' AND NOT EXISTS (
+                SELECT 1 FROM run_verifications verification
+                JOIN runs retry ON retry.id=verification.run_id
+                WHERE verification.run_id=NEW.retry_run_id
+                  AND verification.run_id=NEW.verification_id
+                  AND verification.verdict='perfect'
+                  AND retry.ended_at IS NOT NULL
+                  AND verification.verified_at>=retry.ended_at
+            )
+        ) OR (
+            NEW.state='acceptedWithIssues' AND NOT EXISTS (
+                SELECT 1 FROM run_verifications verification
+                JOIN runs retry ON retry.id=verification.run_id
+                WHERE verification.run_id=NEW.retry_run_id
+                  AND verification.run_id=NEW.verification_id
+                  AND verification.verdict='playableWithIssues'
+                  AND retry.ended_at IS NOT NULL
+                  AND verification.verified_at>=retry.ended_at
+            )
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'repair attempt lacks required evidence');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS repair_attempt_verification_revoked
+        AFTER UPDATE OF verdict, verified_at ON run_verifications
+        BEGIN
+            UPDATE repair_attempts
+            SET state='blocked', updated_at=NEW.verified_at
+            WHERE verification_id=NEW.run_id AND (
+                (state='verified' AND (
+                    NEW.verdict!='perfect'
+                    OR NEW.verified_at<(SELECT ended_at FROM runs WHERE id=NEW.run_id)
+                ))
+                OR (state='acceptedWithIssues' AND (
+                    NEW.verdict!='playableWithIssues'
+                    OR NEW.verified_at<(SELECT ended_at FROM runs WHERE id=NEW.run_id)
+                ))
+            );
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS repair_attempt_retry_timeline_changed
+        AFTER UPDATE OF ended_at ON runs
+        BEGIN
+            UPDATE repair_attempts
+            SET state='blocked', updated_at=NEW.ended_at
+            WHERE retry_run_id=NEW.id AND state IN ('verified','acceptedWithIssues')
+              AND NOT EXISTS (
+                  SELECT 1 FROM run_verifications verification
+                  WHERE verification.run_id=NEW.id AND NEW.ended_at IS NOT NULL
+                    AND verification.verified_at>=NEW.ended_at
+              );
+        END;
         """
 }

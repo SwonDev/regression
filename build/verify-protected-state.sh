@@ -16,6 +16,8 @@ BEFORE_THREE_GAMES_PROMOTION=false
 BEFORE_THREE_GAMES_HARDENING=false
 BEFORE_BORDERLANDS4_PROMOTION=false
 BEFORE_BORDERLANDS4_PROCESS_ISOLATION=false
+BEFORE_1_11_PROMOTION=false
+RELEASE_1_11_DEVELOPMENT_CANDIDATE=false
 
 for argument in "$@"; do
     case "$argument" in
@@ -52,8 +54,14 @@ for argument in "$@"; do
         --before-borderlands4-process-isolation)
             BEFORE_BORDERLANDS4_PROCESS_ISOLATION=true
             ;;
+        --before-1.11-promotion)
+            BEFORE_1_11_PROMOTION=true
+            ;;
+        --release-1.11-development-candidate)
+            RELEASE_1_11_DEVELOPMENT_CANDIDATE=true
+            ;;
         *)
-            echo "Uso: $0 [--include-bottle] [--before-dd2-promotion|--before-dragonsword-promotion|--before-hwr2-promotion|--before-tq2-route-unification|--before-windows-media-promotion|--before-windows-media-link-fix|--before-three-games-promotion|--before-three-games-hardening|--before-borderlands4-promotion|--before-borderlands4-process-isolation]" >&2
+            echo "Uso: $0 [--include-bottle] [--before-dd2-promotion|--before-dragonsword-promotion|--before-hwr2-promotion|--before-tq2-route-unification|--before-windows-media-promotion|--before-windows-media-link-fix|--before-three-games-promotion|--before-three-games-hardening|--before-borderlands4-promotion|--before-borderlands4-process-isolation|--before-1.11-promotion|--release-1.11-development-candidate]" >&2
             exit 64
             ;;
     esac
@@ -70,9 +78,15 @@ $BEFORE_THREE_GAMES_PROMOTION && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1)
 $BEFORE_THREE_GAMES_HARDENING && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
 $BEFORE_BORDERLANDS4_PROMOTION && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
 $BEFORE_BORDERLANDS4_PROCESS_ISOLATION && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
+$BEFORE_1_11_PROMOTION && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
+$RELEASE_1_11_DEVELOPMENT_CANDIDATE && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
 if (( PROMOTION_BASELINES > 1 )); then
     echo "ERROR: las verificaciones históricas de promoción son mutuamente excluyentes." >&2
     exit 64
+fi
+TRANSITION_1_11=false
+if $BEFORE_1_11_PROMOTION || $RELEASE_1_11_DEVELOPMENT_CANDIDATE; then
+    TRANSITION_1_11=true
 fi
 
 verify_hash()
@@ -116,13 +130,31 @@ verify_bottle_hash()
     }
 }
 
+verify_transition_hash()
+{
+    local development_hash="$1"
+    local public_transition_hash="$2"
+    local relative_path="$3"
+    if $TRANSITION_1_11; then
+        verify_hash "$public_transition_hash" "$relative_path"
+    else
+        verify_hash "$development_hash" "$relative_path"
+    fi
+}
+
 [[ -d "$WINE_ROOT" ]] || {
     echo "ERROR: falta el runtime propio en $WINE_ROOT" >&2
     exit 1
 }
 
 # Lanzador y módulos propios que protegen Steam, DXMT, entrada y routing por juego.
-if $BEFORE_BORDERLANDS4_PROMOTION; then
+if $RELEASE_1_11_DEVELOPMENT_CANDIDATE; then
+    verify_hash 0aa2c39d5476d8b5767d9a1979af5ecaf96f36648cbe15d376a761aad06e7ca4 \
+        "Contents/MacOS/regression-engine"
+elif $BEFORE_1_11_PROMOTION; then
+    verify_hash ccd590e7e5d395757add0b561bf9fa76d54deb56c491706e28004259c0df913e \
+        "Contents/MacOS/regression-engine"
+elif $BEFORE_BORDERLANDS4_PROMOTION; then
     verify_hash 5b8398a2703838342c5d5df751cae2da60de8ddeec0aec19774271fa621f91cf \
         "Contents/MacOS/regression-engine"
 elif $BEFORE_TQ2_ROUTE_UNIFICATION; then
@@ -140,12 +172,20 @@ else
     verify_hash ccd590e7e5d395757add0b561bf9fa76d54deb56c491706e28004259c0df913e \
         "Contents/MacOS/regression-engine"
 fi
-verify_hash 6942782b7baf0049bb56aba2b9a4e00a107984b1b0198f2307fb63e87ce3103c \
-    "Contents/SharedSupport/bin/install-apple-gptk-component"
+if $RELEASE_1_11_DEVELOPMENT_CANDIDATE; then
+    verify_hash 291bc4ecf61dc9c7efdebbe9e8e5737baff594ee4bfa626b90b1647a64333073 \
+        "Contents/SharedSupport/bin/install-apple-gptk-component"
+else
+    verify_hash 6942782b7baf0049bb56aba2b9a4e00a107984b1b0198f2307fb63e87ce3103c \
+        "Contents/SharedSupport/bin/install-apple-gptk-component"
+fi
 if ! $BEFORE_WINDOWS_MEDIA_PROMOTION; then
     verify_hash c43da8ed5b54d6c663a5455d4296accde8d96f5237384f9322bea548e5c6d00d \
         "Contents/SharedSupport/bin/install-windows-media-component"
-    if $BEFORE_WINDOWS_MEDIA_LINK_FIX; then
+    if $BEFORE_1_11_PROMOTION || $RELEASE_1_11_DEVELOPMENT_CANDIDATE; then
+        verify_hash da8ba98d99d157f981ef3a2472dc9d74c9ce4673ef126bdd61851b9dd21dedb3 \
+            "Contents/SharedSupport/components/windows-media/1/manifest.sha256"
+    elif $BEFORE_WINDOWS_MEDIA_LINK_FIX; then
         verify_hash d93847ced54536cbaaf8ed7922537dfb043448e0168184375c552e774fe35199 \
             "Contents/SharedSupport/components/windows-media/1/manifest.sha256"
     else
@@ -160,7 +200,11 @@ if ! $BEFORE_WINDOWS_MEDIA_PROMOTION; then
         exit 1
     }
 fi
-if $BEFORE_BORDERLANDS4_PROCESS_ISOLATION; then
+if $RELEASE_1_11_DEVELOPMENT_CANDIDATE; then
+    verify_hash "${REGRESSION_1_11_DEVELOPMENT_NTDLL_SHA256:-PENDING_1_11_NTDLL_SHA256}" "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+elif $BEFORE_1_11_PROMOTION; then
+    verify_hash 25a02aedaf914ee997cabd82c538d1b139b55d342d9c9c27c149a443ab406b2b "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+elif $BEFORE_BORDERLANDS4_PROCESS_ISOLATION; then
     verify_hash 788a3fc9e19be0c7b8de7b1ce8ba78ceabcd25075ab1008172c17ce0e5d80346 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
 elif $BEFORE_BORDERLANDS4_PROMOTION; then
     verify_hash 7d8ca564e18a75776acf8a4ea864b8b51f09684de12058c08cdfad1b26aa16b9 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
@@ -202,27 +246,39 @@ if $BEFORE_DD2_PROMOTION || $BEFORE_DRAGONSWORD_PROMOTION || $BEFORE_HWR2_PROMOT
         exit 1
     }
 else
-    verify_hash 2e441e71c00738b7434f7161648cb5c0e78f63a9ae8f3ceefa6ab8100b107c67 \
+    verify_transition_hash \
+        2e441e71c00738b7434f7161648cb5c0e78f63a9ae8f3ceefa6ab8100b107c67 \
+        ef3217d35cbc67701ba01b5fa82d082093ef5e734d41177c0d8f09dd28d62359 \
         "Contents/SharedSupport/wine-root/lib/profiles/heroes-hammerwatch-2/x86_64-unix/winemac.so"
 fi
-verify_hash 44b1379db1b9e3472d1746830eddd88718dbbc761de2e406d45b8be198593ef3 "Contents/SharedSupport/wine-root/lib/wine/x86_64-windows/ntdll.dll"
-verify_hash 3d2b085b1dce4db5615a2a95d96860b644e1bfd4c907d0a68d177d02bd2010e8 "Contents/SharedSupport/wine-root/lib/wine/i386-windows/ntdll.dll"
-verify_hash 4723d219a704ce6fe5a42bfe3340840083582c38f3436e0e614a205c0214f382 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/winemac.so"
-verify_hash da91ec701a18e97c0c3cd943d383ef996092c11d74983876fd44c90b03d5e5b1 "Contents/SharedSupport/wine-root/lib/wine/x86_64-windows/winemac.drv"
-verify_hash aaf38489b18bfeb967b7e6298510b46973ed79f516441b7fd74c95a3cf6b15ec "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/winemetal.so"
+verify_transition_hash 44b1379db1b9e3472d1746830eddd88718dbbc761de2e406d45b8be198593ef3 885c0421bfe30600bae9df83961b0fcbb5b9ccd1c02e7b071ce213ff2522e34a "Contents/SharedSupport/wine-root/lib/wine/x86_64-windows/ntdll.dll"
+verify_transition_hash 3d2b085b1dce4db5615a2a95d96860b644e1bfd4c907d0a68d177d02bd2010e8 7b580e19eb4fce14b5730cd2835c5204dc2622ce0fc4f33b68b0155864477667 "Contents/SharedSupport/wine-root/lib/wine/i386-windows/ntdll.dll"
+verify_transition_hash 4723d219a704ce6fe5a42bfe3340840083582c38f3436e0e614a205c0214f382 978c2fe766d06db1d52abd86f96674988caee93ac587951a951f994032e1fb46 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/winemac.so"
+verify_transition_hash da91ec701a18e97c0c3cd943d383ef996092c11d74983876fd44c90b03d5e5b1 e921d454fbc67a40addb2e8e8e795f9d5274062b731c31a6280403850be687eb "Contents/SharedSupport/wine-root/lib/wine/x86_64-windows/winemac.drv"
+verify_transition_hash aaf38489b18bfeb967b7e6298510b46973ed79f516441b7fd74c95a3cf6b15ec 972000e02f63be8f84d414108d2f6aa5edd8e924111d1d58a07b8fa1b1c91060 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/winemetal.so"
 verify_hash 87ed91e86f1f4620f5229b7a0d4f1f8c5436a56088e8d4692201fe0c7d5b0deb "Contents/SharedSupport/wine-root/lib/wine/x86_64-windows/d3d10core.dll"
 verify_hash e6209af3a04947504af1f12b4533eded103687841197cff45a92d1a5f916c0a8 "Contents/SharedSupport/wine-root/lib/wine/x86_64-windows/d3d11.dll"
 verify_hash 25f74dafc3ebaf77ddc5a7b32d933853462c303a2636399860e80937cda82941 "Contents/SharedSupport/wine-root/lib/wine/x86_64-windows/dxgi.dll"
 
 # Perfil local Apple GPTK de Grim Dawn. Se verifica, nunca se redistribuye.
-verify_hash c999c40698b7fc23c864165fb1364e6a40a8572469775947845afd42f4dfc9e7 "Contents/SharedSupport/wine-root/lib/apple_gptk/wine/x86_64-windows/atidxx64.dll"
-verify_hash 7c2bfeb66b18e3ec10c3ee92c9d42f4e3123692d568d14c831aec1a13aa03f79 "Contents/SharedSupport/wine-root/lib/apple_gptk/wine/x86_64-windows/d3d11.dll"
-verify_hash bbda1c4e94ee70255c528c5689b28333ca9bece2d755ede7c4197977a534704f "Contents/SharedSupport/wine-root/lib/apple_gptk/wine/x86_64-windows/d3d12.dll"
-verify_hash 1b1f2d80349e043e6c628b515ba6b44478a1209c504e6c9f3dae4a9d1b06d561 "Contents/SharedSupport/wine-root/lib/apple_gptk/wine/x86_64-windows/dxgi.dll"
-verify_hash f073fc2377b305380bcd8c228394e48abe1caf09116e12875cb656774a14b4dc "Contents/SharedSupport/wine-root/lib/apple_gptk/wine/x86_64-windows/nvapi64.dll"
-verify_hash d7c0df74d9bb4de5e2a3cc357b2309148fd3fdc824fe7941e4d789dbd072ff99 "Contents/SharedSupport/wine-root/lib/apple_gptk/wine/x86_64-windows/nvngx.dll"
-verify_hash 5131e631eee8b542eadf48f4df9fd662d9aeeb59139137e0e6e14047dc434995 "Contents/SharedSupport/wine-root/lib/apple_gptk/external/libd3dshared.dylib"
-verify_hash 05a7beaed4494a4f5f53d3f626a82fffc3b70146436a908b7048a0632a49e1a8 "Contents/SharedSupport/wine-root/lib/apple_gptk/external/D3DMetal.framework/Versions/A/D3DMetal"
+verify_transition_hash c999c40698b7fc23c864165fb1364e6a40a8572469775947845afd42f4dfc9e7 18995adb10bed163b7f58ab184c747b1ae6447043292d3497a515bc32e5972b5 "Contents/SharedSupport/wine-root/lib/apple_gptk/wine/x86_64-windows/atidxx64.dll"
+verify_transition_hash 7c2bfeb66b18e3ec10c3ee92c9d42f4e3123692d568d14c831aec1a13aa03f79 13a621833929d7ced7761d0cf9f9b57765345633dfb83161c2735e9cfb57b0f5 "Contents/SharedSupport/wine-root/lib/apple_gptk/wine/x86_64-windows/d3d11.dll"
+verify_transition_hash bbda1c4e94ee70255c528c5689b28333ca9bece2d755ede7c4197977a534704f dca51fb33c5d79d36dae95131205b96c837db5c2579d0bfd5fcf3d15e887b324 "Contents/SharedSupport/wine-root/lib/apple_gptk/wine/x86_64-windows/d3d12.dll"
+verify_transition_hash 1b1f2d80349e043e6c628b515ba6b44478a1209c504e6c9f3dae4a9d1b06d561 5e1d256b455f744979092f901a0baeb0053ab291f53e0f6b65f5354043b56d57 "Contents/SharedSupport/wine-root/lib/apple_gptk/wine/x86_64-windows/dxgi.dll"
+if $TRANSITION_1_11; then
+    for omitted_apple_module in nvapi64.dll nvngx.dll; do
+        [[ ! -e "$WINE_ROOT/lib/apple_gptk/wine/x86_64-windows/$omitted_apple_module" &&
+           ! -L "$WINE_ROOT/lib/apple_gptk/wine/x86_64-windows/$omitted_apple_module" ]] || {
+            echo "ERROR: el baseline público contiene un módulo Apple inesperado: $omitted_apple_module" >&2
+            exit 1
+        }
+    done
+else
+    verify_hash f073fc2377b305380bcd8c228394e48abe1caf09116e12875cb656774a14b4dc "Contents/SharedSupport/wine-root/lib/apple_gptk/wine/x86_64-windows/nvapi64.dll"
+    verify_hash d7c0df74d9bb4de5e2a3cc357b2309148fd3fdc824fe7941e4d789dbd072ff99 "Contents/SharedSupport/wine-root/lib/apple_gptk/wine/x86_64-windows/nvngx.dll"
+fi
+verify_transition_hash 5131e631eee8b542eadf48f4df9fd662d9aeeb59139137e0e6e14047dc434995 402ace6dd1c1c2ce58bb15ac68e64829b809fe3f5bdc344298cb4a8365ce1ae6 "Contents/SharedSupport/wine-root/lib/apple_gptk/external/libd3dshared.dylib"
+verify_transition_hash 05a7beaed4494a4f5f53d3f626a82fffc3b70146436a908b7048a0632a49e1a8 9908d7990c28d3a25c8530b96ab703588b2c7d49dfb06155d24b130638b6cf99 "Contents/SharedSupport/wine-root/lib/apple_gptk/external/D3DMetal.framework/Versions/A/D3DMetal"
 
 GRIM_PROFILE="$WINE_ROOT/lib/profiles/grim-dawn"
 [[ -L "$GRIM_PROFILE" && "$(readlink "$GRIM_PROFILE")" == "../apple_gptk/wine" ]] || {
@@ -238,9 +294,13 @@ if $BEFORE_DD2_PROMOTION; then
     }
 else
     DD2_PROFILE="$WINE_ROOT/lib/profiles/dragons-dogma-2"
-    verify_hash 34d373a22fd224fec6e32d1bf7f31c647c518345752dc6bc632883c8c9aefc42 "Contents/SharedSupport/wine-root/lib/profiles/dragons-dogma-2/x86_64-unix/winemac.so"
-    verify_hash 2ee679fa891fa336b2dd3623a1945f47c1c5834853e66eff342ba356c12d8c32 "Contents/SharedSupport/wine-root/lib/profiles/dragons-dogma-2/x86_64-windows/winemac.drv"
-    for module in atidxx64 d3d11 d3d12 dxgi nvapi64 nvngx; do
+    verify_transition_hash 34d373a22fd224fec6e32d1bf7f31c647c518345752dc6bc632883c8c9aefc42 d1eea3dc9b027f8ef012e4270dac8bfcf7fe335a1e914f70c928203a8ffd33e8 "Contents/SharedSupport/wine-root/lib/profiles/dragons-dogma-2/x86_64-unix/winemac.so"
+    verify_transition_hash 2ee679fa891fa336b2dd3623a1945f47c1c5834853e66eff342ba356c12d8c32 1dd6150e520dcb74d0a21f19186a0df4e77de2f0e6348a6160acb76ac6918f55 "Contents/SharedSupport/wine-root/lib/profiles/dragons-dogma-2/x86_64-windows/winemac.drv"
+    dd2_modules=(atidxx64 d3d11 d3d12 dxgi)
+    if ! $TRANSITION_1_11; then
+        dd2_modules+=(nvapi64 nvngx)
+    fi
+    for module in "${dd2_modules[@]}"; do
         [[ -L "$DD2_PROFILE/x86_64-unix/$module.so" &&
            "$(readlink "$DD2_PROFILE/x86_64-unix/$module.so")" == "../../../apple_gptk/wine/x86_64-unix/$module.so" ]] || {
             echo "ERROR: enlace Unix inesperado en el perfil DD2: $module" >&2
@@ -252,6 +312,17 @@ else
             exit 1
         }
     done
+    if $TRANSITION_1_11; then
+        for omitted_dd2_module in nvapi64 nvngx; do
+            [[ ! -e "$DD2_PROFILE/x86_64-unix/$omitted_dd2_module.so" &&
+               ! -L "$DD2_PROFILE/x86_64-unix/$omitted_dd2_module.so" &&
+               ! -e "$DD2_PROFILE/x86_64-windows/$omitted_dd2_module.dll" &&
+               ! -L "$DD2_PROFILE/x86_64-windows/$omitted_dd2_module.dll" ]] || {
+                echo "ERROR: el baseline público contiene un enlace DD2 inesperado: $omitted_dd2_module" >&2
+                exit 1
+            }
+        done
+    fi
 fi
 
 if $INCLUDE_BOTTLE; then

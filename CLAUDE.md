@@ -2,7 +2,8 @@
 
 > Aplicación nativa de barra de menús con Regression como único motor operativo. Su runtime,
 > botella y única biblioteca física de juegos son propios; CrossOver no se invoca, no comparte
-> estado y solo permanece como referencia histórica de investigación. La telemetría local
+> estado y solo aparece en expedientes históricos fechados. No existe red, CLI ni backend de
+> CodeWeavers en el producto. La telemetría local
 > conserva evidencia, pero no aplica perfiles automáticamente.
 >
 > Documentación hermana: `AGENTS.md` (reglas inviolables + protocolo, fuente de verdad que
@@ -13,13 +14,14 @@
 
 ## 1. Estado conseguido (2026-07-28)
 
-**Baseline histórico verificado con capturas (2026-07-28):**
+**Baseline histórico verificado con capturas (2026-07-28; no describe la arquitectura actual):**
 - La etapa anterior integraba la botella Steam de CrossOver, conmutación segura de backend, app
   `LSUIElement` sin Dock, biblioteca compartida y base SQLite v11 de aprendizaje exportable. Ese
   diseño se conserva solo como historia y ya no describe la arquitectura operativa. La
   base normaliza motores por Wine/componentes/registro, separa opciones del juego, vincula cada
   blindado con su evidencia/configuración/motor exactos, conserva el preflight de cada prueba y
-  compara de forma no vinculante con metadatos públicos de CodeWeavers. Los
+  conservaba entonces comparaciones no vinculantes con metadatos públicos de CodeWeavers. Esa
+  integración fue retirada. Los
   datos técnicos locales usan permisos `0700`/`0600` y los logs del lanzador tienen retención
   acotada.
 - Steam completo: tienda, login, biblioteca, navegación, clicks precisos (CEF/Chromium vía
@@ -55,15 +57,14 @@
 1. **JAMÁS se integra algo que rompe lo que ya funciona.** Un arreglo que apaga otra cosa
    no es un arreglo: se revierte al instante y se repiensa. Lo que decide es la matriz de
    validación (§3), no las intenciones.
-2. **CrossOver es una referencia de investigación, no una dependencia.** Las versiones
-   exactas de cada componente, convenciones de build (prefix horneado), wiring de DLLs
-   (qué va en system32, qué en lib, qué es builtin y qué native), configuración de botella,
-   crossties. Se estudia y se replica ESO antes de inventar. La paridad se consigue
-   igualando, no improvisando. Prohibido ir juego por juego sin este método.
+2. **El baseline propio y las fuentes FOSS mandan.** Las versiones exactas, convenciones de
+   build, wiring de DLLs, configuración y código oficial del runtime se contrastan antes de
+   cambiar nada. Baseline y candidato se ejecutan dentro de Regression; no se instala, abre,
+   consulta o inspecciona CrossOver para diagnosticar.
 3. **Autonomía operativa estricta.** Regression no invoca CrossOver ni comparte con él botella,
    juegos, credenciales, registro o configuración. No se copian DLLs/dylibs ni binarios
-   propietarios; las observaciones históricas se reproducen desde fuentes públicas o mediante
-   reimplementación legal.
+   propietarios; las observaciones históricas no tienen autoridad y toda implementación actual
+   procede de fuentes FOSS oficiales o recursos Apple autorizados localmente.
 4. **Legalidad limpia.** Solo fuentes open-source oficiales. Nada de descompilar ni extraer
    código de binarios propietarios (GUI de CrossOver, licencias, forks privados). Los
    binarios de Apple (GPTK: D3DMetal.framework, libd3dshared.dylib) se usan tal cual los
@@ -176,8 +177,8 @@ bash build/verify-canonical-installation.sh # una única app descubrible
    manteniendo cada perfil blindado sin cambios globales.
 3. Conservar las observaciones históricas en SQLite/JSON y trasladar mejoras al motor propio solo
    desde fuentes públicas o reimplementación legal, de forma aislada por juego.
-4. Mantener MoltenVK/D3D12 y `cxcompatdb` como investigación del motor propio, sin invalidar
-   FFT ni otros juegos ya confirmados por rutas distintas.
+4. Mantener MoltenVK/D3D12 como investigación aislada del motor propio, sin invalidar FFT ni
+   otros juegos ya confirmados por rutas distintas. `cxcompatdb` no se consulta ni se replica.
 5. Menores: Wine Mono 10.4.1 cuando un juego real lo requiera y comparativas de rendimiento.
 
 ---

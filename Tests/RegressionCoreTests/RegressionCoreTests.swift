@@ -149,11 +149,9 @@ final class RegressionCoreTests: XCTestCase {
             regressionApplicationURL: URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
                 .appendingPathComponent("Regression.app")
         )
-        print("CrossOver:", snapshot.crossOver?.version ?? snapshot.crossOverIssue?.message ?? "no detectado")
-        print("Botella:", snapshot.crossOver?.bottleName ?? "ninguna")
         print("Regression:", snapshot.regression.healthDetail)
-        XCTAssertNotNil(snapshot.crossOver)
-        XCTAssertEqual(snapshot.crossOver?.health, .ready)
+        XCTAssertNil(snapshot.crossOver)
+        XCTAssertNil(snapshot.crossOverIssue)
         XCTAssertEqual(snapshot.regression.health, .ready)
     }
 
@@ -322,44 +320,6 @@ final class RegressionCoreTests: XCTestCase {
         )
     }
 
-    func testCrossOverCommandUsesOfficialBottleInterface() {
-        let installation = CrossOverInstallation(
-            applicationURL: URL(fileURLWithPath: "/Applications/CrossOver.app"),
-            version: "26.3",
-            build: "39832",
-            bottleName: "Steam",
-            bottleURL: URL(fileURLWithPath: "/tmp/Bottles/Steam"),
-            steamExecutableURL: URL(fileURLWithPath: "/tmp/Bottles/Steam/drive_c/Program Files (x86)/Steam/steam.exe"),
-            wineCLIURL: URL(fileURLWithPath: "/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine"),
-            bottleCLIURL: URL(fileURLWithPath: "/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/cxbottle"),
-            feedURL: nil,
-            health: .ready,
-            healthDetail: "ok"
-        )
-        let command = BackendCommandFactory.crossOver(
-            installation: installation,
-            steamArguments: ["-applaunch", "219990"]
-        )
-        XCTAssertEqual(command.executableURL, installation.wineCLIURL)
-        XCTAssertEqual(
-            command.arguments,
-            ["--bottle", "Steam", "--cx-app", #"C:\Program Files (x86)\Steam\steam.exe"#, "-applaunch", "219990"]
-        )
-    }
-
-    func testCrossOverGraphicsBackendUsesStaticBottleConfiguration() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("regression-crossover-config-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        try Data(#"""
-"OTHER" = "value"
-"CX_GRAPHICS_BACKEND" = "d3dmetal"
-"""#.utf8).write(to: root.appendingPathComponent("cxbottle.conf"))
-
-        XCTAssertEqual(CrossOverBottleConfiguration.graphicsBackend(at: root), "d3dmetal")
-    }
-
     func testConfigurationDelta() {
         let delta = ConfigurationDiffer.difference(
             before: ["renderer": "d3dmetal", "retina": "n"],
@@ -440,6 +400,18 @@ final class RegressionCoreTests: XCTestCase {
         XCTAssertNil(
             GameRuntimeProfileCatalog.profile(for: "1154030", backend: .crossOver)
         )
+        XCTAssertTrue(
+            GameRuntimeProfileCatalog.requiresAppleGPTK(
+                for: "1154030",
+                backend: .regression
+            )
+        )
+        XCTAssertFalse(
+            GameRuntimeProfileCatalog.requiresAppleGPTK(
+                for: "619820",
+                backend: .regression
+            )
+        )
 
         let unrelated = try XCTUnwrap(
             GameRuntimeProfileCatalog.profile(for: "619820", backend: .regression)
@@ -447,6 +419,67 @@ final class RegressionCoreTests: XCTestCase {
         XCTAssertFalse(unrelated.requiresActiveSteamClient)
         XCTAssertNil(unrelated.configurationValues["profile.launcher"])
         XCTAssertNil(unrelated.configurationValues["profile.router.contract"])
+    }
+
+    func testAppleGPTKRequirementDistinguishesProtectedLegacyGeneration() {
+        for appID in ["219990", "4570720", "2054970"] {
+            XCTAssertEqual(
+                GameRuntimeProfileCatalog.requiredAppleGPTKVersion(
+                    for: appID,
+                    backend: .regression
+                ),
+                .version3
+            )
+        }
+    }
+
+    func testAppleGPTKRequirementUsesDeclaredCurrentProfileGeneration() {
+        for appID in ["1154030", "1285190"] {
+            XCTAssertEqual(
+                GameRuntimeProfileCatalog.requiredAppleGPTKVersion(
+                    for: appID,
+                    backend: .regression
+                ),
+                .version4Beta2
+            )
+        }
+    }
+
+    func testAppleGPTKBooleanRequirementDerivesFromVersionMetadata() {
+        XCTAssertTrue(
+            GameRuntimeProfileCatalog.requiresAppleGPTK(
+                for: "219990",
+                backend: .regression
+            )
+        )
+    }
+
+    func testAppleGPTKRequirementIsNormalizedRegressionOnlyAndFailClosed() {
+        XCTAssertEqual(
+            GameRuntimeProfileCatalog.requiredAppleGPTKVersion(
+                for: "000219990",
+                backend: .regression
+            ),
+            .version3
+        )
+        XCTAssertNil(
+            GameRuntimeProfileCatalog.requiredAppleGPTKVersion(
+                for: "219990",
+                backend: .crossOver
+            )
+        )
+        XCTAssertNil(
+            GameRuntimeProfileCatalog.requiredAppleGPTKVersion(
+                for: "999999",
+                backend: .regression
+            )
+        )
+        XCTAssertFalse(
+            GameRuntimeProfileCatalog.requiresAppleGPTK(
+                for: "999999",
+                backend: .regression
+            )
+        )
     }
 
     func testBorderlands4CompiledProfileIsExactAndRegressionOnly() throws {
@@ -531,14 +564,65 @@ final class RegressionCoreTests: XCTestCase {
         let contents = try String(contentsOf: launcherURL, encoding: .utf8)
 
         XCTAssertTrue(contents.contains("prepare_external_apple_gptk_routes"))
-        XCTAssertTrue(contents.contains("Titan Quest II/TQ2/Binaries/Win64/TQ2-Win64-Shipping.exe"))
-        XCTAssertTrue(contents.contains("Borderlands 4/OakGame/Binaries/Win64/Borderlands4.exe"))
         XCTAssertTrue(contents.contains("REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_EXECUTABLE=TQ2-Win64-Shipping.exe"))
         XCTAssertTrue(contents.contains("REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_EXECUTABLE=Borderlands4.exe"))
         XCTAssertTrue(contents.contains("REGRESSION_EXTERNAL_D3DMETAL_ROUTE_COUNT=\"$count\""))
         XCTAssertTrue(contents.contains("--verify-only"))
+        XCTAssertFalse(contents.contains("[[ -f \"$tq2_shipping\" || -f \"$borderlands_shipping\" ]] || return 0"))
+        XCTAssertFalse(contents.contains("if [[ -f \"$tq2_shipping\" ]]"))
+        XCTAssertFalse(contents.contains("if [[ -f \"$borderlands_shipping\" ]]"))
         XCTAssertFalse(contents.contains("WINEDLLOVERRIDES=\"d3d12"))
         XCTAssertFalse(contents.contains("REGRESSION_DEBUG_BORDERLANDS4"))
+    }
+
+    func testExternalAppleRouteFailsClosedInsideWineWithoutVerifiedEnvironmentRoute() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let patchURL = repositoryRoot
+            .appendingPathComponent("patches/wine-26.3.0-per-process-graphics-routing.patch")
+        let contents = try String(contentsOf: patchURL, encoding: .utf8)
+
+        XCTAssertTrue(contents.contains("regression_executable_requires_gptk_4_0b2"))
+        XCTAssertTrue(contents.contains("external D3DMetal component is unavailable or unauthorized"))
+        XCTAssertTrue(contents.contains("exit( 126 )"))
+        XCTAssertFalse(contents.contains("regression_builtin_external_d3dmetal_root"))
+    }
+
+    func testHistoricalAppleGPTK3ProfilesFailClosedInsideWineWhenUnavailable() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let patchURL = repositoryRoot
+            .appendingPathComponent("patches/wine-26.3.0-per-process-graphics-routing.patch")
+        let contents = try String(contentsOf: patchURL, encoding: .utf8)
+
+        XCTAssertTrue(contents.contains("regression_internal_gptk_3_0_profile_suffix"))
+        XCTAssertTrue(contents.contains("regression_internal_profile_is_accessible"))
+        XCTAssertTrue(contents.contains("REGRESSION_INTERNAL_GPTK_3_0_VERIFIED"))
+        XCTAssertTrue(contents.contains("regression_internal_gptk_3_0_is_verified"))
+        XCTAssertTrue(contents.contains("required internal GPTK 3.0 component is unavailable or unauthorized"))
+        XCTAssertTrue(contents.contains("regression_executable_is( \"grim dawn.exe\" )"))
+        XCTAssertTrue(contents.contains("regression_executable_is( \"dd2.exe\" )"))
+        XCTAssertTrue(contents.contains("regression_executable_is( \"dsclient-win64-shipping.exe\" )"))
+        XCTAssertTrue(contents.contains("/lib/profiles/grim-dawn"))
+        XCTAssertTrue(contents.contains("/lib/profiles/dragons-dogma-2"))
+        XCTAssertTrue(contents.contains("/lib/profiles/dragonsword"))
+        XCTAssertTrue(contents.contains("required internal GPTK 3.0 profile is unavailable or invalid"))
+        XCTAssertTrue(contents.contains("S_ISDIR"))
+        XCTAssertTrue(contents.contains("realpath"))
+        XCTAssertTrue(contents.contains("exit( 126 )"))
+        XCTAssertFalse(contents.contains("REGRESSION_INTERNAL_GPTK_2_1_VERIFIED"))
+
+        let authorityGate = try XCTUnwrap(
+            contents.range(of: "!regression_internal_gptk_3_0_is_verified()")
+        )
+        let directoryGate = try XCTUnwrap(
+            contents.range(of: "!regression_internal_profile_is_accessible")
+        )
+        XCTAssertLessThan(authorityGate.lowerBound, directoryGate.lowerBound)
     }
 
     func testForsakenIsleWindowsMediaProfileIsExactAndRegressionOnly() throws {
@@ -695,12 +779,12 @@ final class RegressionCoreTests: XCTestCase {
         ))
 
         let details = try await repository.runDetails()
-        XCTAssertEqual(details.count, 1)
-        XCTAssertEqual(details.first?.arguments, ["-applaunch", "1128000"])
-        XCTAssertEqual(details.first?.configuration["bottle.WINEMSYNC"], "1")
-        XCTAssertEqual(details.first?.verification?.verdict, .perfect)
+        XCTAssertTrue(details.isEmpty, "El historial CrossOver no pertenece a la vista pública.")
+        let health = try await repository.databaseHealth()
+        XCTAssertEqual(health.runCount, 1)
         let profiles = try await repository.compatibilityProfiles()
-        XCTAssertEqual(profiles.count, 2)
+        XCTAssertEqual(profiles.count, 1)
+        XCTAssertEqual(profiles.first?.backend, .regression)
         XCTAssertTrue(profiles.allSatisfy { $0.successfulRuns == 1 })
         XCTAssertTrue(profiles.allSatisfy { $0.perfectRuns == 1 })
         XCTAssertTrue(profiles.allSatisfy { $0.unverifiedRuns == 0 })
@@ -712,7 +796,10 @@ final class RegressionCoreTests: XCTestCase {
         let exported = try String(contentsOf: exportURL, encoding: .utf8)
         XCTAssertTrue(exported.contains("configurationFingerprint"))
         XCTAssertTrue(exported.contains("1128000"))
-        XCTAssertTrue(exported.contains("visualInspection"))
+        XCTAssertFalse(
+            exported.contains("visualInspection"),
+            "La evidencia visual histórica de CrossOver no puede salir en el export público."
+        )
         XCTAssertTrue(exported.contains("Confirmación histórica"))
         let databaseMode = try XCTUnwrap(
             FileManager.default.attributesOfItem(

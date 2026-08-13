@@ -1,12 +1,15 @@
 #!/bin/bash
 # Instalador y actualizador transaccional de Regression para Apple Silicon.
 # Descarga únicamente assets del release oficial, verifica SHA-256, conserva la botella
-# y reutiliza D3DMetal solo desde una instalación local que el usuario ya haya licenciado.
+# y conserva D3DMetal solo desde una instalación anterior verificada de Regression.
 set -Eeuo pipefail
+PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
 
-VERSION="1.10.1"
+VERSION="1.11.0"
+BUILD_NUMBER="37"
 REPO="SwonDev/regression"
-ASSET_NAME="Regression-${VERSION}-macos-arm64.tar.zst"
+ASSET_NAME="Regression-${VERSION}-macos-arm64.tar.gz"
 APP_NAME="Regression.app"
 INSTALL_PREFIX="/Applications"
 MODE="install"
@@ -16,10 +19,12 @@ WAIT_FOR_PID=""
 INSTALL_SWITCH2BRIDGE=1
 LOCAL_ASSET=""
 LOCAL_CHECKSUM=""
+TRUSTED_DIGEST_FILE=""
 LOCAL_STEAM_SETUP=""
 WORK_DIR=""
 DESTINATION=""
 BACKUP_PATH=""
+APP_EXISTED=0
 REPLACEMENT_STARTED=0
 COMMITTED=0
 ROLLBACK_RUNNING=0
@@ -29,9 +34,32 @@ BRIDGE_SUPPORT="$HOME/Library/Application Support/Switch2Bridge"
 BRIDGE_APP_BACKUP=""
 BRIDGE_AGENT_BACKUP=""
 BRIDGE_CHANGED=0
-BOTTLE_REGISTRY_BACKUP=""
+APP_SUPPORT="$HOME/Library/Application Support/Regression"
+BOTTLE="$APP_SUPPORT/Bottles/Steam"
+BOTTLE_STAGE=""
+BOTTLE_BACKUP=""
+BOTTLE_EXISTED=0
+BOTTLE_REPLACEMENT_STARTED=0
+BOTTLE_STEAMAPPS_PRESERVED=0
 GPTK_PRESERVATION_MANIFEST=""
+GPTK_PRESERVED_GENERATION=""
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+
+# REGRESSION_RELEASE_AUTHORITY_V1_BEGIN
+EXPECTED_MEDIA_MANIFEST_SHA256="da8ba98d99d157f981ef3a2472dc9d74c9ce4673ef126bdd61851b9dd21dedb3"
+release_runtime_authority_v1()
+{
+    cat <<'EOF'
+f03a7c92ed8cda87fc0bf72a5af29962d26ca981b546b3ce0550fb57ca3ee7ff lib/wine/x86_64-windows/vcruntime140.dll
+2a53d2db7e7b760d2b1d7ecd46b05653e11850363a10b097303d3491aaa4e94a lib/wine/x86_64-windows/msvcp140.dll
+019e4bebf86cc4642fff63bc371223280ddfb0306ff379b04fe3f4dc2311ad22 lib/wine/x86_64-windows/ucrtbase.dll
+69e58956261ae1081a6429c3813b143689f29849ffb693eb4fee399f335e4608 lib/wine/x86_64-windows/vcruntime140_1.dll
+02037225c495c37747ae4cde08de6ff31119b850997799fa27237ca61bed7b35 lib/wine/i386-windows/vcruntime140.dll
+2727caf41f37eec4141c891e42365e261cc909b01d0ae568b12b9bf2fdcffa85 lib/wine/i386-windows/msvcp140.dll
+935fbefeb5462924e628df486ebfdad49b70a91154c9a8a57d9aa221fc91c119 lib/wine/i386-windows/ucrtbase.dll
+EOF
+}
+# REGRESSION_RELEASE_AUTHORITY_V1_END
 
 usage() {
     sed -n '2,4p' "$0"
@@ -48,6 +76,8 @@ Opciones:
   --yes, -y        No solicita confirmación.
   --launch         Abre Regression al completar la instalación.
   --wait-for-pid N Espera al cierre del proceso N antes de reemplazar la app.
+  --trusted-digest-file FILE
+                  Inyecta la autoridad de digest v1 para verificar un asset local.
 EOF
 }
 
@@ -77,6 +107,9 @@ while [[ $# -gt 0 ]]; do
         --checksum-file)
             [[ $# -ge 2 ]] || { echo "Falta el fichero de --checksum-file" >&2; exit 2; }
             LOCAL_CHECKSUM="$2"; shift ;;
+        --trusted-digest-file)
+            [[ $# -ge 2 ]] || { echo "Falta el fichero de --trusted-digest-file" >&2; exit 2; }
+            TRUSTED_DIGEST_FILE="$2"; shift ;;
         --steam-setup-file)
             [[ $# -ge 2 ]] || { echo "Falta el fichero de --steam-setup-file" >&2; exit 2; }
             LOCAL_STEAM_SETUP="$2"; shift ;;
@@ -115,10 +148,44 @@ rollback() {
     set +e
     if [[ $REPLACEMENT_STARTED -eq 1 && $COMMITTED -eq 0 && -n "$DESTINATION" ]]; then
         fail "La instalación no terminó; restaurando la aplicación anterior."
-        cleanup_path "$DESTINATION"
-        if [[ -n "$BACKUP_PATH" && ( -e "$BACKUP_PATH" || -L "$BACKUP_PATH" ) ]]; then
-            mv "$BACKUP_PATH" "$DESTINATION"
+        if [[ $APP_EXISTED -eq 1 ]]; then
+            if [[ -n "$BACKUP_PATH" && ( -e "$BACKUP_PATH" || -L "$BACKUP_PATH" ) ]]; then
+                cleanup_path "$DESTINATION"
+                mv "$BACKUP_PATH" "$DESTINATION"
+            fi
+        else
+            cleanup_path "$DESTINATION"
         fi
+    fi
+    if [[ $BOTTLE_REPLACEMENT_STARTED -eq 1 && $COMMITTED -eq 0 && -n "$BOTTLE" ]]; then
+        if [[ $BOTTLE_EXISTED -eq 1 ]]; then
+            if [[ -n "$BOTTLE_BACKUP" && -d "$BOTTLE_BACKUP" && ! -L "$BOTTLE_BACKUP" ]]; then
+                if [[ $BOTTLE_STEAMAPPS_PRESERVED -eq 1 ]]; then
+                    local restored_steamapps="$BOTTLE_BACKUP/drive_c/Program Files (x86)/Steam/steamapps"
+                    local candidate_steamapps=""
+                    if [[ -d "$BOTTLE/drive_c/Program Files (x86)/Steam/steamapps" \
+                        && ! -L "$BOTTLE/drive_c/Program Files (x86)/Steam/steamapps" ]]; then
+                        candidate_steamapps="$BOTTLE/drive_c/Program Files (x86)/Steam/steamapps"
+                    elif [[ -n "$BOTTLE_STAGE" \
+                        && -d "$BOTTLE_STAGE/drive_c/Program Files (x86)/Steam/steamapps" \
+                        && ! -L "$BOTTLE_STAGE/drive_c/Program Files (x86)/Steam/steamapps" ]]; then
+                        candidate_steamapps="$BOTTLE_STAGE/drive_c/Program Files (x86)/Steam/steamapps"
+                    fi
+                    if [[ ! -e "$restored_steamapps" && ! -L "$restored_steamapps" \
+                        && -n "$candidate_steamapps" ]]; then
+                        mkdir -p "$(dirname "$restored_steamapps")"
+                        mv "$candidate_steamapps" "$restored_steamapps"
+                    fi
+                fi
+                cleanup_path "$BOTTLE"
+                mv "$BOTTLE_BACKUP" "$BOTTLE"
+            fi
+        else
+            cleanup_path "$BOTTLE"
+        fi
+    fi
+    if [[ -n "$BOTTLE_STAGE" && "$BOTTLE_STAGE" != "$BOTTLE" ]]; then
+        cleanup_path "$BOTTLE_STAGE"
     fi
     if [[ $BRIDGE_CHANGED -eq 1 ]]; then
         launchctl bootout "gui/$(id -u)/dev.swondev.switch2bridge" 2>/dev/null || true
@@ -131,9 +198,6 @@ rollback() {
             launchctl bootstrap "gui/$(id -u)" "$BRIDGE_AGENT" 2>/dev/null || true
         fi
     fi
-    if [[ -n "$BOTTLE_REGISTRY_BACKUP" && -f "$BOTTLE_REGISTRY_BACKUP" ]]; then
-        cp "$BOTTLE_REGISTRY_BACKUP" "$BOTTLE/system.reg"
-    fi
     if [[ $LAUNCH -eq 1 && -n "$DESTINATION" && -d "$DESTINATION" ]]; then
         /usr/bin/open "$DESTINATION" 2>/dev/null || true
         warn "La versión anterior de Regression se ha vuelto a abrir tras el rollback."
@@ -142,7 +206,16 @@ rollback() {
     exit "$status"
 }
 
-trap cleanup EXIT
+finish() {
+    local status="${1:-$?}"
+    if [[ $status -eq 0 ]]; then
+        cleanup
+        return 0
+    fi
+    rollback "$status"
+}
+
+trap 'finish $?' EXIT
 trap 'rollback $?' ERR
 trap 'rollback 130' INT
 trap 'rollback 143' TERM
@@ -155,6 +228,311 @@ download() {
         --retry 3 --retry-all-errors --connect-timeout 20 \
         --speed-time 30 --speed-limit 10000 \
         --output "$destination" "$url"
+}
+
+download_github_release_metadata()
+{
+    local url="$1"
+    local destination="$2"
+    /usr/bin/curl --fail --location --silent --show-error \
+        --proto '=https' --tlsv1.2 \
+        --retry 3 --retry-all-errors --connect-timeout 20 \
+        --speed-time 30 --speed-limit 10000 \
+        --header 'Accept: application/vnd.github+json' \
+        --header 'X-GitHub-Api-Version: 2022-11-28' \
+        --output "$destination" "$url"
+}
+
+authority_value()
+{
+    local key="$1"
+    local file="$2"
+    /usr/bin/awk -F= -v key="$key" '$1 == key { sub(/^[^=]*=/, ""); print }' "$file"
+}
+
+path_chain_is_physical()
+{
+    local cursor="$1"
+    while [[ "$cursor" != "/" && "$cursor" != "." ]]; do
+        [[ ! -L "$cursor" ]] || return 1
+        cursor="$(/usr/bin/dirname "$cursor")"
+    done
+}
+
+semantic_version_compare()
+{
+    local left="$1"
+    local right="$2"
+    [[ "$left" =~ ^v?[0-9]+(\.[0-9]+){1,3}$ \
+        && "$right" =~ ^v?[0-9]+(\.[0-9]+){1,3}$ ]] || return 2
+    /usr/bin/awk -v left="${left#v}" -v right="${right#v}" 'BEGIN {
+        left_count = split(left, left_parts, ".")
+        right_count = split(right, right_parts, ".")
+        count = left_count > right_count ? left_count : right_count
+        for (part = 1; part <= count; part++) {
+            left_value = part <= left_count ? left_parts[part] + 0 : 0
+            right_value = part <= right_count ? right_parts[part] + 0 : 0
+            if (left_value < right_value) { print -1; exit }
+            if (left_value > right_value) { print 1; exit }
+        }
+        print 0
+    }'
+}
+
+guard_destination_not_newer()
+{
+    local destination="$1"
+    local candidate_version="$2"
+    local plist="$destination/Contents/Info.plist"
+    local bundle_id installed_version comparison
+
+    [[ -e "$destination" || -L "$destination" ]] || return 0
+    if [[ ! -d "$destination" || -L "$destination" ]] \
+        || ! path_chain_is_physical "$destination"; then
+        fail "La instalación existente no tiene una ruta física segura."
+        return 1
+    fi
+    if [[ ! -f "$plist" || -L "$plist" ]] || ! path_chain_is_physical "$plist"; then
+        fail "La instalación existente no contiene un Info.plist físico verificable."
+        return 1
+    fi
+    bundle_id="$(/usr/bin/plutil -extract CFBundleIdentifier raw "$plist" 2>/dev/null || true)"
+    installed_version="$(/usr/bin/plutil -extract CFBundleShortVersionString raw \
+        "$plist" 2>/dev/null || true)"
+    [[ "$bundle_id" == "local.regression.launcher" ]] || {
+        fail "El destino existente no pertenece al bundle canónico de Regression."
+        return 1
+    }
+    comparison="$(semantic_version_compare "$candidate_version" "$installed_version")" || {
+        fail "No se pudo verificar la versión instalada antes de sustituir Regression."
+        return 1
+    }
+    if [[ "$comparison" -lt 0 ]]; then
+        fail "Regression $candidate_version es anterior a la instalada ($installed_version); downgrade bloqueado."
+        return 1
+    fi
+}
+
+trusted_digest_from_file()
+{
+    local file="$1"
+    local expected_asset="$2"
+    local expected_tag="v$VERSION"
+    local sha
+
+    [[ -f "$file" && ! -L "$file" ]] || {
+        fail "La autoridad de digest local debe ser un fichero regular, no un enlace."
+        return 1
+    }
+    [[ "$(/usr/bin/wc -l < "$file" | /usr/bin/tr -d ' ')" == "5" ]] || {
+        fail "La autoridad de digest local no usa el formato v1 exacto."
+        return 1
+    }
+    [[ "$(authority_value schema "$file")" == "regression-release-digest-v1" \
+        && "$(authority_value repository "$file")" == "$REPO" \
+        && "$(authority_value tag "$file")" == "$expected_tag" \
+        && "$(authority_value asset "$file")" == "$expected_asset" ]] || {
+        fail "La autoridad de digest local no identifica este repositorio, tag y asset."
+        return 1
+    }
+    sha="$(authority_value sha256 "$file")"
+    [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || {
+        fail "La autoridad de digest local no contiene un SHA-256 válido."
+        return 1
+    }
+    printf '%s\n' "$sha"
+}
+
+trusted_digest_from_github_release()
+{
+    local metadata="$1"
+    local expected_asset="$2"
+    local expected_tag="v$VERSION"
+    local asset_count index name digest download_url
+    local found_digest=""
+    local found_count=0
+
+    [[ "$(/usr/bin/plutil -extract tag_name raw "$metadata" 2>/dev/null || true)" == \
+        "$expected_tag" ]] || {
+        fail "La API de GitHub no devolvió el tag estable esperado."
+        return 1
+    }
+    [[ "$(/usr/bin/plutil -extract draft raw "$metadata" 2>/dev/null || true)" == "false" \
+        && "$(/usr/bin/plutil -extract prerelease raw "$metadata" 2>/dev/null || true)" == \
+            "false" ]] || {
+        fail "La autoridad de GitHub no identifica una release estable."
+        return 1
+    }
+    asset_count="$(/usr/bin/plutil -extract assets raw "$metadata" 2>/dev/null || true)"
+    [[ "$asset_count" =~ ^[0-9]+$ ]] || {
+        fail "La API de GitHub no contiene una lista de assets válida."
+        return 1
+    }
+    for ((index = 0; index < asset_count; index++)); do
+        name="$(/usr/bin/plutil -extract "assets.$index.name" raw "$metadata" 2>/dev/null || true)"
+        [[ "$name" == "$expected_asset" ]] || continue
+        digest="$(/usr/bin/plutil -extract "assets.$index.digest" raw "$metadata" 2>/dev/null || true)"
+        download_url="$(/usr/bin/plutil -extract "assets.$index.browser_download_url" raw \
+            "$metadata" 2>/dev/null || true)"
+        [[ "$download_url" == \
+            "https://github.com/$REPO/releases/download/$expected_tag/$expected_asset" ]] || {
+            fail "La autoridad de GitHub publicó una URL inesperada para el asset."
+            return 1
+        }
+        [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            fail "La API de GitHub no publicó un digest SHA-256 utilizable."
+            return 1
+        }
+        found_digest="${digest#sha256:}"
+        found_count=$((found_count + 1))
+    done
+    [[ $found_count -eq 1 ]] || {
+        fail "La autoridad de GitHub debe identificar exactamente un asset $expected_asset."
+        return 1
+    }
+    printf '%s\n' "$found_digest"
+}
+
+relative_link_stays_within_root()
+{
+    local root="$1"
+    local link="$2"
+    local relative base target combined part depth=0
+    local parts=()
+
+    case "$link" in
+        "$root"/*) relative="${link#"$root"/}" ;;
+        *) return 1 ;;
+    esac
+    target="$(/usr/bin/readlink "$link")" || return 1
+    [[ -n "$target" && "$target" != /* ]] || return 1
+    if [[ "$relative" == */* ]]; then
+        base="${relative%/*}"
+    else
+        base=""
+    fi
+    combined="$base/$target"
+    IFS='/' read -r -a parts <<< "$combined"
+    for part in "${parts[@]}"; do
+        case "$part" in
+            ''|.) ;;
+            ..)
+                (( depth > 0 )) || return 1
+                depth=$((depth - 1))
+                ;;
+            *) depth=$((depth + 1)) ;;
+        esac
+    done
+}
+
+verify_confined_symlinks()
+{
+    local root="$1"
+    local link
+
+    [[ -d "$root" && ! -L "$root" ]] || {
+        fail "La raíz auditada no es un directorio físico: $root"
+        return 1
+    }
+    while IFS= read -r -d '' link; do
+        relative_link_stays_within_root "$root" "$link" || {
+            fail "Un enlace simbólico escapa del bundle: $link -> $(/usr/bin/readlink "$link")"
+            return 1
+        }
+    done < <(/usr/bin/find "$root" -type l -print0)
+}
+
+verify_gptk_3_payload_authority()
+{
+    local root="$1"
+    local expected relative actual module candidate
+
+    [[ -d "$root" && ! -L "$root" ]] && path_chain_is_physical "$root" || return 1
+    verify_confined_symlinks "$root" || return 1
+    for relative in \
+        external/D3DMetal.framework/Versions/A/Resources/Info.plist \
+        Documentation/License.rtf \
+        Documentation/Acknowledgements.rtf \
+        'Documentation/Read Me.rtf'
+    do
+        [[ -f "$root/$relative" && ! -L "$root/$relative" ]] || return 1
+    done
+    [[ "$(/usr/bin/plutil -extract CFBundleShortVersionString raw \
+        "$root/external/D3DMetal.framework/Versions/A/Resources/Info.plist" \
+        2>/dev/null || true)" == "3.0" ]] || return 1
+
+    while IFS=' ' read -r expected relative; do
+        actual="$(/usr/bin/shasum -a 256 "$root/$relative" 2>/dev/null \
+            | /usr/bin/awk '{print $1}')"
+        [[ "$actual" == "$expected" ]] || return 1
+    done <<'EOF'
+05a7beaed4494a4f5f53d3f626a82fffc3b70146436a908b7048a0632a49e1a8 external/D3DMetal.framework/Versions/A/D3DMetal
+5131e631eee8b542eadf48f4df9fd662d9aeeb59139137e0e6e14047dc434995 external/libd3dshared.dylib
+c999c40698b7fc23c864165fb1364e6a40a8572469775947845afd42f4dfc9e7 wine/x86_64-windows/atidxx64.dll
+7c2bfeb66b18e3ec10c3ee92c9d42f4e3123692d568d14c831aec1a13aa03f79 wine/x86_64-windows/d3d11.dll
+bbda1c4e94ee70255c528c5689b28333ca9bece2d755ede7c4197977a534704f wine/x86_64-windows/d3d12.dll
+1b1f2d80349e043e6c628b515ba6b44478a1209c504e6c9f3dae4a9d1b06d561 wine/x86_64-windows/dxgi.dll
+f073fc2377b305380bcd8c228394e48abe1caf09116e12875cb656774a14b4dc wine/x86_64-windows/nvapi64.dll
+d7c0df74d9bb4de5e2a3cc357b2309148fd3fdc824fe7941e4d789dbd072ff99 wine/x86_64-windows/nvngx.dll
+EOF
+    for module in atidxx64 d3d11 d3d12 dxgi nvapi64 nvngx; do
+        [[ -L "$root/wine/x86_64-unix/$module.so" ]] || return 1
+        [[ "$(/usr/bin/readlink "$root/wine/x86_64-unix/$module.so")" == \
+            "../../external/libd3dshared.dylib" ]] || return 1
+    done
+    while IFS= read -r -d '' candidate; do
+        relative="${candidate#"$root"/}"
+        case "$relative" in
+            external|external/D3DMetal.framework|external/D3DMetal.framework/*|\
+            external/libd3dshared.dylib|\
+            wine|wine/x86_64-unix|wine/x86_64-windows|\
+            wine/x86_64-unix/atidxx64.so|wine/x86_64-unix/d3d11.so|\
+            wine/x86_64-unix/d3d12.so|wine/x86_64-unix/dxgi.so|\
+            wine/x86_64-unix/nvapi64.so|wine/x86_64-unix/nvngx.so|\
+            wine/x86_64-windows/atidxx64.dll|wine/x86_64-windows/d3d11.dll|\
+            wine/x86_64-windows/d3d12.dll|wine/x86_64-windows/dxgi.dll|\
+            wine/x86_64-windows/nvapi64.dll|wine/x86_64-windows/nvngx.dll|\
+            Documentation|Documentation/License.rtf|\
+            Documentation/Acknowledgements.rtf|'Documentation/Read Me.rtf') ;;
+            *) return 1 ;;
+        esac
+    done < <(/usr/bin/find "$root" -mindepth 1 -print0)
+    /usr/bin/codesign --verify --deep --strict \
+        "$root/external/D3DMetal.framework" >/dev/null 2>&1 || return 1
+    /usr/bin/codesign --verify --strict \
+        "$root/external/libd3dshared.dylib" >/dev/null 2>&1 || return 1
+}
+
+verify_gptk_3_receipt_authority()
+{
+    local receipt="$1"
+    local root="$2"
+    local mode owner license_hash identity_before identity_after
+
+    [[ -f "$receipt" && ! -L "$receipt" ]] && path_chain_is_physical "$receipt" || return 1
+    identity_before="$(/usr/bin/stat -f '%d:%i:%z:%m:%c' "$receipt" 2>/dev/null || true)"
+    mode="$(/usr/bin/stat -f '%Lp' "$receipt" 2>/dev/null || true)"
+    owner="$(/usr/bin/stat -f '%u' "$receipt" 2>/dev/null || true)"
+    [[ "$mode" == "600" && "$owner" == "$(/usr/bin/id -u)" ]] || return 1
+    [[ "$(/usr/bin/wc -l < "$receipt" | /usr/bin/tr -d ' ')" == "8" ]] || return 1
+    license_hash="$(/usr/bin/shasum -a 256 "$root/Documentation/License.rtf" \
+        2>/dev/null | /usr/bin/awk '{print $1}')"
+    [[ "$(authority_value schema "$receipt")" == "1" \
+        && "$(authority_value version "$receipt")" == "3.0" \
+        && "$(authority_value source_kind "$receipt")" == \
+            "existing-protected-component" \
+        && "$(authority_value catalog_id "$receipt")" == \
+            "apple-gptk-protected-profiles" \
+        && "$(authority_value payload_fingerprint "$receipt")" == \
+            "fdc07beb364b2327896196e214996585fbcc1a10c71784d383218d2de9db57d7" \
+        && "$(authority_value license_sha256 "$receipt")" == "$license_hash" \
+        && "$(authority_value confirmation "$receipt")" == \
+            "ACEPTO LA LICENCIA DE APPLE GPTK 3.0" \
+        && "$(authority_value confirmed_at "$receipt")" =~ \
+            ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ \
+        && -z "$(authority_value dmg_sha256 "$receipt")" ]] || return 1
+    identity_after="$(/usr/bin/stat -f '%d:%i:%z:%m:%c' "$receipt" 2>/dev/null || true)"
+    [[ -n "$identity_before" && "$identity_after" == "$identity_before" ]]
 }
 
 validate_install_prefix() {
@@ -179,13 +557,14 @@ verify_staged_release() {
     local wine_root="$app/Contents/SharedSupport/wine-root"
     local ntdll="$wine_root/lib/wine/x86_64-unix/ntdll.so"
     local media="$app/Contents/SharedSupport/components/windows-media/1"
-    local binary architecture runtime required smoke_prefix wine_version
+    local binary required expected relative actual
 
     for binary in \
         "$app/Contents/MacOS/Regression" \
         "$app/Contents/MacOS/regression-engine" \
         "$app/Contents/SharedSupport/bin/regressionctl" \
         "$app/Contents/SharedSupport/bin/install-windows-media-component" \
+        "$app/Contents/SharedSupport/bin/install-apple-gptk-component" \
         "$wine_root/bin/wine" \
         "$wine_root/bin/wineserver" \
         "$wine_root/lib/wine/x86_64-unix/wine" \
@@ -220,18 +599,14 @@ verify_staged_release() {
         }
     done
 
-    for architecture in x86_64-windows i386-windows; do
-        for runtime in vcruntime140.dll msvcp140.dll ucrtbase.dll; do
-            [[ -f "$wine_root/lib/wine/$architecture/$runtime" ]] || {
-                fail "Falta $runtime para $architecture"
-                return 1
-            }
-        done
-    done
-    [[ -f "$wine_root/lib/wine/x86_64-windows/vcruntime140_1.dll" ]] || {
-        fail "Falta vcruntime140_1.dll para x64"
-        return 1
-    }
+    while IFS=' ' read -r expected relative; do
+        actual="$(/usr/bin/shasum -a 256 "$wine_root/$relative" 2>/dev/null \
+            | /usr/bin/awk '{print $1}')"
+        [[ "$actual" == "$expected" ]] || {
+            fail "El redistribuible no coincide con la autoridad compilada: $relative"
+            return 1
+        }
+    done < <(release_runtime_authority_v1)
 
     [[ -f "$media/gstreamer-1.0/libgstasf.dylib" \
         && -f "$media/gstreamer-1.0/libgstlibav.dylib" \
@@ -243,12 +618,19 @@ verify_staged_release() {
         fail "El componente Windows Media no supera su manifiesto."
         return 1
     }
+    [[ "$(/usr/bin/shasum -a 256 "$media/manifest.sha256" \
+        | /usr/bin/awk '{print $1}')" == "$EXPECTED_MEDIA_MANIFEST_SHA256" ]] || {
+        fail "Windows Media no coincide con la autoridad compilada."
+        return 1
+    }
     /usr/bin/codesign --verify --strict "$media/gstreamer-1.0/libgstasf.dylib" \
         >/dev/null 2>&1 || { fail "libgstasf no conserva una firma válida."; return 1; }
     /usr/bin/codesign --verify --strict "$media/gstreamer-1.0/libgstlibav.dylib" \
         >/dev/null 2>&1 || { fail "libgstlibav no conserva una firma válida."; return 1; }
 
-    if /usr/bin/find "$wine_root/lib/apple_gptk" -type f | /usr/bin/grep -q .; then
+    local first_gptk_file
+    first_gptk_file="$(/usr/bin/find "$wine_root/lib/apple_gptk" -type f -print -quit)"
+    if [[ -n "$first_gptk_file" ]]; then
         fail "El release contiene binarios de Apple que no pueden redistribuirse."
         return 1
     fi
@@ -257,19 +639,14 @@ verify_staged_release() {
         return 1
     }
 
-    smoke_prefix="$WORK_DIR/wine-smoke-prefix"
-    wine_version="$(env WINEPREFIX="$smoke_prefix" WINEDEBUG=-all \
-        /usr/bin/arch -x86_64 "$wine_root/bin/wine" --version 2>&1)" || {
-        fail "El arranque público de Wine no puede cargar ntdll.so."
-        return 1
-    }
-    [[ "$wine_version" == wine-* ]] || {
-        fail "El arranque público de Wine devolvió una versión inesperada: $wine_version"
-        return 1
-    }
 }
 
 validate_install_prefix
+if [[ "$MODE" == "install" ]]; then
+    # El rollback autenticado restaura directamente BACKUP_PATH dentro de esta misma transacción;
+    # no vuelve a invocar el instalador y, por tanto, no necesita ni expone un bypass de downgrade.
+    guard_destination_not_newer "$DESTINATION" "$VERSION"
+fi
 
 step "1/7 Comprobación del entorno"
 ERRORS=0
@@ -329,14 +706,22 @@ chmod 700 "$WORK_DIR"
 TARBALL="$WORK_DIR/$ASSET_NAME"
 CHECKSUM_FILE="$WORK_DIR/$ASSET_NAME.sha256"
 ASSET_URL="https://github.com/$REPO/releases/download/v${VERSION}/$ASSET_NAME"
-if [[ -n "$LOCAL_ASSET" || -n "$LOCAL_CHECKSUM" ]]; then
-    [[ -f "$LOCAL_ASSET" && -f "$LOCAL_CHECKSUM" ]] || {
-        fail "La prueba local requiere --asset-file y --checksum-file válidos."
+if [[ -n "$LOCAL_ASSET" || -n "$LOCAL_CHECKSUM" || -n "$TRUSTED_DIGEST_FILE" ]]; then
+    [[ -f "$LOCAL_ASSET" && -f "$LOCAL_CHECKSUM" && -f "$TRUSTED_DIGEST_FILE" ]] || {
+        fail "La prueba local requiere asset, checksum y autoridad de digest v1 válidos."
         exit 2
     }
     cp "$LOCAL_ASSET" "$TARBALL"
     cp "$LOCAL_CHECKSUM" "$CHECKSUM_FILE"
+    TRUSTED_EXPECTED="$(trusted_digest_from_file "$TRUSTED_DIGEST_FILE" "$ASSET_NAME")" \
+        || exit 1
 else
+    RELEASE_METADATA="$WORK_DIR/github-release-v${VERSION}.json"
+    download_github_release_metadata \
+        "https://api.github.com/repos/$REPO/releases/tags/v${VERSION}" \
+        "$RELEASE_METADATA"
+    TRUSTED_EXPECTED="$(trusted_digest_from_github_release "$RELEASE_METADATA" "$ASSET_NAME")" \
+        || exit 1
     download "$ASSET_URL" "$TARBALL"
     download "${ASSET_URL}.sha256" "$CHECKSUM_FILE"
 fi
@@ -351,7 +736,11 @@ ACTUAL="$(shasum -a 256 "$TARBALL" | awk '{print tolower($1)}')"
     fail "El asset descargado no coincide con el SHA-256 publicado."
     exit 1
 }
-ok "SHA-256 verificado: ${ACTUAL:0:12}…"
+[[ "$TRUSTED_EXPECTED" == "$ACTUAL" ]] || {
+    fail "El asset y su checksum coinciden entre sí, pero no con la autoridad independiente."
+    exit 1
+}
+ok "SHA-256 verificado contra la autoridad independiente: ${ACTUAL:0:12}…"
 
 step "3/7 Extracción segura y preparación"
 UNPACK_DIR="$WORK_DIR/unpack"
@@ -367,6 +756,13 @@ while IFS= read -r entry; do
 done < <(tar -tf "$TARBALL")
 tar --xattrs --no-mac-metadata -xf "$TARBALL" -C "$UNPACK_DIR" --no-same-owner
 STAGED_APP="$UNPACK_DIR/$APP_NAME"
+verify_confined_symlinks "$STAGED_APP" || exit 1
+FIRST_LABORATORY_COPY="$(/usr/bin/find "$STAGED_APP" -type f \
+    \( -name '*.bak*' -o -name '*.before-*' \) -print -quit)"
+if [[ -n "$FIRST_LABORATORY_COPY" ]]; then
+    fail "El asset contiene copias de laboratorio."
+    exit 1
+fi
 [[ -d "$STAGED_APP/Contents/MacOS" && ! -L "$STAGED_APP/Contents" ]] || {
     fail "El asset no contiene un bundle de Regression válido."
     exit 1
@@ -381,7 +777,12 @@ PLIST_VERSION="$(plutil -extract CFBundleShortVersionString raw "$STAGED_APP/Con
     fail "El bundle declara la versión $PLIST_VERSION, no $VERSION."
     exit 1
 }
-ok "Bundle Regression $PLIST_VERSION preparado fuera de /Applications"
+PLIST_BUILD="$(plutil -extract CFBundleVersion raw "$STAGED_APP/Contents/Info.plist")"
+[[ "$PLIST_BUILD" == "$BUILD_NUMBER" ]] || {
+    fail "El bundle declara el build $PLIST_BUILD, no $BUILD_NUMBER."
+    exit 1
+}
+ok "Bundle Regression $PLIST_VERSION ($PLIST_BUILD) preparado fuera de /Applications"
 verify_staged_release "$STAGED_APP"
 ok "Runtime, redistribuibles y autorreparaciones del release verificados"
 if [[ "$MODE" == "verify-release" ]]; then
@@ -390,58 +791,47 @@ if [[ "$MODE" == "verify-release" ]]; then
 fi
 
 step "4/7 Componentes locales con licencia de Apple"
-WINE_ROOT="$STAGED_APP/Contents/SharedSupport/wine-root"
-GPTK_ROOT="$WINE_ROOT/lib/apple_gptk"
+STAGED_WINE_ROOT="$STAGED_APP/Contents/SharedSupport/wine-root"
+GPTK_ROOT="$STAGED_WINE_ROOT/lib/apple_gptk"
 D3DMETAL_SOURCE=""
 
 if [[ -d "$DESTINATION/Contents/SharedSupport/wine-root/lib/apple_gptk/external/D3DMetal.framework" ]]; then
     D3DMETAL_SOURCE="$DESTINATION/Contents/SharedSupport/wine-root/lib/apple_gptk"
-    GPTK_PRESERVATION_MANIFEST="$WORK_DIR/gptk-before-install.mtree"
-    (
-        cd "$D3DMETAL_SOURCE"
-        /usr/sbin/mtree -c -k type,mode,link,sha256digest \
-            | /usr/bin/sed -n '/^# \.$/,$p'
-    ) > "$GPTK_PRESERVATION_MANIFEST"
-    mkdir -p "$WINE_ROOT/lib"
-    cleanup_path "$GPTK_ROOT"
-    cp -cR "$D3DMETAL_SOURCE" "$GPTK_ROOT"
-    ok "GPTK local conservado desde la instalación anterior"
-else
-    GPTK_CANDIDATES=(
-        "$HOME/Library/Application Support/com.isaacmarovitz.Whisky/Libraries"
-        "$HOME/Library/Application Support/Mythic/Engine/wine/lib"
-        "/opt/homebrew/opt/game-porting-toolkit/lib"
-        "/usr/local/lib/game-porting-toolkit/lib"
-        "$HOME/Library/Application Support/Regression/SharedSupport"
-    )
-    for candidate in "${GPTK_CANDIDATES[@]}"; do
-        if [[ -d "$candidate/external/D3DMetal.framework" ]]; then
-            D3DMETAL_SOURCE="$candidate"
-            break
-        fi
-    done
-    if [[ -n "$D3DMETAL_SOURCE" ]]; then
-        mkdir -p "$GPTK_ROOT/external" "$GPTK_ROOT/wine/x86_64-unix" "$GPTK_ROOT/wine/x86_64-windows"
-        cp -cR "$D3DMETAL_SOURCE/external/D3DMetal.framework" "$GPTK_ROOT/external/"
-        [[ -f "$D3DMETAL_SOURCE/external/libd3dshared.dylib" ]] \
-            && cp "$D3DMETAL_SOURCE/external/libd3dshared.dylib" "$GPTK_ROOT/external/"
-        for module in atidxx64 d3d9 dcomp d3d11 d3d12 dxgi nvapi64 nvngx; do
-            [[ -f "$D3DMETAL_SOURCE/wine/x86_64-unix/$module.so" ]] \
-                && cp "$D3DMETAL_SOURCE/wine/x86_64-unix/$module.so" "$GPTK_ROOT/wine/x86_64-unix/"
-            [[ -f "$D3DMETAL_SOURCE/wine/x86_64-windows/$module.dll" ]] \
-                && cp "$D3DMETAL_SOURCE/wine/x86_64-windows/$module.dll" "$GPTK_ROOT/wine/x86_64-windows/"
-        done
-        ok "GPTK local incorporado sin redistribuirlo"
+    GPTK_3_RECEIPT="$APP_SUPPORT/Receipts/AppleGPTK/3.0-license-receipt"
+    PREVIOUS_BUNDLE_ID="$(/usr/bin/plutil -extract CFBundleIdentifier raw \
+        "$DESTINATION/Contents/Info.plist" 2>/dev/null || true)"
+    if [[ -d "$DESTINATION" && ! -L "$DESTINATION" \
+        && -f "$DESTINATION/Contents/Info.plist" \
+        && ! -L "$DESTINATION/Contents/Info.plist" \
+        && "$PREVIOUS_BUNDLE_ID" == "local.regression.launcher" ]] \
+        && path_chain_is_physical "$DESTINATION" \
+        && /usr/bin/codesign --verify --deep --strict "$DESTINATION" >/dev/null 2>&1 \
+        && verify_gptk_3_payload_authority "$D3DMETAL_SOURCE" \
+        && verify_gptk_3_receipt_authority "$GPTK_3_RECEIPT" "$D3DMETAL_SOURCE"; then
+        GPTK_PRESERVED_GENERATION="3.0"
+        GPTK_PRESERVATION_MANIFEST="$WORK_DIR/gptk-before-install.mtree"
+        (
+            cd "$D3DMETAL_SOURCE"
+            /usr/sbin/mtree -c -k type,mode,link,sha256digest \
+                | /usr/bin/sed -n '/^# \.$/,$p'
+        ) > "$GPTK_PRESERVATION_MANIFEST"
+        mkdir -p "$STAGED_WINE_ROOT/lib"
+        cleanup_path "$GPTK_ROOT"
+        cp -cR "$D3DMETAL_SOURCE" "$GPTK_ROOT"
+        ok "Apple GPTK 3.0 autorizado conservado desde la instalación anterior"
     else
-        warn "No se encontró un GPTK local; los perfiles D3DMetal quedarán no disponibles."
-        say "      Regression no puede aceptar por ti la licencia de Apple ni redistribuir esos binarios."
+        warn "El GPTK anterior no acredita generación, hashes, topología y recibo 3.0."
+        say "      No se copiará al bundle nuevo; Regression conservará el runtime general."
     fi
+else
+    warn "Apple GPTK aún no está instalado en Regression; la instalación base continuará."
+    say "      Regression te guiará para instalar Apple GPTK desde Apple cuando la abras."
 fi
 
 # Los enlaces a perfiles D3DMetal no viajan activos en el asset público porque su destino
 # propietario se omite. Se reconstruyen únicamente cuando los módulos locales existen.
 if [[ -d "$GPTK_ROOT/wine" ]]; then
-    PROFILE_ROOT="$WINE_ROOT/lib/profiles"
+    PROFILE_ROOT="$STAGED_WINE_ROOT/lib/profiles"
     mkdir -p "$PROFILE_ROOT"
     [[ -f "$GPTK_ROOT/wine/x86_64-windows/dxgi.dll" ]] \
         && ln -sfn ../apple_gptk/wine "$PROFILE_ROOT/grim-dawn"
@@ -470,30 +860,214 @@ while IFS= read -r -d '' link; do
     if [[ ! -e "$link" ]]; then
         unlink "$link"
     fi
-done < <(find "$WINE_ROOT/lib/profiles" "$GPTK_ROOT" -type l -print0 2>/dev/null)
+done < <(find "$STAGED_WINE_ROOT/lib/profiles" "$GPTK_ROOT" -type l -print0 2>/dev/null)
 
-step "5/7 Botella propia y Steam"
-APP_SUPPORT="$HOME/Library/Application Support/Regression"
-BOTTLE="$APP_SUPPORT/Bottles/Steam"
-mkdir -p "$BOTTLE/drive_c" "$APP_SUPPORT/Cache"
-chmod 700 "$APP_SUPPORT" "$BOTTLE"
+step "5/7 Firma y verificación del bundle preparado"
+ENTITLEMENTS="$WORK_DIR/Regression.entitlements"
+cat > "$ENTITLEMENTS" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
+<key>com.apple.security.device.audio-input</key><true/>
+<key>com.apple.security.device.camera</key><true/>
+</dict></plist>
+EOF
 
-FONTS_BUNDLE="$STAGED_APP/Contents/SharedSupport/fonts"
-if [[ -d "$FONTS_BUNDLE" ]]; then
-    mkdir -p "$BOTTLE/drive_c/windows/Fonts"
-    find "$FONTS_BUNDLE" -maxdepth 1 -type f \( -iname '*.otf' -o -iname '*.ttf' -o -iname '*.ttc' \) \
-        -exec cp {} "$BOTTLE/drive_c/windows/Fonts/" \;
-    ok "Fuentes OFL instaladas en la botella"
+xattr -dr com.apple.quarantine "$STAGED_APP" 2>/dev/null || true
+IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+    | awk -F'"' '/Developer ID Application:/ { print $2; exit }')"
+if [[ -z "$IDENTITY" ]]; then
+    IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+        | awk -F'"' '/Apple Development:/ { print $2; exit }')"
+fi
+if [[ -n "$IDENTITY" ]]; then
+    codesign --force --deep --options runtime --entitlements "$ENTITLEMENTS" \
+        --sign "$IDENTITY" "$STAGED_APP"
+    ok "Bundle firmado con una identidad local válida"
+else
+    codesign --force --deep --entitlements "$ENTITLEMENTS" --sign - "$STAGED_APP"
+    warn "No hay identidad Apple local; se aplicó firma ad hoc."
+fi
+codesign --verify --deep --strict "$STAGED_APP"
+for entitlement in \
+    com.apple.security.cs.allow-unsigned-executable-memory \
+    com.apple.security.device.audio-input \
+    com.apple.security.device.camera
+do
+    entitlement_key="${entitlement//./\\.}"
+    value="$(codesign -d --entitlements :- "$STAGED_APP" 2>/dev/null \
+        | plutil -extract "$entitlement_key" raw -o - -- -)"
+    [[ "$value" == "true" ]] || {
+        fail "La firma perdió la capacidad $entitlement."
+        exit 1
+    }
+done
+if codesign -d --entitlements :- "$STAGED_APP" 2>/dev/null \
+    | plutil -extract 'com\.apple\.security\.automation\.apple-events' raw -o - -- - \
+        >/dev/null 2>&1; then
+    fail "La firma conserva una capacidad de Apple Events que Regression no utiliza."
+    exit 1
+fi
+ok "Firma y capacidades verificadas"
+
+if [[ -n "$WAIT_FOR_PID" ]]; then
+    say "  Esperando a que Regression cierre limpiamente (PID $WAIT_FOR_PID)…"
+    for _ in $(seq 1 120); do
+        kill -0 "$WAIT_FOR_PID" 2>/dev/null || break
+        sleep 1
+    done
+    kill -0 "$WAIT_FOR_PID" 2>/dev/null && {
+        fail "Regression no terminó a tiempo; la instalación anterior permanece intacta."
+        exit 1
+    }
 fi
 
+step "6/7 Sustitución transaccional"
+mkdir -p "$INSTALL_PREFIX"
+if [[ -e "$DESTINATION" || -L "$DESTINATION" ]]; then
+    APP_EXISTED=1
+    BACKUP_PATH="$INSTALL_PREFIX/.Regression.app.backup-$VERSION-$$"
+    [[ ! -e "$BACKUP_PATH" && ! -L "$BACKUP_PATH" ]] || {
+        fail "Ya existe el destino temporal de rollback: $BACKUP_PATH"
+        exit 1
+    }
+    REPLACEMENT_STARTED=1
+    mv "$DESTINATION" "$BACKUP_PATH"
+else
+    REPLACEMENT_STARTED=1
+fi
+mv "$STAGED_APP" "$DESTINATION"
+
+codesign --verify --deep --strict "$DESTINATION"
+if [[ -n "$GPTK_PRESERVATION_MANIFEST" ]]; then
+    [[ "$GPTK_PRESERVED_GENERATION" == "3.0" ]] || {
+        fail "La preservación GPTK perdió la identidad de generación exacta."
+        rollback 1
+    }
+    verify_gptk_3_payload_authority \
+        "$DESTINATION/Contents/SharedSupport/wine-root/lib/apple_gptk" \
+        || {
+            fail "El GPTK preservado no conserva la autoridad 3.0 tras el cutover."
+            rollback 1
+        }
+    verify_gptk_3_receipt_authority "$GPTK_3_RECEIPT" \
+        "$DESTINATION/Contents/SharedSupport/wine-root/lib/apple_gptk" \
+        || {
+            fail "El recibo autorizado ya no coincide con el GPTK 3.0 preservado."
+            rollback 1
+        }
+    GPTK_INSTALLED_MANIFEST="$WORK_DIR/gptk-after-install.mtree"
+    (
+        cd "$DESTINATION/Contents/SharedSupport/wine-root/lib/apple_gptk"
+        /usr/sbin/mtree -c -k type,mode,link,sha256digest \
+            | /usr/bin/sed -n '/^# \.$/,$p'
+    ) > "$GPTK_INSTALLED_MANIFEST"
+    /usr/bin/cmp -s "$GPTK_PRESERVATION_MANIFEST" "$GPTK_INSTALLED_MANIFEST" || {
+        fail "La instalación no conservó exactamente los hashes, modos y enlaces GPTK."
+        rollback 1
+    }
+    ok "GPTK local verificado byte a byte tras la sustitución"
+fi
+
+step "7/7 Runtime canónico, botella propia y Steam"
+WINE_ROOT="$DESTINATION/Contents/SharedSupport/wine-root"
 WINE="$WINE_ROOT/bin/wine"
 WINESERVER="$WINE_ROOT/bin/wineserver"
 [[ -x "$WINE" && -x "$WINESERVER" ]] || {
-    fail "El runtime no contiene wine y wineserver ejecutables."
+    fail "El runtime canónico no contiene wine y wineserver ejecutables."
     exit 1
 }
+
+run_canonical_wine_smoke() {
+    local canonical_wine_root="$1"
+    local smoke_prefix="$WORK_DIR/wine-smoke-prefix"
+    local wine_version
+
+    wine_version="$(env WINEPREFIX="$smoke_prefix" WINEDEBUG=-all \
+        /usr/bin/arch -x86_64 "$canonical_wine_root/bin/wine" --version 2>&1)" || {
+        fail "El arranque público de Wine no puede cargar ntdll.so desde la ruta canónica."
+        return 1
+    }
+    [[ "$wine_version" == wine-* ]] || {
+        fail "El arranque público de Wine devolvió una versión inesperada: $wine_version"
+        return 1
+    }
+    cleanup_path "$smoke_prefix"
+}
+
+run_canonical_wine_smoke "$WINE_ROOT"
+ok "Wine arrancó desde /Applications/Regression.app"
+
+BOTTLES_ROOT="$APP_SUPPORT/Bottles"
+if [[ -L "$APP_SUPPORT" || ( -e "$APP_SUPPORT" && ! -d "$APP_SUPPORT" ) ]]; then
+    fail "El soporte de Regression no es un directorio físico seguro."
+    exit 1
+fi
+if [[ ! -d "$APP_SUPPORT" ]]; then
+    mkdir -m 700 "$APP_SUPPORT"
+fi
+if [[ -L "$BOTTLES_ROOT" || ( -e "$BOTTLES_ROOT" && ! -d "$BOTTLES_ROOT" ) ]]; then
+    fail "El directorio de botellas de Regression no es físico ni seguro."
+    exit 1
+fi
+if [[ ! -d "$BOTTLES_ROOT" ]]; then
+    mkdir -m 700 "$BOTTLES_ROOT"
+fi
+mkdir -p "$APP_SUPPORT/Cache"
+
+if [[ -L "$BOTTLE" || ( -e "$BOTTLE" && ! -d "$BOTTLE" ) ]]; then
+    fail "La botella Steam de Regression no es un directorio físico seguro."
+    exit 1
+fi
+if [[ -d "$BOTTLE" ]]; then
+    BOTTLE_EXISTED=1
+fi
+
+BOTTLE_STAGE="$BOTTLES_ROOT/.Steam.install-$VERSION-$$"
+[[ ! -e "$BOTTLE_STAGE" && ! -L "$BOTTLE_STAGE" ]] || {
+    fail "Ya existe el staging transaccional de la botella: $BOTTLE_STAGE"
+    exit 1
+}
+mkdir -m 700 "$BOTTLE_STAGE"
+
+SOURCE_STEAM_APPS="$BOTTLE/drive_c/Program Files (x86)/Steam/steamapps"
+if [[ $BOTTLE_EXISTED -eq 1 ]]; then
+    if [[ -L "$SOURCE_STEAM_APPS" \
+        || ( -e "$SOURCE_STEAM_APPS" && ! -d "$SOURCE_STEAM_APPS" ) ]]; then
+        fail "steamapps de Regression existe pero no es un directorio físico."
+        exit 1
+    fi
+    # El estado pequeño de Wine se prepara en paralelo. steamapps queda en su único sitio físico
+    # hasta el cutover de la botella: no se copian ni se enlazan decenas de GB de juegos.
+    /usr/bin/rsync -a --extended-attributes \
+        --exclude='/drive_c/Program Files (x86)/Steam/steamapps' \
+        --exclude='/drive_c/Program Files (x86)/Steam/steamapps/***' \
+        "$BOTTLE/" "$BOTTLE_STAGE/"
+    [[ ! -e "$BOTTLE_STAGE/drive_c/Program Files (x86)/Steam/steamapps" \
+        && ! -L "$BOTTLE_STAGE/drive_c/Program Files (x86)/Steam/steamapps" ]] || {
+        fail "El staging intentó duplicar la biblioteca de juegos."
+        exit 1
+    }
+fi
+
+# Una instalación nueva debe ser utilizable sin estado heredado. SteamSetup no siempre crea
+# steamapps hasta el primer arranque, pero Regression necesita una raíz física propia.
+STEAM_DIR="$BOTTLE_STAGE/drive_c/Program Files (x86)/Steam"
+STEAM_APPS="$STEAM_DIR/steamapps"
+mkdir -p "$STEAM_APPS"
+chmod 700 "$STEAM_APPS"
+
+FONTS_BUNDLE="$DESTINATION/Contents/SharedSupport/fonts"
+if [[ -d "$FONTS_BUNDLE" ]]; then
+    mkdir -p "$BOTTLE_STAGE/drive_c/windows/Fonts"
+    find "$FONTS_BUNDLE" -maxdepth 1 -type f \( -iname '*.otf' -o -iname '*.ttf' -o -iname '*.ttc' \) \
+        -exec cp {} "$BOTTLE_STAGE/drive_c/windows/Fonts/" \;
+    ok "Fuentes OFL preparadas en la botella transaccional"
+fi
+
 WINE_ENV=(
-    "WINEPREFIX=$BOTTLE"
+    "WINEPREFIX=$BOTTLE_STAGE"
     "WINEDEBUG=-all"
     "WINEDLLOVERRIDES=mscoree,mshtml="
     "WINEDLLPATH=$WINE_ROOT/lib/wine"
@@ -526,7 +1100,7 @@ run_wine_with_timeout() {
     return "$status"
 }
 
-STEAM_EXE="$BOTTLE/drive_c/Program Files (x86)/Steam/Steam.exe"
+STEAM_EXE="$STEAM_DIR/Steam.exe"
 if [[ ! -f "$STEAM_EXE" ]]; then
     STEAM_SETUP="$WORK_DIR/SteamSetup.exe"
     if [[ -n "$LOCAL_STEAM_SETUP" ]]; then
@@ -562,127 +1136,40 @@ if [[ ! -f "$STEAM_EXE" ]]; then
         fail "Steam no quedó instalado; no se publicará un falso estado correcto."
         exit 1
     }
-    ok "Steam instalado en la botella propia"
+    ok "Steam instalado en la botella transaccional propia"
 else
-    ok "La botella y Steam existentes se conservaron"
+    ok "Steam existente conservado en la botella transaccional"
 fi
 
-# Switch2Bridge necesita que winebus consulte SDL. Se cambia únicamente la botella propia y se
-# conserva el registro anterior para rollback si la instalación completa falla.
-if [[ -f "$BOTTLE/system.reg" ]] && ! grep -q '"Enable SDL"=dword:00000001' "$BOTTLE/system.reg"; then
-    BOTTLE_REGISTRY_BACKUP="$WORK_DIR/system.reg.before-switch2bridge"
-    cp "$BOTTLE/system.reg" "$BOTTLE_REGISTRY_BACKUP"
+# Switch2Bridge necesita que winebus consulte SDL. Este cambio también ocurre en staging.
+if [[ -f "$BOTTLE_STAGE/system.reg" ]] \
+    && ! grep -q '"Enable SDL"=dword:00000001' "$BOTTLE_STAGE/system.reg"; then
     printf '\n[System\\\\CurrentControlSet\\\\Services\\\\winebus\\\\Parameters] 0\n"Enable SDL"=dword:00000001\n' \
-        >> "$BOTTLE/system.reg"
-    ok "Bus SDL activado para Switch2Bridge"
+        >> "$BOTTLE_STAGE/system.reg"
+    ok "Bus SDL preparado para Switch2Bridge"
 fi
 
-step "6/7 Firma y verificación del bundle preparado"
-ENTITLEMENTS="$WORK_DIR/Regression.entitlements"
-cat > "$ENTITLEMENTS" <<'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>com.apple.security.automation.apple-events</key><true/>
-<key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
-<key>com.apple.security.device.audio-input</key><true/>
-<key>com.apple.security.device.camera</key><true/>
-</dict></plist>
-EOF
-
-xattr -dr com.apple.quarantine "$STAGED_APP" 2>/dev/null || true
-IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
-    | awk -F'"' '/Developer ID Application:/ { print $2; exit }')"
-if [[ -z "$IDENTITY" ]]; then
-    IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
-        | awk -F'"' '/Apple Development:/ { print $2; exit }')"
-fi
-if [[ -n "$IDENTITY" ]]; then
-    codesign --force --deep --options runtime --entitlements "$ENTITLEMENTS" \
-        --sign "$IDENTITY" "$STAGED_APP"
-    ok "Bundle firmado con una identidad local válida"
+if [[ $BOTTLE_EXISTED -eq 1 ]]; then
+    BOTTLE_BACKUP="$BOTTLES_ROOT/.Steam.rollback-$VERSION-$$"
+    [[ ! -e "$BOTTLE_BACKUP" && ! -L "$BOTTLE_BACKUP" ]] || {
+        fail "Ya existe el rollback transaccional de la botella: $BOTTLE_BACKUP"
+        exit 1
+    }
+    BOTTLE_REPLACEMENT_STARTED=1
+    mv "$BOTTLE" "$BOTTLE_BACKUP"
+    BACKUP_STEAM_APPS="$BOTTLE_BACKUP/drive_c/Program Files (x86)/Steam/steamapps"
+    if [[ -d "$BACKUP_STEAM_APPS" && ! -L "$BACKUP_STEAM_APPS" ]]; then
+        BOTTLE_STEAMAPPS_PRESERVED=1
+        cleanup_path "$STEAM_APPS"
+        mkdir -p "$(dirname "$STEAM_APPS")"
+        mv "$BACKUP_STEAM_APPS" "$STEAM_APPS"
+    fi
 else
-    codesign --force --deep --entitlements "$ENTITLEMENTS" --sign - "$STAGED_APP"
-    warn "No hay identidad Apple local; se aplicó firma ad hoc."
+    BOTTLE_REPLACEMENT_STARTED=1
 fi
-codesign --verify --deep --strict "$STAGED_APP"
-for entitlement in \
-    com.apple.security.automation.apple-events \
-    com.apple.security.cs.allow-unsigned-executable-memory \
-    com.apple.security.device.audio-input \
-    com.apple.security.device.camera
-do
-    entitlement_key="${entitlement//./\\.}"
-    value="$(codesign -d --entitlements :- "$STAGED_APP" 2>/dev/null \
-        | plutil -extract "$entitlement_key" raw -o - -- -)"
-    [[ "$value" == "true" ]] || {
-        fail "La firma perdió la capacidad $entitlement."
-        exit 1
-    }
-done
-ok "Firma y capacidades verificadas"
+mv "$BOTTLE_STAGE" "$BOTTLE"
+ok "Botella propia promovida sin duplicar steamapps"
 
-if [[ -n "$WAIT_FOR_PID" ]]; then
-    say "  Esperando a que Regression cierre limpiamente (PID $WAIT_FOR_PID)…"
-    for _ in $(seq 1 120); do
-        kill -0 "$WAIT_FOR_PID" 2>/dev/null || break
-        sleep 1
-    done
-    kill -0 "$WAIT_FOR_PID" 2>/dev/null && {
-        fail "Regression no terminó a tiempo; la instalación anterior permanece intacta."
-        exit 1
-    }
-fi
-
-step "7/7 Sustitución transaccional"
-mkdir -p "$INSTALL_PREFIX"
-if [[ -e "$DESTINATION" || -L "$DESTINATION" ]]; then
-    BACKUP_PATH="$INSTALL_PREFIX/.Regression.app.backup-$VERSION-$$"
-    [[ ! -e "$BACKUP_PATH" && ! -L "$BACKUP_PATH" ]] || {
-        fail "Ya existe el destino temporal de rollback: $BACKUP_PATH"
-        exit 1
-    }
-    mv "$DESTINATION" "$BACKUP_PATH"
-fi
-REPLACEMENT_STARTED=1
-mv "$STAGED_APP" "$DESTINATION"
-
-# Wine crea un caché temporal con un enlace a ntdll.so. Al preparar la botella desde el bundle
-# de staging, ese enlace conserva la ruta anterior aunque la app se mueva correctamente. Solo se
-# retargetean los enlaces que apuntan exactamente a este staging; no se toca ningún otro Wine.
-WINE_TEMP_ROOT="${TMPDIR:-/tmp}"
-shopt -s nullglob
-cached_ntdll_paths=(
-    "$WINE_TEMP_ROOT"/ntdll.so
-    "$WINE_TEMP_ROOT"/*/ntdll.so
-    "$WINE_TEMP_ROOT"/*/*/ntdll.so
-)
-shopt -u nullglob
-for cached_ntdll in "${cached_ntdll_paths[@]}"; do
-    [[ -L "$cached_ntdll" ]] || continue
-    cached_target="$(readlink "$cached_ntdll")"
-    case "$cached_target" in
-        "$STAGED_APP"/*)
-            relative_target="${cached_target#"$STAGED_APP"/}"
-            ln -sfn "$DESTINATION/$relative_target" "$cached_ntdll"
-            ;;
-    esac
-done
-
-codesign --verify --deep --strict "$DESTINATION"
-if [[ -n "$GPTK_PRESERVATION_MANIFEST" ]]; then
-    GPTK_INSTALLED_MANIFEST="$WORK_DIR/gptk-after-install.mtree"
-    (
-        cd "$DESTINATION/Contents/SharedSupport/wine-root/lib/apple_gptk"
-        /usr/sbin/mtree -c -k type,mode,link,sha256digest \
-            | /usr/bin/sed -n '/^# \.$/,$p'
-    ) > "$GPTK_INSTALLED_MANIFEST"
-    /usr/bin/cmp -s "$GPTK_PRESERVATION_MANIFEST" "$GPTK_INSTALLED_MANIFEST" || {
-        fail "La instalación no conservó exactamente los hashes, modos y enlaces GPTK."
-        rollback 1
-    }
-    ok "GPTK local verificado byte a byte tras la sustitución"
-fi
 if [[ -x "$LSREGISTER" ]]; then
     "$LSREGISTER" -f "$DESTINATION"
 fi
@@ -742,6 +1229,11 @@ if [[ -n "$BACKUP_PATH" ]]; then
 fi
 
 COMMITTED=1
+if [[ -n "$BOTTLE_BACKUP" ]]; then
+    cleanup_path "$BOTTLE_BACKUP" \
+        || warn "No se pudo retirar el staging antiguo de la botella; no contiene steamapps."
+    BOTTLE_BACKUP=""
+fi
 ok "Regression $VERSION instalada en $DESTINATION"
 if [[ $LAUNCH -eq 1 ]]; then
     open "$DESTINATION"

@@ -1,8 +1,8 @@
 # Evolución de runtimes, rendimiento y autonomía
 
-Fecha de revisión del inventario: **28 de julio de 2026**. Este documento define cómo Regression
-puede adoptar tecnologías nuevas sin degradar un juego que ya funciona ni convertir CrossOver en
-una dependencia del motor propio.
+Fecha de revisión del inventario: **13 de agosto de 2026**. Este documento define cómo Regression
+puede adoptar tecnologías nuevas sin degradar un juego que ya funciona y manteniendo un runtime
+FOSS, una botella y una biblioteca completamente propios.
 
 ## Dos afirmaciones distintas
 
@@ -32,7 +32,6 @@ documental, no un actualizador, y nunca descarga ni activa componentes.
 | MoltenVK | 1.2.10 | 1.4.2 | Candidato conjunto, no reemplazo global aislado. |
 | Wine vkd3d | 1.18 | 1.18 revisado | Baseline D3D12; conflicto `dxgi` aún protegido. |
 | vkd3d-proton | Sin baseline | 3.0.1 | Línea separada de investigación, no actualización directa. |
-| CrossOver | 26.3.0 observado | Gestionado por CrossOver | Referencia licenciada, nunca runtime propio. |
 
 Fuentes oficiales del snapshot:
 
@@ -50,7 +49,7 @@ Fuentes oficiales del snapshot:
 Las versiones se actualizan únicamente después de contrastar la fuente oficial y registrar la
 fecha. “Hay una versión nueva” significa **candidato de investigación**, no “actualizar estable”.
 
-## Esquema v12
+## Esquema v14
 
 La base local conserva las cinco áreas de evolución tecnológica de v9:
 
@@ -67,7 +66,7 @@ El esquema v10 añade el expediente de investigación que faltaba entre “candi
 
 | Tabla | Función |
 |---|---|
-| `compatibility_research_cases` | Síntoma reproducible, referencia CrossOver, estado y conclusión. |
+| `compatibility_research_cases` | Síntoma reproducible, baseline Regression, estado y conclusión. |
 | `research_hypotheses` | Causas ordenadas y predicciones falsables. |
 | `research_experiments` | Una dimensión cambiada, aislamiento, rollback y run exacto. |
 | `research_gate_results` | Render, entrada, opciones, gameplay, independencia, matriz y rollback. |
@@ -82,6 +81,10 @@ El esquema v12 añade `run_processes` para que un launcher y el ejecutable real 
 dos experimentos ficticios. También distingue un preflight exacto anterior al lanzamiento de una
 instantánea tomada al observar el inicio desde la interfaz completa de Steam. Ambas rutas conservan
 la misma matriz; la procedencia temporal nunca modifica por sí sola un veredicto.
+
+El esquema v13 incorpora el ciclo durable de reparaciones compiladas. El esquema v14 migra la
+autoridad de I+D al baseline de Regression y mantiene las referencias antiguas solo para leer
+expedientes históricos, nunca como fuente operativa.
 
 Triggers de SQLite y la política Swift bloquean una promoción salvo que sea por juego, tenga
 fuente y huella verificadas, esté aislada, disponga de rollback, identifique baseline/candidato,
@@ -172,16 +175,13 @@ La línea de trabajo es paralela, no una migración destructiva:
    rendimiento;
 5. conservar el subconjunto Rosetta que macOS permita para títulos heredados cuando aporte valor.
 
-## CrossOver como referencia temporal
+## Autonomía del runtime
 
-CrossOver permite establecer un resultado esperado y observar configuración pública, logs,
-versiones y comportamiento. Regression no copia binarios propietarios, forks privados,
-`cxcompatdb` ni licencias. Toda solución independiente se reconstruye con fuentes abiertas o con
-componentes Apple instalados legítimamente por el usuario.
-
-Cuando Regression acumule perfiles propios reproducibles y alternativas modernas medidas, la
-ausencia de CrossOver afectará únicamente al backend de referencia: los blindados del motor propio,
-la base de aprendizaje, las recetas y la selección por juego seguirán siendo locales.
+El producto operativo solo usa componentes incluidos y verificados por Regression o recursos Apple
+aportados y autorizados localmente por el usuario. No descubre, invoca, actualiza ni consulta
+CrossOver o CodeWeavers. Los baselines, candidatos, recetas y decisiones por juego se obtienen de
+ejecuciones propias y fuentes FOSS oficiales. Los expedientes antiguos pueden citar comparaciones
+de terceros como contexto fechado, pero esas referencias no son un backend ni un requisito.
 
 ## Diagnóstico
 

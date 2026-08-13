@@ -1,6 +1,6 @@
 --- a/dlls/ntdll/unix/loader.c
 +++ b/dlls/ntdll/unix/loader.c
-@@ -382,8 +382,353 @@
+@@ -382,8 +382,411 @@
      dll_paths = new_dll_paths;
      if (path_len > dll_path_maxlen)
          dll_path_maxlen = path_len;
@@ -36,7 +36,7 @@
 +        return 0;
 +    return regression_executable_is( name );
  }
-
+ 
 +static unsigned int regression_route_count( const char *variable )
 +{
 +    const char *value = getenv( variable );
@@ -77,27 +77,54 @@
 +    },
 +};
 +
-+static const char *regression_builtin_external_d3dmetal_root(void)
++static int regression_executable_requires_gptk_4_0b2(void)
 +{
-+    static char resolved_root[PATH_MAX];
-+    char candidate[PATH_MAX];
-+    const char *home;
-+    int length;
++    return regression_executable_is( "tq2-win64-shipping.exe" ) ||
++           regression_executable_is( "borderlands4.exe" );
++}
 +
-+    if (!regression_executable_is( "tq2-win64-shipping.exe" ) &&
-+        !regression_executable_is( "borderlands4.exe" )) return NULL;
-+    if (!(home = getenv( "HOME" )) || !home[0]) return NULL;
-+    length = snprintf( candidate, sizeof(candidate),
-+                       "%s/Library/Application Support/Regression/Components/"
-+                       "AppleGPTK/4.0b2/wine", home );
-+    if (length < 0 || (size_t)length >= sizeof(candidate)) return NULL;
-+    if (!realpath( candidate, resolved_root )) return NULL;
-+    return resolved_root;
++static const char *regression_internal_gptk_3_0_profile_suffix(void)
++{
++    if (regression_executable_is( "grim dawn.exe" ))
++        return "/lib/profiles/grim-dawn";
++    if (regression_executable_is( "dd2.exe" ))
++        return "/lib/profiles/dragons-dogma-2";
++    if (regression_executable_is( "dsclient-win64-shipping.exe" ))
++        return "/lib/profiles/dragonsword";
++    return NULL;
++}
++
++static int regression_internal_gptk_3_0_is_verified(void)
++{
++    const char *verified = getenv( "REGRESSION_INTERNAL_GPTK_3_0_VERIFIED" );
++
++    return verified && !strcmp( verified, "1" );
++}
++
++static int regression_internal_profile_is_accessible( const char *root, const char *suffix )
++{
++    char *candidate;
++    char resolved[PATH_MAX];
++    struct stat st;
++    int accessible = 0;
++
++    if (root && root[0])
++    {
++        if (asprintf( &candidate, "%s%s", root, suffix ) < 0) return 0;
++    }
++    else
++    {
++        if (asprintf( &candidate, "%s/../..%s", ntdll_dir, suffix + 4 ) < 0) return 0;
++    }
++    if (realpath( candidate, resolved ) && !stat( resolved, &st ) && S_ISDIR( st.st_mode ) &&
++        !access( resolved, R_OK | X_OK )) accessible = 1;
++    free( candidate );
++    return accessible;
 +}
 +
 +static const char *regression_external_d3dmetal_root(void)
 +{
-+    const char *builtin_root, *legacy_root;
++    const char *legacy_root;
 +    unsigned int i, count;
 +    char executable_variable[80], root_variable[80];
 +
@@ -118,7 +145,6 @@
 +        legacy_root = getenv( root_variable );
 +        if (legacy_root && legacy_root[0]) return legacy_root;
 +    }
-+    if ((builtin_root = regression_builtin_external_d3dmetal_root())) return builtin_root;
 +    return NULL;
 +}
 +
@@ -217,8 +243,39 @@
 +    int is_dragonsword = regression_executable_is( "dsclient-win64-shipping.exe" );
 +    int is_heroes_hammerwatch_2 = regression_executable_is( "hwr2.exe" );
 +    int is_external_d3dmetal = external_d3dmetal_wine_root != NULL;
++    const char *internal_gptk_3_0_suffix = regression_internal_gptk_3_0_profile_suffix();
 +    const char *suffix;
 +    char *path;
++
++    /* These three certified profiles contain one indivisible GPTK 3.0 route.
++     * Directory presence is not authority: the launcher must first verify the
++     * exact generation's receipt and hashes. Neither an inherited marker nor
++     * a preserved 2.1 payload may select this route. */
++    if (internal_gptk_3_0_suffix && !regression_internal_gptk_3_0_is_verified())
++    {
++        ERR( "required internal GPTK 3.0 component is unavailable or unauthorized for this process\n" );
++        exit( 126 );
++    }
++
++    /* A missing or malformed verified profile must not fall through to the
++     * global DXMT/DXVK tree, even when Steam created the loader process. */
++    if (internal_gptk_3_0_suffix &&
++        !regression_internal_profile_is_accessible( root, internal_gptk_3_0_suffix ))
++    {
++        ERR( "required internal GPTK 3.0 profile is unavailable or invalid: %s\n",
++             internal_gptk_3_0_suffix );
++        exit( 126 );
++    }
++
++    /* The application and launcher validate the Apple license receipt and
++     * exact component before exporting a route. A compiled GPTK process must
++     * never fall back to the global DXMT/DXVK tree merely because its launch
++     * originated from Steam instead of Regression's game button. */
++    if (regression_executable_requires_gptk_4_0b2() && !is_external_d3dmetal)
++    {
++        ERR( "external D3DMetal component is unavailable or unauthorized for this process\n" );
++        exit( 126 );
++    }
 +
 +    if (!backend || !backend[0])
 +    {
@@ -355,18 +412,37 @@
  static void set_dll_path(void)
  {
      char *p, *path = getenv( "WINEDLLPATH" );
-@@ -2258,6 +2603,7 @@
+@@ -2246,18 +2589,19 @@ static void start_main_thread(void)
+     {
+         void *cxcompatdb = NULL;
+         char *name = NULL;
+ 
+         asprintf( &name, "%s/cxcompatdb.so", ntdll_dir );
+         if (name)
+         {
+             cxcompatdb = dlopen( name, RTLD_LOCAL | RTLD_LAZY );
+             if (!cxcompatdb)
+                 WARN( "error loading cxcompatdb.so: %s\n", dlerror() );
+             free(name);
          }
      }
-
+ 
 +    regression_set_graphics_backend();
-
      server_init_process_done();
  }
-@@ -2613,6 +2959,7 @@
+ 
+ #ifdef __ANDROID__
+@@ -2607,12 +2951,13 @@ static void check_command_line( int argc, char *argv[] )
+ /***********************************************************************
+  *           __wine_main
+  *
+  * Main entry point called by the wine loader.
   */
  DECLSPEC_EXPORT void __wine_main( int argc, char *argv[] )
  {
 +    regression_redirect_bootstrap( argc, argv );
      main_argc = argc;
      main_argv = argv;
+ 
+     init_paths();
+     if (!getenv( "WINELOADERNOEXEC" ) || argc <= 1) check_command_line( argc, argv );

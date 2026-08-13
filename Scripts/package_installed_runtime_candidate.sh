@@ -5,10 +5,10 @@ set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASELINE_APP="${REGRESSION_CANDIDATE_BASELINE_APP:-/Applications/Regression.app}"
-BASELINE_VERSION="1.10.0"
-BASELINE_BUILD_NUMBER="35"
-TARGET_VERSION="1.10.1"
-TARGET_BUILD_NUMBER="36"
+BASELINE_VERSION="1.10.1"
+BASELINE_BUILD_NUMBER="36"
+TARGET_VERSION="1.11.0"
+TARGET_BUILD_NUMBER="37"
 OUTPUT_ROOT="${REGRESSION_RELEASE_OUTPUT_DIR:-$ROOT/build/release-$TARGET_VERSION}"
 WORK_DIR=""
 GPTK_PROFILE_LINKS=(
@@ -58,7 +58,7 @@ printf 'Promoción pública: Regression %s (%s) -> %s (%s).\n' \
 
 # Esta puerta usa exclusivamente los PIN del artefacto público instalado. Los PIN del bundle
 # de desarrollo permanecen en verify-protected-state.sh y no se mezclan con esta variante.
-"$ROOT/build/verify-public-installed-state.sh" --baseline-1.10.0
+"$ROOT/build/verify-public-installed-state.sh" --release-1.10.1
 
 PLIST="$BASELINE_APP/Contents/Info.plist"
 [[ "$(plutil -extract CFBundleIdentifier raw "$PLIST")" == "local.regression.launcher" ]] \
@@ -243,7 +243,7 @@ team="$(codesign -dv --verbose=4 "$CANDIDATE_APP" 2>&1 \
 [[ "$signature" == "adhoc" && "$team" == "not set" ]] \
     || fail "la release pública no tiene firma ad hoc sin identidad"
 
-ASSET_NAME="Regression-${TARGET_VERSION}-macos-arm64.tar.zst"
+ASSET_NAME="Regression-${TARGET_VERSION}-macos-arm64.tar.gz"
 ASSET="$OUTPUT_ROOT/$ASSET_NAME"
 CHECKSUM="$ASSET.sha256"
 INSTALLER="$OUTPUT_ROOT/install_regression.sh"
@@ -253,18 +253,18 @@ ASSET_TEMP="$WORK_DIR/$ASSET_NAME"
 CHECKSUM_TEMP="$WORK_DIR/$ASSET_NAME.sha256"
 INSTALLER_TEMP="$WORK_DIR/install_regression.sh"
 COPYFILE_DISABLE=1 tar --xattrs --no-mac-metadata \
-    -C "$WORK_DIR" -caf "$ASSET_TEMP" Regression.app
+    -C "$WORK_DIR" -czf "$ASSET_TEMP" Regression.app
 ASSET_SHA="$(shasum -a 256 "$ASSET_TEMP" | awk '{ print $1 }')"
 printf '%s  %s\n' "$ASSET_SHA" "$ASSET_NAME" > "$CHECKSUM_TEMP"
 
 "$ROOT/build/verify-installed-runtime-candidate.sh" \
     "$ASSET_TEMP" "$CHECKSUM_TEMP" "$BASELINE_APP"
 "$ROOT/build/verify-release-asset.sh" \
-    "$ASSET_TEMP" "$CHECKSUM_TEMP" "$TARGET_VERSION"
+    "$ASSET_TEMP" "$CHECKSUM_TEMP" "$TARGET_VERSION" "$TARGET_BUILD_NUMBER"
 
 # El empaquetado es de solo lectura respecto al estado instalado y a la botella. Repetir la
 # misma puerta después de verificar el tar demuestra que ambos siguen en el estado inicial.
-"$ROOT/build/verify-public-installed-state.sh" --baseline-1.10.0
+"$ROOT/build/verify-public-installed-state.sh" --release-1.10.1
 install -m 755 "$ROOT/Scripts/install_regression.sh" "$INSTALLER_TEMP"
 bash -n "$INSTALLER_TEMP"
 cmp -s "$ROOT/Scripts/install_regression.sh" "$INSTALLER_TEMP" \

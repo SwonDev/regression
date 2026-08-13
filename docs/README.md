@@ -12,6 +12,7 @@ corresponda a tu objetivo y consulta `AGENTS.md` antes de cambiar runtime, perfi
 | Preparar una prueba reproducible | [Preflight y evidencia](game-test-readiness.md) |
 | Entender datos, perfiles y certificaciones | [Plataforma de compatibilidad](compatibility-platform.md) |
 | Revisar runtimes y autorreparación | [Evolución tecnológica](runtime-evolution.md) |
+| Preparar D3DMetal legalmente | [Apple GPTK: instalación asistida](apple-gptk-onboarding.md) |
 | Auditar la aplicación Swift/macOS | [Auditoría nativa](native-app-audit.md) |
 | Entender el canal de autoactualización | [Actualizaciones automáticas](automatic-updates.md) |
 | Mantener una única app instalada | [Instalación canónica](canonical-installation.md) |

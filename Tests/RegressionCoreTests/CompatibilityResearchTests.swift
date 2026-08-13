@@ -15,8 +15,13 @@ final class CompatibilityResearchTests: XCTestCase {
             appID: "501",
             gameName: "Research Game",
             symptom: "La imagen parpadea al entrar en gameplay.",
-            expectedBehavior: "CrossOver renderiza la misma escena sin parpadeos."
+            expectedBehavior: "El baseline estable de Regression renderiza la escena sin parpadeos."
         )
+        XCTAssertEqual(researchCase.referenceBackend, .regression)
+        XCTAssertTrue(CompatibilityResearchProtocol.mandatoryGates.contains(.baselineReference))
+        XCTAssertFalse(CompatibilityResearchProtocol.mandatoryGates.contains(.crossOverReference))
+        XCTAssertTrue(CompatibilityResearchProtocol.mandatoryArtifacts.contains(.baselineCapture))
+        XCTAssertFalse(CompatibilityResearchProtocol.mandatoryArtifacts.contains(.crossOverCapture))
         try await repository.registerResearchCase(researchCase)
         try await repository.beginResearch(caseID: researchCase.id)
 
@@ -66,6 +71,26 @@ final class CompatibilityResearchTests: XCTestCase {
             notes: "Validación visual completa"
         ))
         try await repository.attachResearchRun(experimentID: experiment.id, runID: context.id)
+
+        try await repository.recordResearchGate(ResearchGateResult(
+            experimentID: experiment.id,
+            gate: .crossOverReference,
+            status: .passed,
+            evidenceReference: "evidence/legacy-reference"
+        ))
+        try await repository.recordResearchArtifact(ResearchArtifact(
+            experimentID: experiment.id,
+            kind: .crossOverCapture,
+            reference: "evidence/legacy-capture",
+            fingerprint: "sha256:\(String(repeating: "b", count: 64))"
+        ))
+        let wrongAuthority = try await repository.researchCompletionDecision(
+            caseID: researchCase.id,
+            experimentID: experiment.id
+        )
+        XCTAssertFalse(wrongAuthority.isEligible)
+        XCTAssertTrue(wrongAuthority.blockers.contains { $0.contains("baselineReference") })
+        XCTAssertTrue(wrongAuthority.blockers.contains { $0.contains("baselineCapture") })
 
         for gate in CompatibilityResearchProtocol.mandatoryGates {
             try await repository.recordResearchGate(ResearchGateResult(
@@ -123,10 +148,15 @@ final class CompatibilityResearchTests: XCTestCase {
         XCTAssertEqual(health.researchCaseCount, 1)
         XCTAssertEqual(health.researchHypothesisCount, 1)
         XCTAssertEqual(health.researchExperimentCount, 1)
-        XCTAssertEqual(health.researchGateCount, CompatibilityResearchProtocol.mandatoryGates.count)
+        XCTAssertEqual(
+            health.researchGateCount,
+            CompatibilityResearchProtocol.mandatoryGates.count + 1,
+            "La puerta legacy cruzada se conserva como historial, pero no cierra el expediente autónomo."
+        )
         XCTAssertEqual(
             health.researchArtifactCount,
-            CompatibilityResearchProtocol.mandatoryArtifacts.count
+            CompatibilityResearchProtocol.mandatoryArtifacts.count + 1,
+            "El artefacto legacy cruzado se conserva como historial, pero no cierra el expediente autónomo."
         )
 
         let exportURL = directory.appendingPathComponent("research-export.json")
@@ -207,6 +237,119 @@ final class CompatibilityResearchTests: XCTestCase {
         let storedExperiments = try await repository.researchExperiments()
         let stored = try XCTUnwrap(storedExperiments.first { $0.id == experiment.id })
         XCTAssertEqual(stored.state, .ready)
+        try await repository.close()
+    }
+
+    func testLegacyCrossOverResearchGraphIsPreservedAsReadOnlyHistory() async throws {
+        let directory = temporaryDirectory("research-legacy-read-only")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("compatibility.sqlite")
+        let repository = CompatibilityRepository(databaseURL: databaseURL)
+        try await repository.prepare()
+
+        let caseID = UUID()
+        let experimentID = UUID()
+        try mutateSQLite(databaseURL) { database in
+            try executeSQLite(
+                database,
+                """
+                INSERT INTO games(app_id, name, updated_at)
+                VALUES('599', 'Legacy Research', '2026-08-13T00:00:00.000Z');
+                INSERT INTO compatibility_research_cases(
+                    id, app_id, symptom, expected_behavior, reference_backend, state,
+                    blocker, winning_experiment_id, resolution_summary, created_at, updated_at
+                ) VALUES(
+                    '\(caseID.uuidString)', '599', 'Fallo histórico',
+                    'Referencia histórica', 'crossOver', 'open', NULL, NULL, NULL,
+                    '2026-08-13T00:00:00.000Z', '2026-08-13T00:00:00.000Z'
+                );
+                INSERT INTO research_experiments(
+                    id, case_id, hypothesis_id, dimension, change_summary, state,
+                    is_isolated, rollback_reference, baseline_engine_fingerprint,
+                    candidate_engine_fingerprint, run_id, runtime_candidate_id, notes,
+                    created_at, updated_at
+                ) VALUES(
+                    '\(experimentID.uuidString)', '\(caseID.uuidString)', NULL,
+                    'environment', 'Reproducir expediente heredado', 'ready', 1,
+                    'backups/legacy', 'legacy-baseline', NULL, NULL, NULL, '',
+                    '2026-08-13T00:00:00.000Z', '2026-08-13T00:00:00.000Z'
+                );
+                """
+            )
+        }
+
+        let storedCases = try await repository.researchCases()
+        XCTAssertFalse(storedCases.contains { $0.id == caseID })
+        let experiment = ResearchExperiment(
+            id: experimentID,
+            caseID: caseID,
+            dimension: .environment,
+            changeSummary: "Reproducir el expediente heredado en un candidato aislado.",
+            state: .ready,
+            isIsolated: true,
+            rollbackReference: "backups/legacy",
+            baselineEngineFingerprint: "legacy-baseline"
+        )
+        await assertInvalidEvidence { try await repository.beginResearch(caseID: caseID) }
+        await assertInvalidEvidence { try await repository.requestResearchValidation(caseID: caseID) }
+        await assertInvalidEvidence {
+            try await repository.pauseResearch(caseID: caseID, externalBlocker: "Dependencia externa")
+        }
+        await assertInvalidEvidence {
+            try await repository.registerResearchHypothesis(ResearchHypothesis(
+                caseID: caseID,
+                rank: 1,
+                statement: "No debe aceptarse",
+                prediction: "El historial permanecerá intacto"
+            ))
+        }
+        await assertInvalidEvidence { try await repository.registerResearchExperiment(experiment) }
+        await assertInvalidEvidence {
+            try await repository.attachResearchRun(experimentID: experimentID, runID: UUID())
+        }
+        await assertInvalidEvidence {
+            try await repository.finishResearchExperiment(
+                id: experimentID,
+                state: .failed,
+                notes: "No debe mutarse"
+            )
+        }
+        await assertInvalidEvidence {
+            try await repository.recordResearchGate(ResearchGateResult(
+                experimentID: experimentID,
+                gate: .crossOverReference,
+                status: .passed,
+                evidenceReference: "legacy"
+            ))
+        }
+        await assertInvalidEvidence {
+            try await repository.recordResearchArtifact(ResearchArtifact(
+                experimentID: experimentID,
+                kind: .crossOverCapture,
+                reference: "legacy",
+                fingerprint: "sha256:\(String(repeating: "d", count: 64))"
+            ))
+        }
+        await assertInvalidEvidence {
+            _ = try await repository.researchCompletionDecision(
+                caseID: caseID,
+                experimentID: experimentID
+            )
+        }
+        await assertInvalidEvidence {
+            try await repository.completeResearchCase(
+                caseID: caseID,
+                experimentID: experimentID,
+                resolution: "No debe mutarse"
+            )
+        }
+
+        let publicExperiments = try await repository.researchExperiments()
+        let publicGates = try await repository.researchGates()
+        let publicArtifacts = try await repository.researchArtifacts()
+        XCTAssertTrue(publicExperiments.isEmpty)
+        XCTAssertTrue(publicGates.isEmpty)
+        XCTAssertTrue(publicArtifacts.isEmpty)
         try await repository.close()
     }
 
@@ -315,6 +458,24 @@ final class CompatibilityResearchTests: XCTestCase {
     private func temporaryDirectory(_ label: String) -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("regression-\(label)-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    private func assertInvalidEvidence(
+        _ operation: () async throws -> Void,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        do {
+            try await operation()
+            XCTFail("La API aceptó una mutación de historial de solo lectura", file: file, line: line)
+        } catch let error as RegressionCoreError {
+            guard case .invalidEvidence = error else {
+                XCTFail("Se esperaba invalidEvidence y se obtuvo \(error)", file: file, line: line)
+                return
+            }
+        } catch {
+            XCTFail("Se esperaba RegressionCoreError y se obtuvo \(error)", file: file, line: line)
+        }
     }
 
     private func mutateSQLite(

@@ -32,7 +32,7 @@ public struct CompatibilityResearchCase: Codable, Equatable, Identifiable, Senda
         gameName: String,
         symptom: String,
         expectedBehavior: String,
-        referenceBackend: BackendKind = .crossOver,
+        referenceBackend: BackendKind = .regression,
         state: CompatibilityResearchCaseState = .open,
         blocker: String? = nil,
         winningExperimentID: UUID? = nil,
@@ -175,7 +175,9 @@ public struct ResearchExperiment: Codable, Equatable, Identifiable, Sendable {
 }
 
 public enum ResearchValidationGate: String, Codable, CaseIterable, Sendable {
+    /// Raw value histórico. Solo se exige al cerrar expedientes heredados.
     case crossOverReference
+    case baselineReference
     case rendering
     case inputPrecision
     case graphicsSettings
@@ -216,7 +218,9 @@ public struct ResearchGateResult: Codable, Equatable, Identifiable, Sendable {
 }
 
 public enum ResearchArtifactKind: String, Codable, CaseIterable, Sendable {
+    /// Raw value histórico. Solo se exige al cerrar expedientes heredados.
     case crossOverCapture
+    case baselineCapture
     case regressionCapture
     case moduleInventory
     case configurationSnapshot
@@ -265,10 +269,10 @@ public struct ResearchCompletionDecision: Codable, Equatable, Sendable {
 }
 
 public enum CompatibilityResearchProtocol {
-    public static let revision = 1
+    public static let revision = 2
 
     public static let mandatoryGates: [ResearchValidationGate] = [
-        .crossOverReference,
+        .baselineReference,
         .rendering,
         .inputPrecision,
         .graphicsSettings,
@@ -279,7 +283,7 @@ public enum CompatibilityResearchProtocol {
     ]
 
     public static let mandatoryArtifacts: [ResearchArtifactKind] = [
-        .crossOverCapture,
+        .baselineCapture,
         .regressionCapture,
         .moduleInventory,
         .configurationSnapshot,
@@ -288,4 +292,28 @@ public enum CompatibilityResearchProtocol {
         .signatureReport,
         .rollbackManifest
     ]
+
+    /// Conserva el contrato de expedientes históricos sin contaminar los nuevos con una
+    /// dependencia operativa externa.
+    public static func mandatoryGates(
+        for referenceBackend: BackendKind
+    ) -> [ResearchValidationGate] {
+        switch referenceBackend {
+        case .regression:
+            mandatoryGates
+        case .crossOver:
+            [.crossOverReference] + Array(mandatoryGates.dropFirst())
+        }
+    }
+
+    public static func mandatoryArtifacts(
+        for referenceBackend: BackendKind
+    ) -> [ResearchArtifactKind] {
+        switch referenceBackend {
+        case .regression:
+            mandatoryArtifacts
+        case .crossOver:
+            [.crossOverCapture] + Array(mandatoryArtifacts.dropFirst())
+        }
+    }
 }

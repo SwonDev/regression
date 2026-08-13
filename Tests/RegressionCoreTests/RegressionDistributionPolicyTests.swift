@@ -9,10 +9,10 @@ final class RegressionDistributionPolicyTests: XCTestCase {
         )
     }
 
-    func testExplicitBackendPreferenceIsPreserved() {
+    func testLegacyCrossOverPreferenceIsNormalizedToRegression() {
         XCTAssertEqual(
             BackendKind.launchSelection(storedRawValue: BackendKind.crossOver.rawValue),
-            .crossOver
+            .regression
         )
         XCTAssertEqual(
             BackendKind.launchSelection(storedRawValue: BackendKind.regression.rawValue),
@@ -37,13 +37,13 @@ final class RegressionDistributionPolicyTests: XCTestCase {
         )
     }
 
-    func testAvailableComparatorPreferenceIsPreserved() {
+    func testHistoricalComparatorAvailabilityCannotChangeSelection() {
         XCTAssertEqual(
             BackendKind.availableSelection(
                 preferred: .crossOver,
                 crossOverAvailable: true
             ),
-            .crossOver
+            .regression
         )
     }
 }

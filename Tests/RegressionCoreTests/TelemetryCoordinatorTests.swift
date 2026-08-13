@@ -87,12 +87,18 @@ final class TelemetryCoordinatorTests: XCTestCase {
         XCTAssertEqual(profile.perfectRuns, 0)
     }
 
-    func testCrashedRunLearnsOnlyTheCompiledRecipeFromItsRecentLog() async throws {
+    func testCrashedRunPersistsDetectionWithoutApplyingCompiledRecipe() async throws {
         let fixture = try TelemetryFixture()
         defer { fixture.remove() }
         let processLogURL = fixture.root.appendingPathComponent("learned-gameprocess_log.txt")
         XCTAssertTrue(FileManager.default.createFile(atPath: processLogURL.path, contents: nil))
         await fixture.telemetry.beginMonitoring(logURL: processLogURL)
+        let sourceStartedAt = try XCTUnwrap(Self.steamLogDate("2026-07-28 11:59:59"))
+        let sourceContext = fixture.context(startedAt: sourceStartedAt)
+        try await fixture.telemetry.registerLaunchIntent(
+            context: sourceContext,
+            bottleURL: fixture.bottleURL
+        )
 
         let crashDirectory = fixture.bottleURL.appendingPathComponent(
             "drive_c/users/test/AppData/Local/Future/Saved/Crashes/UECC-1",
@@ -133,16 +139,17 @@ final class TelemetryCoordinatorTests: XCTestCase {
 
         XCTAssertTrue(outcome.changed)
         XCTAssertTrue(outcome.issues.isEmpty)
-        XCTAssertEqual(
-            try CompiledRepairActivationStore.activations(in: fixture.bottleURL),
-            [CompiledRepairActivation(
-                executable: "future-win64-shipping.exe",
-                recipe: .unrealD3D11DualOverlayIsolation
-            )]
-        )
+        XCTAssertTrue(try CompiledRepairActivationStore.activations(in: fixture.bottleURL).isEmpty)
         let receipts = try await fixture.repository.repairReceipts(appID: "219990")
-        XCTAssertEqual(receipts.first?.recipeID, CompiledRepairRecipe.unrealD3D11DualOverlayIsolation.rawValue)
-        XCTAssertEqual(receipts.first?.result, .succeeded)
+        XCTAssertTrue(receipts.isEmpty)
+        let attempts = try await fixture.repository.repairAttempts(appID: "219990")
+        let attempt = try XCTUnwrap(attempts.first)
+        let sourceRunID = try await fixture.repository.recentRuns().first?.id
+        XCTAssertEqual(attempt.sourceRunID, sourceRunID)
+        XCTAssertEqual(attempt.executable, "future-win64-shipping.exe")
+        XCTAssertEqual(attempt.recipe, .unrealD3D11DualOverlayIsolation)
+        XCTAssertEqual(attempt.state, .detected)
+        XCTAssertEqual(attempt.launchOrigin, .regression)
     }
 
     func testLauncherAndShippingExecutableRemainOneLogicalRun() async throws {
@@ -359,7 +366,7 @@ private final class TelemetryFixture {
         )
     }
 
-    func context() -> RunContext {
+    func context(startedAt: Date = Date()) -> RunContext {
         let configuration = ["backend": "regression"]
         return RunContext(
             appID: "219990",
@@ -367,6 +374,7 @@ private final class TelemetryFixture {
             backend: .regression,
             bottleName: "Steam",
             providerVersion: "1.2",
+            startedAt: startedAt,
             command: "$HOME/Regression/regression-engine",
             arguments: ["-applaunch", "219990"],
             system: SystemSnapshot(

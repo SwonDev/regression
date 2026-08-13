@@ -30,8 +30,19 @@ public struct CompiledGameRuntimeProfile: Equatable, Sendable {
     }
 }
 
+public enum AppleGPTKVersion: String, Equatable, Sendable {
+    case version3 = "3.0"
+    case version4Beta2 = "4.0b2"
+}
+
 public enum GameRuntimeProfileCatalog {
     public static let revision = "2026-08-09.15"
+
+    private static let legacyAppleGPTKVersionByAppID: [String: AppleGPTKVersion] = [
+        "219990": .version3,
+        "4570720": .version3,
+        "2054970": .version3
+    ]
 
     public static let all: [CompiledGameRuntimeProfile] = [
         CompiledGameRuntimeProfile(
@@ -205,5 +216,35 @@ public enum GameRuntimeProfileCatalog {
         backend: BackendKind
     ) -> [String: String] {
         profile(for: appID, backend: backend)?.configurationValues ?? [:]
+    }
+
+    public static func requiredAppleGPTKVersion(
+        for appID: String,
+        backend: BackendKind
+    ) -> AppleGPTKVersion? {
+        guard backend == .regression,
+              let normalized = SteamAppID.normalized(appID) else {
+            return nil
+        }
+        if let legacyVersion = legacyAppleGPTKVersionByAppID[normalized] {
+            return legacyVersion
+        }
+
+        guard let profile = profile(for: normalized, backend: backend),
+              profile.configurationValues["profile.component"] == "apple-gptk"
+                || profile.configurationValues["profile.component.id"] == "apple-gptk",
+              let rawVersion = profile.configurationValues["profile.component.version"] else {
+            return nil
+        }
+        return AppleGPTKVersion(rawValue: rawVersion)
+    }
+
+    /// La base local y el escáner de tecnologías no pueden activar esta capacidad propietaria.
+    /// La decisión deriva únicamente del requisito compilado y versionado del juego.
+    public static func requiresAppleGPTK(
+        for appID: String,
+        backend: BackendKind
+    ) -> Bool {
+        requiredAppleGPTKVersion(for: appID, backend: backend) != nil
     }
 }

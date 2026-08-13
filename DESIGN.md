@@ -116,12 +116,15 @@ Los controles conservan su forma nativa. Los contenedores auxiliares usan radios
 ## Components
 
 - **Icono de barra de menús:** lienzo exacto de 18 puntos con variante Retina de 36 píxeles. La huella alfa mide 32 píxeles Retina de alto, queda centrada horizontalmente y aplica una corrección óptica vertical de un píxel hacia arriba. Una `NSImageView` decorativa y transparente a eventos conserva ese tamaño exacto dentro del `NSStatusBarButton` nativo y corrige el centro vertical en −0,5 puntos. Usa cuatro imágenes estáticas: `ready`, `working`, `running` y `error`. Los PNG se tratan como plantillas para adaptarse a las apariencias clara y oscura.
-- **Estado:** el icono cambia sin animación al cambiar el estado operativo. El panel mantiene además resumen legible, insignia semántica y detalle técnico; la imagen nunca es el único canal de información.
+- **Estado:** el icono cambia sin animación al cambiar el estado operativo. El panel mantiene además resumen legible, insignia semántica y detalle técnico; la imagen nunca es el único canal de información. Si un prerrequisito bloquea Steam, la primera pantalla muestra “Atención”, la causa y una única recuperación, aunque la operación general estuviese en reposo.
 - **Acción principal:** un botón prominente cuyo texto cambia entre “Abrir Steam”, “Mostrar Steam” y “Reintentar”.
 - **Custodia de biblioteca:** tarjeta prioritaria con fases reales, impacto explícito, una sola copia física y acciones transaccionales de validar o revertir.
-- **Juegos:** campo nativo de búsqueda por nombre o App ID y filas compactas reveladas en lotes de 24, con nombre, App ID y botón de reproducción; no muestran datos privados de la cuenta. La certificación local verde y la referencia pública azul/gris son líneas independientes y siempre etiquetadas.
-- **Historial:** resumen de ejecuciones, perfiles y motores locales, blindados revelados en lotes de 8, comparación pública opcional y exportación bajo demanda. La sincronización muestra progreso y conserva el último dato válido si falla la red. La sección distingue candidatos tecnológicos de casos y pruebas reales de I+D; los contadores nunca presentan uno como si fuese el otro.
+- **Juegos:** campo nativo de búsqueda por nombre o App ID y filas compactas reveladas en lotes de 24, con nombre, App ID y botón de reproducción; no muestran datos privados de la cuenta. La certificación verde procede exclusivamente de una ejecución local perfecta de Regression y siempre se etiqueta como tal.
+- **Historial:** resumen exclusivamente local de ejecuciones, perfiles y motores de Regression, con blindados revelados en lotes de 8 y exportación bajo demanda. No consulta, sincroniza ni compara valoraciones públicas. La sección distingue candidatos tecnológicos de casos y pruebas reales de I+D; los contadores nunca presentan uno como si fuese el otro.
 - **Errores:** mensaje comprensible, causa técnica desplegable y una acción concreta como “Reparar componente”, “Abrir diagnóstico” o “Usar motor de Regression”.
+- **Salud del runtime:** VC++/UCRT, multimedia y Apple GPTK reutilizan una presentación común de estado, explicación y recuperación. Un componente sellado ausente o alterado nunca convive con una cabecera “Listo”.
+- **Apple GPTK:** onboarding asistido, no descarga oculta. Abre solo Apple Developer, permite elegir el DMG, lo inspecciona antes de mutar, muestra la licencia RTF exacta en una hoja nativa y exige confirmación explícita. Tras autorizar, conserva recibo privado y caché verificada para reparación automática. La UI nombra la generación exigida por cada perfil y nunca ofrece una versión moderna como sustituto de un componente histórico incompatible.
+- **Accesibilidad:** títulos navegables como cabeceras, controles críticos de al menos 32 puntos y tipografía/`controlSize` adaptativos. El footer cambia de fila a columna cuando no cabe en tamaños accesibles.
 
 ## Do's and Don'ts
 
@@ -133,7 +136,7 @@ Los controles conservan su forma nativa. Los contenedores auxiliares usan radios
 - Explicar cualquier cambio de botella, biblioteca o licencia antes de ejecutarlo.
 - Usar etiquetas, ayuda contextual y accesibilidad para todos los controles.
 - Presentar Regression como único motor operativo y explicar que la biblioteca física pertenece a su botella.
-- Explicar qué dato público se consulta y permitir desactivar o actualizar la referencia.
+- Mantener verificaciones, historial y aprendizaje dentro de los datos locales de Regression.
 - Mantener buscables las bibliotecas grandes sin sacrificar la respuesta inmediata del popover.
 
 ### Don't
@@ -145,4 +148,4 @@ Los controles conservan su forma nativa. Los contenedores auxiliares usan radios
 - No crear ni instalar otra botella o copia de Steam automáticamente.
 - No almacenar credenciales, identificadores de cuenta ni registros sin filtrar.
 - No recrear enlaces de juegos hacia CrossOver ni mantener dos copias de `steamapps`.
-- No presentar una valoración de CodeWeavers como veredicto o certificación de Regression.
+- No presentar referencias, valoraciones ni comparaciones externas como parte del estado operativo o la certificación de Regression.

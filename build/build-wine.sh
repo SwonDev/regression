@@ -18,11 +18,13 @@ export OBJCFLAGS="-arch x86_64 -g -O2"
 export LDFLAGS="-arch x86_64 -L$PREFIX/lib -Wl,-rpath,$PREFIX/lib"
 export CPPFLAGS="-I$PREFIX/include"
 
-mkdir -p "$ROOT/build/wine64"
-cd "$ROOT/build/wine64"
+WINE_BUILD="${REGRESSION_WINE_BUILD:-$ROOT/build/wine64}"
+WINE_SOURCE="${REGRESSION_WINE_SOURCE:-$SRC/wine}"
+mkdir -p "$WINE_BUILD"
+cd "$WINE_BUILD"
 
 step "configure Wine 11 CX (prefix propio, --enable-archs, receta build-mac de CodeWeavers)"
-"$SRC/wine/configure" -C --enable-archs=i386,x86_64 --with-mingw \
+"$WINE_SOURCE/configure" -C --enable-archs=i386,x86_64 --with-mingw \
     --prefix="$ROOT/Regression.app/Contents/SharedSupport/wine-root" \
     --build=x86_64-apple-darwin --host=x86_64-apple-darwin \
     --with-gstreamer --with-sdl \

@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 
 public struct RegressionRelease: Equatable, Sendable {
@@ -39,6 +40,52 @@ public enum RegressionAutomaticUpdateDecision: Equatable, Sendable {
     case waitForIdle
     case manualRetryRequired
     case installNow
+}
+
+public enum RegressionManualRepairDecision: Equatable, Sendable {
+    case repairNow
+    case newerUpdateAvailable
+    case rejectDowngrade
+
+    public var permitsInstallerSpawn: Bool {
+        self == .repairNow
+    }
+}
+
+/// Una reparación reinstala exclusivamente la versión ya instalada. Una release posterior se
+/// presenta como actualización explícita y una anterior nunca puede iniciar el instalador.
+public enum RegressionManualRepairPolicy {
+    public static func decision(
+        installedVersion: String,
+        releaseVersion: String
+    ) -> RegressionManualRepairDecision {
+        guard SemanticVersion.normalized(installedVersion) != nil,
+              SemanticVersion.normalized(releaseVersion) != nil else {
+            return .rejectDowngrade
+        }
+        let installed = SemanticVersion(installedVersion)
+        let release = SemanticVersion(releaseVersion)
+        if release < installed { return .rejectDowngrade }
+        if installed < release { return .newerUpdateAvailable }
+        return .repairNow
+    }
+
+    @discardableResult
+    @MainActor
+    public static func runIfAuthorized(
+        installedVersion: String,
+        releaseVersion: String,
+        spawnInstaller: @MainActor () async -> Void
+    ) async -> RegressionManualRepairDecision {
+        let decision = decision(
+            installedVersion: installedVersion,
+            releaseVersion: releaseVersion
+        )
+        if decision.permitsInstallerSpawn {
+            await spawnInstaller()
+        }
+        return decision
+    }
 }
 
 /// La actualización automática solo puede sustituir la instalación pública canónica.
@@ -120,20 +167,27 @@ public actor RegressionReleaseUpdateService {
     }
 
     public func check(installedVersion: String) async throws -> RegressionReleaseUpdateStatus {
-        var request = URLRequest(url: Self.latestReleaseURL)
-        request.timeoutInterval = 10
-        request.cachePolicy = .reloadRevalidatingCacheData
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("Regression/\(installedVersion)", forHTTPHeaderField: "User-Agent")
-        request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
-
-        let (data, response) = try await fetch(request)
-        try validate(response: response, dataSize: data.count, maximumSize: maximumResponseBytes)
-        let release = try decodeRelease(data)
+        let release = try await latestRelease(clientVersion: installedVersion)
         if SemanticVersion(release.version) > SemanticVersion(installedVersion) {
             return .available(installedVersion: installedVersion, release: release)
         }
         return .upToDate(installedVersion: installedVersion, checkedAt: now())
+    }
+
+    /// Devuelve la release estable oficial incluso cuando coincide con la instalada. Esta ruta
+    /// permite reparar un bundle dañado reutilizando exactamente el instalador firmado y su
+    /// digest publicado, sin aceptar canales, repositorios ni assets alternativos.
+    public func latestRelease(clientVersion: String) async throws -> RegressionRelease {
+        var request = URLRequest(url: Self.latestReleaseURL)
+        request.timeoutInterval = 10
+        request.cachePolicy = .reloadRevalidatingCacheData
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("Regression/\(clientVersion)", forHTTPHeaderField: "User-Agent")
+        request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
+
+        let (data, response) = try await fetch(request)
+        try validate(response: response, dataSize: data.count, maximumSize: maximumResponseBytes)
+        return try decodeRelease(data)
     }
 
     public func downloadInstaller(
@@ -163,32 +217,7 @@ public actor RegressionReleaseUpdateService {
             throw RegressionReleaseUpdateError.integrityMismatch
         }
 
-        if (try? directoryURL.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
-            throw RegressionReleaseUpdateError.unsafeUpdateDirectory
-        }
-        try FileManager.default.createDirectory(
-            at: directoryURL,
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
-        )
-        let directoryValues = try directoryURL.resourceValues(
-            forKeys: [.isDirectoryKey, .isSymbolicLinkKey]
-        )
-        guard directoryValues.isDirectory == true,
-              directoryValues.isSymbolicLink != true else {
-            throw RegressionReleaseUpdateError.unsafeUpdateDirectory
-        }
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o700],
-            ofItemAtPath: directoryURL.path
-        )
-        let destination = directoryURL.appendingPathComponent("install_regression.sh")
-        if (try? destination.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
-            throw RegressionReleaseUpdateError.unsafeUpdateDirectory
-        }
-        try data.write(to: destination, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: destination.path)
-        return destination
+        return try Self.writeInstaller(data, to: directoryURL)
     }
 
     private func decodeRelease(_ data: Data) throws -> RegressionRelease {
@@ -255,6 +284,127 @@ public actor RegressionReleaseUpdateService {
         guard url.scheme == "https", let host = url.host?.lowercased() else { return false }
         return host == "objects.githubusercontent.com"
             || host.hasSuffix(".githubusercontent.com")
+    }
+
+    private static func writeInstaller(_ data: Data, to directoryURL: URL) throws -> URL {
+        let directoryFD = try openSecureDirectoryChain(directoryURL)
+        defer { _ = Darwin.close(directoryFD) }
+
+        let destinationName = "install_regression.sh"
+        var existing = stat()
+        if fstatat(directoryFD, destinationName, &existing, AT_SYMLINK_NOFOLLOW) == 0 {
+            guard existing.st_mode & S_IFMT == S_IFREG else {
+                throw RegressionReleaseUpdateError.unsafeUpdateDirectory
+            }
+        } else if errno != ENOENT {
+            throw RegressionReleaseUpdateError.unsafeUpdateDirectory
+        }
+
+        let temporaryName = ".install-regression-\(UUID().uuidString).tmp"
+        var temporaryFD = openat(
+            directoryFD,
+            temporaryName,
+            O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+            mode_t(0o600)
+        )
+        guard temporaryFD >= 0 else {
+            throw RegressionReleaseUpdateError.unsafeUpdateDirectory
+        }
+        var shouldRemoveTemporary = true
+        defer {
+            if temporaryFD >= 0 { _ = Darwin.close(temporaryFD) }
+            if shouldRemoveTemporary {
+                _ = unlinkat(directoryFD, temporaryName, 0)
+            }
+        }
+
+        do {
+            try data.withUnsafeBytes { rawBuffer in
+                guard var pointer = rawBuffer.baseAddress else { return }
+                var remaining = rawBuffer.count
+                while remaining > 0 {
+                    let written = Darwin.write(temporaryFD, pointer, remaining)
+                    if written < 0 {
+                        if errno == EINTR { continue }
+                        throw RegressionReleaseUpdateError.unsafeUpdateDirectory
+                    }
+                    guard written > 0 else {
+                        throw RegressionReleaseUpdateError.unsafeUpdateDirectory
+                    }
+                    remaining -= written
+                    pointer = pointer.advanced(by: written)
+                }
+            }
+            guard fchmod(temporaryFD, mode_t(0o700)) == 0,
+                  fsync(temporaryFD) == 0 else {
+                throw RegressionReleaseUpdateError.unsafeUpdateDirectory
+            }
+            _ = Darwin.close(temporaryFD)
+            temporaryFD = -1
+            guard renameat(directoryFD, temporaryName, directoryFD, destinationName) == 0,
+                  fsync(directoryFD) == 0 else {
+                throw RegressionReleaseUpdateError.unsafeUpdateDirectory
+            }
+            shouldRemoveTemporary = false
+        } catch {
+            throw error as? RegressionReleaseUpdateError
+                ?? RegressionReleaseUpdateError.unsafeUpdateDirectory
+        }
+
+        return directoryURL.appendingPathComponent(destinationName, isDirectory: false)
+    }
+
+    /// Recorre la ruta desde `/` manteniendo cada ancestro anclado por descriptor. `O_NOFOLLOW`
+    /// impide que un enlace en cualquier nivel redirija el mkdir o la escritura posterior.
+    private static func openSecureDirectoryChain(_ directoryURL: URL) throws -> Int32 {
+        guard directoryURL.isFileURL,
+              directoryURL.path.hasPrefix("/"),
+              directoryURL.path != "/" else {
+            throw RegressionReleaseUpdateError.unsafeUpdateDirectory
+        }
+        let components = Array(directoryURL.pathComponents.dropFirst())
+        guard !components.isEmpty,
+              components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
+            throw RegressionReleaseUpdateError.unsafeUpdateDirectory
+        }
+
+        var currentFD = Darwin.open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard currentFD >= 0 else {
+            throw RegressionReleaseUpdateError.unsafeUpdateDirectory
+        }
+        defer {
+            if currentFD >= 0 { _ = Darwin.close(currentFD) }
+        }
+
+        for (index, component) in components.enumerated() {
+            let created: Bool
+            if mkdirat(currentFD, component, mode_t(0o700)) == 0 {
+                created = true
+            } else if errno == EEXIST {
+                created = false
+            } else {
+                throw RegressionReleaseUpdateError.unsafeUpdateDirectory
+            }
+            let nextFD = openat(
+                currentFD,
+                component,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+            )
+            guard nextFD >= 0 else {
+                throw RegressionReleaseUpdateError.unsafeUpdateDirectory
+            }
+            if (created || index == components.count - 1),
+               fchmod(nextFD, mode_t(0o700)) != 0 {
+                if nextFD >= 0 { _ = Darwin.close(nextFD) }
+                throw RegressionReleaseUpdateError.unsafeUpdateDirectory
+            }
+            _ = Darwin.close(currentFD)
+            currentFD = nextFD
+        }
+
+        let result = currentFD
+        currentFD = -1
+        return result
     }
 }
 

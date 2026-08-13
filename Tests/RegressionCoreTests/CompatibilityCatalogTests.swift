@@ -4,6 +4,67 @@ import Foundation
 import XCTest
 
 final class CompatibilityCatalogTests: XCTestCase {
+    func testExternalCatalogMutationSurfaceIsNotPublicAPI() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let moduleDirectory = Bundle(for: CompatibilityCatalogTests.self).bundleURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("Modules", isDirectory: true)
+        let scratch = temporaryDirectory("external-catalog-api")
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let source = scratch.appendingPathComponent("External.swift")
+        try """
+        import Foundation
+        import RegressionCore
+        func unavailable<T>() -> T { fatalError() }
+        func mutate(_ repository: CompatibilityRepository) async throws {
+            try await repository.registerExternalSource(unavailable())
+            _ = try await repository.reserveExternalRequest(source: unavailable())
+            _ = try await repository.externalSyncState(sourceID: "codeweavers")
+            try await repository.recordExternalSyncSuccess(sourceID: "codeweavers")
+            try await repository.recordExternalSyncFailure(sourceID: "codeweavers", message: "x")
+            try await repository.upsertExternalRecord(
+                unavailable(), for: unavailable(), matchMethod: unavailable(), confidence: 1
+            )
+            try await repository.recordExternalLookupStatus(
+                sourceID: "codeweavers", game: unavailable(), status: unavailable()
+            )
+        }
+        """.write(to: source, atomically: true, encoding: .utf8)
+
+        let process = Process()
+        let errors = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        process.arguments = [
+            "swiftc", "-typecheck",
+            "-I", moduleDirectory.path,
+            "-Xcc", "-fmodule-map-file=\(root.path)/Sources/CSQLite/module.modulemap",
+            source.path,
+        ]
+        process.standardError = errors
+        try process.run()
+        process.waitUntilExit()
+        let diagnostic = String(
+            data: errors.fileHandleForReading.readDataToEndOfFile(),
+            encoding: .utf8
+        ) ?? ""
+
+        XCTAssertNotEqual(process.terminationStatus, 0)
+        for method in [
+            "registerExternalSource", "reserveExternalRequest", "externalSyncState",
+            "recordExternalSyncSuccess", "recordExternalSyncFailure", "upsertExternalRecord",
+            "recordExternalLookupStatus",
+        ] {
+            XCTAssertTrue(
+                diagnostic.contains("'\(method)' is inaccessible due to 'internal' protection level"),
+                "La API \(method) sigue expuesta o produjo un diagnóstico inesperado: \(diagnostic)"
+            )
+        }
+    }
+
     func testProvisionalSteamAppNameCannotReplaceKnownManifestName() async throws {
         let directory = temporaryDirectory("game-name-precedence")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -617,9 +678,10 @@ final class CompatibilityCatalogTests: XCTestCase {
             executable: "C:\\Games\\HWR2.exe",
             launchMilliseconds: 100
         )
+        let endedAt = Date(timeIntervalSince1970: 2_000.0006)
         try await repository.finishRun(
             id: context.id,
-            endedAt: Date(),
+            endedAt: endedAt,
             exitCode: 0,
             result: .succeeded,
             afterConfiguration: context.configuration,
@@ -628,6 +690,24 @@ final class CompatibilityCatalogTests: XCTestCase {
                 after: context.configuration
             )
         )
+        do {
+            try await repository.verifyRun(RunVerification(
+                runID: context.id,
+                verdict: .perfect,
+                rendering: .passed,
+                inputPrecision: .passed,
+                graphicsSettings: .passed,
+                gameplay: .passed,
+                source: .visualInspection,
+                verifiedAt: endedAt.addingTimeInterval(-1)
+            ))
+            XCTFail("Una verificación realmente anterior al cierre debe rechazarse")
+        } catch let error as RegressionCoreError {
+            guard case .invalidEvidence = error else {
+                return XCTFail("Error inesperado: \(error)")
+            }
+        }
+
         try await repository.verifyRun(RunVerification(
             runID: context.id,
             verdict: .perfect,
@@ -636,7 +716,8 @@ final class CompatibilityCatalogTests: XCTestCase {
             graphicsSettings: .passed,
             gameplay: .passed,
             source: .visualInspection,
-            notes: "Confirmación visual completa"
+            notes: "Confirmación visual completa",
+            verifiedAt: endedAt.addingTimeInterval(0.0001)
         ))
 
         let first = try await repository.reconcileCompiledRuntimeProfile(runID: context.id)
@@ -661,79 +742,6 @@ final class CompatibilityCatalogTests: XCTestCase {
         try await repository.close()
     }
 
-    func testCodeWeaversJSONLDParserNormalizesSteamAndPlatformRatings() throws {
-        let html = #"""
-        <html><head>
-        <script type="application/ld+json">{
-          "@context":"https://schema.org",
-          "@graph":[
-            {"@type":"VideoGame","name":"Grim Dawn",
-             "url":"https://www.codeweavers.com/compatibility/crossover/grim-dawn",
-             "applicationCategory":"Role Playing Games",
-             "publisher":{"@type":"Organization","name":"Crate Entertainment"},
-             "sameAs":["https://store.steampowered.com/app/219990"]},
-            {"@type":"Review","reviewAspect":"CrossOver compatibility on macOS",
-             "datePublished":"2026-07-22T15:55:06-0500",
-             "about":{"operatingSystem":"macOS","softwareVersion":"26.3.0"},
-             "reviewRating":{"ratingValue":"5"}},
-            {"@type":"Review","reviewAspect":"CrossOver compatibility on Linux",
-             "datePublished":"2026-02-22T09:15:34-0600",
-             "about":{"operatingSystem":"Linux","softwareVersion":"26.0.0"},
-             "reviewRating":{"ratingValue":4}}
-          ]
-        }</script></head>
-        <body><span id="var_app_id" class="noshow">13436</span></body></html>
-        """#
-        let record = try CodeWeaversPageParser.parseDetail(
-            data: Data(html.utf8),
-            requestedURL: URL(string: "https://www.codeweavers.com/compatibility/crossover/grim-dawn")!,
-            fetchedAt: Date(timeIntervalSince1970: 1_000),
-            validators: ExternalCatalogValidators(entityTag: "abc", lastModified: "today")
-        )
-
-        XCTAssertEqual(record.externalAppID, "13436")
-        XCTAssertEqual(record.steamAppID, "219990")
-        XCTAssertEqual(record.company, "Crate Entertainment")
-        XCTAssertEqual(record.macOSRating.value, 5)
-        XCTAssertEqual(record.macOSRating.testedCrossOverVersion, "26.3.0")
-        XCTAssertNotNil(record.macOSRating.testedAt)
-        XCTAssertEqual(record.linuxRating.value, 4)
-        XCTAssertEqual(record.entityTag, "abc")
-        XCTAssertEqual(record.contentFingerprint.count, 64)
-    }
-
-    func testCodeWeaversSearchParserKeepsOnlySafeDetailLinks() throws {
-        let html = #"""
-        <a href="/compatibility/crossover/grim-dawn"><strong>Grim Dawn</strong></a>
-        <a href="/compatibility/crossover/grim-dawn#breakdown">Duplicado</a>
-        <a href="https://malicious.invalid/compatibility/crossover/grim-dawn">No</a>
-        """#
-        let results = try CodeWeaversPageParser.parseSearchResults(data: Data(html.utf8))
-
-        XCTAssertEqual(results.count, 1)
-        XCTAssertEqual(results.first?.name, "Grim Dawn")
-        XCTAssertEqual(
-            results.first?.detailURL.absoluteString,
-            "https://www.codeweavers.com/compatibility/crossover/grim-dawn"
-        )
-    }
-
-    func testCodeWeaversParserRejectsCanonicalURLOutsideOfficialHost() throws {
-        let html = #"""
-        <script type="application/ld+json">{
-          "@type":"VideoGame", "name":"Impostor",
-          "url":"https://evilcodeweavers.com/compatibility/crossover/impostor"
-        }</script>
-        """#
-
-        XCTAssertThrowsError(try CodeWeaversPageParser.parseDetail(
-            data: Data(html.utf8),
-            requestedURL: URL(string: "https://www.codeweavers.com/compatibility/crossover/impostor")!,
-            fetchedAt: Date(),
-            validators: ExternalCatalogValidators()
-        ))
-    }
-
     func testExternalRatingDoesNotTurnInvalidDataIntoPerfectCompatibility() {
         let rating = ExternalCompatibilityRating(
             platform: .macOS,
@@ -744,65 +752,724 @@ final class CompatibilityCatalogTests: XCTestCase {
         XCTAssertNil(rating.value)
     }
 
-    func testPublicSearchURLUsesOfficialQueryAndEscapesGameName() throws {
-        let url = try XCTUnwrap(
-            CodeWeaversCompatibilityProvider.publicSearchURL(for: "Game & Test")
-        )
-        let components = try XCTUnwrap(
-            URLComponents(url: url, resolvingAgainstBaseURL: false)
-        )
-        let query = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map {
-            ($0.name, $0.value ?? "")
-        })
-        XCTAssertEqual(query["name"], "Game & Test")
-        XCTAssertEqual(query["search"], "app")
-        XCTAssertEqual(url.host, "www.codeweavers.com")
+    func testHistoricalExternalSourceIdentityHasNoNetworkLocation() {
+        let source = CodeWeaversCompatibilityProvider.codeWeaversSource
+
+        XCTAssertEqual(source.id, "codeweavers")
+        XCTAssertTrue(source.baseURL.isFileURL)
+        XCTAssertTrue(source.informationURL.isFileURL)
+        XCTAssertEqual(source.cacheLifetime, 0)
     }
 
-    func testCatalogSynchronizerCachesPublicContextWithoutCertifyingLocally() async throws {
+    func testLegacyCrossOverTechnologyRowRemainsStoredButIsNotPubliclyListed() async throws {
+        let directory = temporaryDirectory("retired-runtime-technology")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("compatibility.sqlite")
+        let repository = CompatibilityRepository(databaseURL: databaseURL)
+        try await repository.prepare()
+        try mutateSQLite(databaseURL) { database in
+            try executeSQLite(
+                database,
+                """
+                INSERT OR REPLACE INTO runtime_technologies(
+                    id, display_name, category, official_url, release_url,
+                    distribution_policy, update_policy, stable_version,
+                    latest_known_version, checked_at, catalog_revision, notes, synced_at
+                ) VALUES(
+                    'crossover', 'Legacy External Runtime', 'referenceRuntime',
+                    'https://legacy.invalid/runtime', NULL, 'licensedReference', 'referenceOnly',
+                    'legacy', NULL, '2026-01-01T00:00:00.000Z', 'legacy', 'historical',
+                    '2026-01-01T00:00:00.000Z'
+                );
+                """
+            )
+        }
+
+        let visible = try await repository.runtimeTechnologies()
+
+        XCTAssertFalse(visible.contains { $0.id == "crossover" })
+        try await repository.close()
+    }
+
+    func testExternalCatalogSynchronizerIsRetiredAndDoesNotMutateHistory() async throws {
         let directory = temporaryDirectory("external-cache")
         defer { try? FileManager.default.removeItem(at: directory) }
         let repository = CompatibilityRepository(
             databaseURL: directory.appendingPathComponent("compatibility.sqlite")
         )
         try await repository.prepare()
-        let provider = StubCompatibilityProvider(appID: "4242", gameName: "Catalog Test")
-        let synchronizer = ExternalCatalogSynchronizer(
-            repository: repository,
-            provider: provider,
-            noMatchCacheLifetime: 60
-        )
+        let synchronizer = ExternalCatalogSynchronizer(repository: repository)
         let game = SteamGame(
             appID: "4242",
             name: "Catalog Test",
             installDirectory: "Catalog Test",
             manifestURL: URL(fileURLWithPath: "/tmp/appmanifest_4242.acf"),
+            sourceBackend: .regression
+        )
+
+        let outcome = await synchronizer.refresh(game: game, force: true)
+        let storedEntries = try await repository.externalEntries()
+        XCTAssertEqual(outcome, .retired)
+        XCTAssertTrue(storedEntries.isEmpty)
+        try await repository.close()
+    }
+
+    func testLegacyCrossOverRowsRemainStoredButAreAbsentFromPublicComparisonAndExport() async throws {
+        let directory = temporaryDirectory("legacy-public-filter")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repository = CompatibilityRepository(
+            databaseURL: directory.appendingPathComponent("compatibility.sqlite")
+        )
+        try await repository.prepare()
+
+        let regression = makeContext(appID: "420", name: "Regression Visible")
+        try await repository.beginRun(regression)
+        try await repository.failRunBeforeLaunch(id: regression.id, reason: "prueba controlada")
+        let legacyRun = makeContext(
+            appID: "421",
+            name: "CrossOver Histórico",
+            configuration: ["backend": "crossOver"],
+            providerVersion: "legacy",
+            backend: .crossOver
+        )
+        try await repository.beginRun(legacyRun)
+        try await repository.markLaunched(
+            id: legacyRun.id,
+            processID: 421,
+            executable: #"C:\Games\legacy.exe"#,
+            launchMilliseconds: 100
+        )
+        try await repository.finishRun(
+            id: legacyRun.id,
+            endedAt: Date(),
+            exitCode: 0,
+            result: .succeeded,
+            afterConfiguration: legacyRun.configuration,
+            delta: ConfigurationDelta(added: [:], removed: [:], changed: [:])
+        )
+        try await repository.verifyRun(RunVerification(
+            runID: legacyRun.id,
+            verdict: .perfect,
+            rendering: .passed,
+            inputPrecision: .passed,
+            graphicsSettings: .passed,
+            gameplay: .passed,
+            source: .visualInspection,
+            notes: "evidencia histórica"
+        ))
+        try await repository.recordObservation(CompatibilityObservation(
+            appID: "421",
+            gameName: "CrossOver Histórico",
+            backend: .crossOver,
+            providerVersion: "legacy",
+            verdict: .failed,
+            configurationFingerprint: "legacy-config",
+            configuration: ["backend": "crossOver"],
+            source: .imported,
+            notes: "fila preservada"
+        ))
+        let source = CodeWeaversCompatibilityProvider.codeWeaversSource
+        let externalGame = SteamGame(
+            appID: "421",
+            name: "CrossOver Histórico",
+            installDirectory: "Legacy",
+            manifestURL: directory.appendingPathComponent("appmanifest_421.acf"),
             sourceBackend: .crossOver
         )
-
-        guard case .updated = await synchronizer.refresh(game: game) else {
-            return XCTFail("La primera consulta debía persistir la ficha")
-        }
-        let firstFetchCount = await provider.fetchCount()
-        XCTAssertEqual(firstFetchCount, 1)
-        let cachedOutcome = await synchronizer.refresh(game: game)
-        XCTAssertEqual(cachedOutcome, .freshCache)
-        let cachedFetchCount = await provider.fetchCount()
-        XCTAssertEqual(cachedFetchCount, 1)
-
-        let storedEntry = try await repository.externalEntry(
-            sourceID: provider.source.id,
-            appID: game.appID
+        let legacyRecord = ExternalGameRecord(
+            sourceID: source.id,
+            externalAppID: "legacy-421",
+            canonicalURL: URL(fileURLWithPath: "/historical/codeweavers/421"),
+            name: externalGame.name,
+            company: nil,
+            category: nil,
+            steamAppID: externalGame.appID,
+            macOSRating: .init(
+                platform: .macOS,
+                value: 5,
+                testedCrossOverVersion: "legacy",
+                testedAt: nil
+            ),
+            linuxRating: .init(
+                platform: .linux,
+                value: nil,
+                testedCrossOverVersion: nil,
+                testedAt: nil
+            ),
+            fetchedAt: Date(),
+            contentFingerprint: "historical"
         )
-        let entry = try XCTUnwrap(storedEntry)
-        XCTAssertEqual(entry.record?.macOSRating.value, 5)
-        let comparisons = try await repository.compatibilityComparisons()
-        let comparison = try XCTUnwrap(comparisons.first { $0.appID == game.appID })
-        XCTAssertEqual(comparison.localState, .unverified)
-        XCTAssertEqual(comparison.alignment, .insufficientEvidence)
-        let certifications = try await repository.certifications()
-        XCTAssertNil(certifications.first { $0.appID == game.appID })
+        await assertExternalCatalogRejected {
+            try await repository.registerExternalSource(source)
+        }
+        await assertExternalCatalogRejected {
+            _ = try await repository.reserveExternalRequest(source: source)
+        }
+        await assertExternalCatalogRejected {
+            _ = try await repository.externalSyncState(sourceID: source.id)
+        }
+        await assertExternalCatalogRejected {
+            try await repository.recordExternalSyncSuccess(sourceID: source.id)
+        }
+        await assertExternalCatalogRejected {
+            try await repository.recordExternalSyncFailure(sourceID: source.id, message: "legacy")
+        }
+        await assertExternalCatalogRejected {
+            try await repository.upsertExternalRecord(
+                legacyRecord,
+                for: externalGame,
+                matchMethod: .steamAppID,
+                confidence: 1
+            )
+        }
+        await assertExternalCatalogRejected {
+            try await repository.recordExternalLookupStatus(
+                sourceID: source.id,
+                game: externalGame,
+                status: .noMatch
+            )
+        }
         try await repository.close()
+        try mutateSQLite(directory.appendingPathComponent("compatibility.sqlite")) { database in
+            try executeSQLite(database, """
+                PRAGMA foreign_keys=ON;
+                INSERT INTO external_catalog_sources(
+                    id, display_name, base_url, information_url,
+                    minimum_request_interval_seconds, cache_lifetime_seconds,
+                    created_at, updated_at
+                ) VALUES(
+                    'codeweavers', 'CodeWeavers histórico', 'https://invalid.example',
+                    'https://invalid.example', 60, 3600,
+                    '2026-08-13T00:00:00.000Z', '2026-08-13T00:00:00.000Z'
+                );
+                INSERT INTO external_catalog_sync_state(source_id) VALUES('codeweavers');
+                INSERT INTO external_game_records(
+                    source_id, external_app_id, canonical_url, name, company, category,
+                    steam_app_id, mac_rating, mac_tested_version, mac_tested_at,
+                    linux_rating, linux_tested_version, linux_tested_at,
+                    fetched_at, content_fingerprint, entity_tag, last_modified
+                ) VALUES(
+                    'codeweavers', 'legacy-421', 'https://invalid.example/421',
+                    'CrossOver Histórico', NULL, NULL, '421', 5, 'legacy', NULL,
+                    NULL, NULL, NULL, '2026-08-13T00:00:00.000Z', 'historical', NULL, NULL
+                );
+                INSERT INTO external_game_links(
+                    source_id, app_id, external_app_id, status, match_method,
+                    confidence, query_name, last_attempt_at, error_message, linked_at
+                ) VALUES(
+                    'codeweavers', '421', 'legacy-421', 'linked', 'steamAppID',
+                    1, 'CrossOver Histórico', '2026-08-13T00:00:00.000Z', NULL,
+                    '2026-08-13T00:00:00.000Z'
+                );
+                """)
+        }
+        try await repository.prepare()
+
+        let publicObservations = try await repository.observations()
+        let publicRunDetails = try await repository.runDetails()
+        let publicRuns = try await repository.recentRuns()
+        let publicProcesses = try await repository.runProcesses(runID: legacyRun.id)
+        let publicProfiles = try await repository.compatibilityProfiles()
+        let publicEngines = try await repository.engineProfiles()
+        let publicCertifications = try await repository.certifications(activeOnly: false)
+        let publicExternalEntries = try await repository.externalEntries(sourceID: source.id)
+        XCTAssertFalse(publicObservations.contains { $0.backend == .crossOver })
+        XCTAssertFalse(publicRunDetails.contains { $0.backend == .crossOver })
+        XCTAssertFalse(publicRuns.contains { $0.backend == .crossOver })
+        XCTAssertTrue(publicProcesses.isEmpty)
+        XCTAssertFalse(publicProfiles.contains { $0.backend == .crossOver })
+        XCTAssertFalse(publicEngines.contains { $0.backend == .crossOver })
+        XCTAssertFalse(publicCertifications.contains { $0.backend == .crossOver })
+        XCTAssertTrue(publicExternalEntries.isEmpty)
+        let health = try await repository.databaseHealth()
+        XCTAssertEqual(health.runCount, 2)
+        XCTAssertEqual(health.processCount, 1)
+        XCTAssertEqual(health.externalRecordCount, 1)
+        let comparisons = try await repository.compatibilityComparisons()
+        XCTAssertFalse(comparisons.contains { $0.appID == "421" })
+        XCTAssertTrue(comparisons.allSatisfy {
+            $0.localBackend != .crossOver
+                && $0.publicMacRating == nil
+                && $0.publicTestedVersion == nil
+                && $0.alignment == .insufficientEvidence
+        })
+
+        let exportURL = directory.appendingPathComponent("public.json")
+        try await repository.exportJSON(to: exportURL)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let export = try decoder.decode(
+            CompatibilityExport.self,
+            from: Data(contentsOf: exportURL)
+        )
+        XCTAssertTrue(export.externalCatalog.isEmpty)
+        XCTAssertFalse(export.runs.contains { $0.backend == .crossOver })
+        XCTAssertFalse(export.processes.contains { $0.runID == legacyRun.id })
+        XCTAssertFalse(export.observations.contains { $0.backend == .crossOver })
+        XCTAssertFalse(export.profiles.contains { $0.backend == .crossOver })
+        XCTAssertFalse(export.engines.contains { $0.backend == .crossOver })
+        XCTAssertFalse(export.certifications.contains { $0.backend == .crossOver })
+        try await repository.close()
+    }
+
+    func testVersionThirteenResearchMigrationPreservesLegacyAndAcceptsAutonomousEvidence() async throws {
+        let directory = temporaryDirectory("research-v14")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("compatibility.sqlite")
+        var repository: CompatibilityRepository? = CompatibilityRepository(databaseURL: databaseURL)
+        try await repository?.prepare()
+        try await repository?.close()
+        repository = nil
+
+        let legacyCaseID = UUID()
+        let legacyHypothesisID = UUID()
+        let legacyExperimentID = UUID()
+        let legacyArtifactID = UUID()
+        try mutateSQLite(databaseURL) { database in
+            try executeSQLite(
+                database,
+                """
+                DROP TRIGGER IF EXISTS research_hypothesis_matches_case_insert;
+                DROP TRIGGER IF EXISTS research_hypothesis_matches_case_update;
+                DROP TRIGGER IF EXISTS research_experiment_pass_guard_insert;
+                DROP TRIGGER IF EXISTS research_experiment_pass_guard_update;
+                DROP TRIGGER IF EXISTS research_experiment_lock_passed;
+                DROP TRIGGER IF EXISTS research_case_verify_guard_insert;
+                DROP TRIGGER IF EXISTS research_case_verify_guard_update;
+                DROP TRIGGER IF EXISTS research_hypothesis_lock_verified;
+                DROP TRIGGER IF EXISTS research_hypothesis_insert_lock_verified;
+                DROP TRIGGER IF EXISTS research_hypothesis_delete_lock_verified;
+                DROP TRIGGER IF EXISTS research_gate_lock_update;
+                DROP TRIGGER IF EXISTS research_gate_lock_delete;
+                DROP TRIGGER IF EXISTS research_gate_lock_insert;
+                DROP TRIGGER IF EXISTS research_artifact_lock_update;
+                DROP TRIGGER IF EXISTS research_artifact_lock_delete;
+                DROP TRIGGER IF EXISTS research_artifact_lock_insert;
+                DROP TRIGGER IF EXISTS research_case_reopens_after_verdict_correction;
+                DROP TABLE research_gate_results;
+                DROP TABLE research_artifacts;
+                DROP TABLE research_experiments;
+                DROP TABLE research_hypotheses;
+                DROP TABLE compatibility_research_cases;
+                CREATE TABLE compatibility_research_cases(
+                    id TEXT PRIMARY KEY,
+                    app_id TEXT NOT NULL REFERENCES games(app_id) ON DELETE CASCADE,
+                    symptom TEXT NOT NULL CHECK(trim(symptom)!=''),
+                    expected_behavior TEXT NOT NULL CHECK(trim(expected_behavior)!=''),
+                    reference_backend TEXT NOT NULL CHECK(reference_backend='crossOver'),
+                    state TEXT NOT NULL CHECK(state IN (
+                        'open','investigating','validationPending','verified','pausedExternalDependency'
+                    )),
+                    blocker TEXT,
+                    winning_experiment_id TEXT REFERENCES research_experiments(id),
+                    resolution_summary TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    CHECK(state!='pausedExternalDependency' OR (
+                        blocker IS NOT NULL AND trim(blocker)!=''
+                    )),
+                    CHECK(state!='verified' OR (
+                        winning_experiment_id IS NOT NULL
+                        AND resolution_summary IS NOT NULL AND trim(resolution_summary)!=''
+                    ))
+                );
+                CREATE TABLE research_hypotheses(
+                    id TEXT PRIMARY KEY,
+                    case_id TEXT NOT NULL
+                        REFERENCES compatibility_research_cases(id) ON DELETE CASCADE,
+                    rank INTEGER NOT NULL CHECK(rank > 0),
+                    statement TEXT NOT NULL CHECK(trim(statement)!=''),
+                    prediction TEXT NOT NULL CHECK(trim(prediction)!=''),
+                    status TEXT NOT NULL CHECK(status IN ('proposed','testing','supported','falsified')),
+                    evidence TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(case_id, rank)
+                );
+                CREATE TABLE research_experiments(
+                    id TEXT PRIMARY KEY,
+                    case_id TEXT NOT NULL
+                        REFERENCES compatibility_research_cases(id) ON DELETE CASCADE,
+                    hypothesis_id TEXT REFERENCES research_hypotheses(id) ON DELETE SET NULL,
+                    dimension TEXT NOT NULL CHECK(dimension IN (
+                        'environment','windowsRuntime','graphicsBackend','dynamicLibraries',
+                        'dllOverride','registry','display','launcher','dependency','permission','sourcePatch'
+                    )),
+                    change_summary TEXT NOT NULL CHECK(trim(change_summary)!=''),
+                    state TEXT NOT NULL CHECK(state IN (
+                        'planned','ready','running','validation','passed','failed','rolledBack'
+                    )),
+                    is_isolated INTEGER NOT NULL CHECK(is_isolated IN (0,1)),
+                    rollback_reference TEXT,
+                    baseline_engine_fingerprint TEXT,
+                    candidate_engine_fingerprint TEXT,
+                    run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+                    runtime_candidate_id TEXT REFERENCES runtime_candidates(id) ON DELETE SET NULL,
+                    notes TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    CHECK(state='planned' OR (
+                        is_isolated=1 AND rollback_reference IS NOT NULL
+                        AND trim(rollback_reference)!=''
+                        AND baseline_engine_fingerprint IS NOT NULL
+                        AND trim(baseline_engine_fingerprint)!=''
+                    )),
+                    CHECK(state!='passed' OR (
+                        candidate_engine_fingerprint IS NOT NULL
+                        AND trim(candidate_engine_fingerprint)!=''
+                        AND candidate_engine_fingerprint!=baseline_engine_fingerprint
+                        AND run_id IS NOT NULL
+                    ))
+                );
+                CREATE TABLE research_gate_results(
+                    experiment_id TEXT NOT NULL
+                        REFERENCES research_experiments(id) ON DELETE CASCADE,
+                    gate TEXT NOT NULL CHECK(gate IN (
+                        'crossOverReference','rendering','inputPrecision','graphicsSettings',
+                        'gameplay','ownResources','regressionMatrix','rollbackVerified'
+                    )),
+                    status TEXT NOT NULL CHECK(status IN ('pending','passed','failed')),
+                    evidence_reference TEXT NOT NULL,
+                    checked_at TEXT NOT NULL,
+                    PRIMARY KEY(experiment_id, gate),
+                    CHECK(status='pending' OR trim(evidence_reference)!='')
+                );
+                CREATE TABLE research_artifacts(
+                    id TEXT PRIMARY KEY,
+                    experiment_id TEXT NOT NULL
+                        REFERENCES research_experiments(id) ON DELETE CASCADE,
+                    kind TEXT NOT NULL CHECK(kind IN (
+                        'crossOverCapture','regressionCapture','moduleInventory',
+                        'configurationSnapshot','buildReport','testReport','signatureReport',
+                        'rollbackManifest','logExcerpt','performanceCapture'
+                    )),
+                    reference TEXT NOT NULL CHECK(trim(reference)!=''),
+                    fingerprint TEXT,
+                    captured_at TEXT NOT NULL,
+                    UNIQUE(experiment_id, kind, reference)
+                );
+                INSERT INTO games(app_id, name, updated_at)
+                VALUES('951', 'Legacy Research', '2026-08-13T00:00:00.000Z');
+                INSERT INTO compatibility_research_cases(
+                    id, app_id, symptom, expected_behavior, reference_backend, state,
+                    blocker, winning_experiment_id, resolution_summary, created_at, updated_at
+                ) VALUES(
+                    '\(legacyCaseID.uuidString)', '951', 'Histórico', 'Funcionamiento',
+                    'crossOver', 'open', NULL, NULL, NULL,
+                    '2026-08-13T00:00:00.000Z', '2026-08-13T00:00:00.000Z'
+                );
+                INSERT INTO research_hypotheses(
+                    id, case_id, rank, statement, prediction, status, evidence,
+                    created_at, updated_at
+                ) VALUES(
+                    '\(legacyHypothesisID.uuidString)', '\(legacyCaseID.uuidString)', 1,
+                    'Hipótesis', 'Predicción', 'proposed', '',
+                    '2026-08-13T00:00:00.000Z', '2026-08-13T00:00:00.000Z'
+                );
+                INSERT INTO research_experiments(
+                    id, case_id, hypothesis_id, dimension, change_summary, state,
+                    is_isolated, rollback_reference, baseline_engine_fingerprint,
+                    candidate_engine_fingerprint, run_id, runtime_candidate_id, notes,
+                    created_at, updated_at
+                ) VALUES(
+                    '\(legacyExperimentID.uuidString)', '\(legacyCaseID.uuidString)',
+                    '\(legacyHypothesisID.uuidString)', 'environment', 'Histórico', 'planned',
+                    0, NULL, NULL, NULL, NULL, NULL, '',
+                    '2026-08-13T00:00:00.000Z', '2026-08-13T00:00:00.000Z'
+                );
+                INSERT INTO research_gate_results(
+                    experiment_id, gate, status, evidence_reference, checked_at
+                ) VALUES(
+                    '\(legacyExperimentID.uuidString)', 'crossOverReference', 'passed',
+                    'legacy', '2026-08-13T00:00:00.000Z'
+                );
+                INSERT INTO research_artifacts(
+                    id, experiment_id, kind, reference, fingerprint, captured_at
+                ) VALUES(
+                    '\(legacyArtifactID.uuidString)', '\(legacyExperimentID.uuidString)',
+                    'crossOverCapture', 'legacy', NULL, '2026-08-13T00:00:00.000Z'
+                );
+                DELETE FROM schema_migrations WHERE version>=14;
+                PRAGMA user_version=13;
+                """
+            )
+        }
+
+        let migrated = CompatibilityRepository(databaseURL: databaseURL)
+        try await migrated.prepare()
+        let migratedHealth = try await migrated.databaseHealth()
+        XCTAssertEqual(migratedHealth.schemaVersion, CompatibilityRepository.currentSchemaVersion)
+        let publicCases = try await migrated.researchCases()
+        XCTAssertFalse(publicCases.contains { $0.id == legacyCaseID })
+
+        let autonomous = CompatibilityResearchCase(
+            appID: "952",
+            gameName: "Autonomous Research",
+            symptom: "Fallo reproducible",
+            expectedBehavior: "Debe funcionar"
+        )
+        try await migrated.registerResearchCase(autonomous)
+        let experiment = ResearchExperiment(
+            caseID: autonomous.id,
+            dimension: .environment,
+            changeSummary: "Baseline propio"
+        )
+        try await migrated.registerResearchExperiment(experiment)
+        try await migrated.recordResearchGate(ResearchGateResult(
+            experimentID: experiment.id,
+            gate: .baselineReference,
+            status: .passed,
+            evidenceReference: "baseline"
+        ))
+        try await migrated.recordResearchArtifact(ResearchArtifact(
+            experimentID: experiment.id,
+            kind: .baselineCapture,
+            reference: "baseline",
+            fingerprint: "sha256:" + String(repeating: "a", count: 64)
+        ))
+        let autonomousGates = try await migrated.researchGates(experimentID: experiment.id)
+        let autonomousArtifacts = try await migrated.researchArtifacts(experimentID: experiment.id)
+        XCTAssertTrue(autonomousGates.contains { $0.gate == .baselineReference })
+        XCTAssertTrue(autonomousArtifacts.contains { $0.kind == .baselineCapture })
+        let exportURL = directory.appendingPathComponent("research-public.json")
+        try await migrated.exportJSON(to: exportURL)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let export = try decoder.decode(
+            CompatibilityExport.self,
+            from: Data(contentsOf: exportURL)
+        )
+        XCTAssertEqual(export.researchCases.map(\.id), [autonomous.id])
+        XCTAssertEqual(export.researchExperiments.map(\.id), [experiment.id])
+        XCTAssertEqual(export.researchGates.map(\.gate), [.baselineReference])
+        XCTAssertEqual(export.researchArtifacts.map(\.kind), [.baselineCapture])
+        XCTAssertFalse(export.researchHypotheses.contains { $0.id == legacyHypothesisID })
+        try await migrated.close()
+
+        try mutateSQLite(databaseURL) { database in
+            XCTAssertEqual(try scalarSQLiteText(
+                database,
+                "SELECT reference_backend FROM compatibility_research_cases "
+                    + "WHERE id='\(legacyCaseID.uuidString)';"
+            ), "crossOver")
+            XCTAssertEqual(try scalarSQLiteText(
+                database,
+                "SELECT gate FROM research_gate_results "
+                    + "WHERE experiment_id='\(legacyExperimentID.uuidString)';"
+            ), "crossOverReference")
+            XCTAssertEqual(try scalarSQLiteText(
+                database,
+                "SELECT kind FROM research_artifacts WHERE id='\(legacyArtifactID.uuidString)';"
+            ), "crossOverCapture")
+            XCTAssertEqual(try scalarSQLiteText(
+                database,
+                "SELECT reference_backend FROM compatibility_research_cases "
+                    + "WHERE id='\(autonomous.id.uuidString)';"
+            ), "regression")
+            XCTAssertEqual(try scalarSQLiteText(
+                database,
+                "SELECT gate FROM research_gate_results "
+                    + "WHERE experiment_id='\(experiment.id.uuidString)';"
+            ), "baselineReference")
+            XCTAssertEqual(try scalarSQLiteText(
+                database,
+                "SELECT kind FROM research_artifacts "
+                    + "WHERE experiment_id='\(experiment.id.uuidString)';"
+            ), "baselineCapture")
+            XCTAssertNil(try scalarSQLiteText(database, "PRAGMA foreign_key_check;"))
+        }
+    }
+
+    func testVersionThirteenResearchMigrationPreservesPassedExperimentWithImmutableTriggers() async throws {
+        let directory = temporaryDirectory("research-v14-passed")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("compatibility.sqlite")
+        let repository = CompatibilityRepository(databaseURL: databaseURL)
+        try await repository.prepare()
+
+        let researchCase = CompatibilityResearchCase(
+            appID: "953",
+            gameName: "Passed Research",
+            symptom: "Fallo reproducido",
+            expectedBehavior: "Funcionamiento estable"
+        )
+        try await repository.registerResearchCase(researchCase)
+        try await repository.beginResearch(caseID: researchCase.id)
+        let hypothesis = ResearchHypothesis(
+            caseID: researchCase.id,
+            rank: 1,
+            statement: "La causa está aislada.",
+            prediction: "El candidato elimina el fallo."
+        )
+        try await repository.registerResearchHypothesis(hypothesis)
+        let experiment = ResearchExperiment(
+            caseID: researchCase.id,
+            hypothesisID: hypothesis.id,
+            dimension: .environment,
+            changeSummary: "Candidato aislado",
+            state: .ready,
+            isIsolated: true,
+            rollbackReference: "backups/passed-research",
+            baselineEngineFingerprint: "engine-baseline"
+        )
+        try await repository.registerResearchExperiment(experiment)
+
+        let context = makeContext(appID: researchCase.appID, name: researchCase.gameName)
+        try await repository.beginRun(context)
+        try await repository.markLaunched(
+            id: context.id,
+            processID: 9_530,
+            executable: "C:\\Games\\passed.exe",
+            launchMilliseconds: 100
+        )
+        try await repository.verifyRun(RunVerification(
+            runID: context.id,
+            verdict: .perfect,
+            rendering: .passed,
+            inputPrecision: .passed,
+            graphicsSettings: .passed,
+            gameplay: .passed,
+            source: .visualInspection,
+            notes: "Evidencia temporal de migración"
+        ))
+        try await repository.attachResearchRun(experimentID: experiment.id, runID: context.id)
+        for gate in CompatibilityResearchProtocol.mandatoryGates {
+            try await repository.recordResearchGate(ResearchGateResult(
+                experimentID: experiment.id,
+                gate: gate,
+                status: .passed,
+                evidenceReference: "evidence/\(gate.rawValue)"
+            ))
+        }
+        for kind in CompatibilityResearchProtocol.mandatoryArtifacts {
+            try await repository.recordResearchArtifact(ResearchArtifact(
+                experimentID: experiment.id,
+                kind: kind,
+                reference: "evidence/\(kind.rawValue)",
+                fingerprint: "sha256:\(String(repeating: "a", count: 64))"
+            ))
+        }
+        try await repository.completeResearchCase(
+            caseID: researchCase.id,
+            experimentID: experiment.id,
+            resolution: "El candidato aislado resolvió el fallo."
+        )
+        try await repository.close()
+
+        try mutateSQLite(databaseURL) { database in
+            try executeSQLite(database, """
+                DELETE FROM schema_migrations WHERE version>=14;
+                PRAGMA user_version=13;
+                """)
+        }
+
+        let migrated = CompatibilityRepository(databaseURL: databaseURL)
+        try await migrated.prepare()
+        let health = try await migrated.databaseHealth()
+        XCTAssertEqual(health.schemaVersion, CompatibilityRepository.currentSchemaVersion)
+        let migratedExperiments = try await migrated.researchExperiments()
+        let storedExperiment = try XCTUnwrap(
+            migratedExperiments.first { $0.id == experiment.id }
+        )
+        XCTAssertEqual(storedExperiment.state, .passed)
+        let migratedCases = try await migrated.researchCases()
+        let storedCase = try XCTUnwrap(
+            migratedCases.first { $0.id == researchCase.id }
+        )
+        XCTAssertEqual(storedCase.state, .verified)
+        try await migrated.close()
+
+        try mutateSQLite(databaseURL) { database in
+            XCTAssertNil(try scalarSQLiteText(database, "PRAGMA foreign_key_check;"))
+            XCTAssertEqual(try scalarSQLiteText(
+                database,
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' "
+                    + "AND name LIKE 'research_%';"
+            ), "17")
+            XCTAssertEqual(try scalarSQLiteText(
+                database,
+                "SELECT state FROM research_experiments WHERE id='\(experiment.id.uuidString)';"
+            ), "passed")
+            XCTAssertThrowsError(try executeSQLite(
+                database,
+                """
+                UPDATE research_experiments SET state='failed'
+                WHERE id='\(experiment.id.uuidString)';
+                """
+            ))
+        }
+    }
+
+    func testFailedVersionThirteenResearchMigrationRollsBackRowsVersionAndTriggers() async throws {
+        let directory = temporaryDirectory("research-v14-rollback")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("compatibility.sqlite")
+        let repository = CompatibilityRepository(databaseURL: databaseURL)
+        try await repository.prepare()
+
+        let researchCase = CompatibilityResearchCase(
+            appID: "954",
+            gameName: "Rollback Research",
+            symptom: "Fallo reproducido",
+            expectedBehavior: "Funcionamiento estable"
+        )
+        try await repository.registerResearchCase(researchCase)
+        let experiment = ResearchExperiment(
+            caseID: researchCase.id,
+            dimension: .environment,
+            changeSummary: "Candidato temporal"
+        )
+        try await repository.registerResearchExperiment(experiment)
+        let artifact = ResearchArtifact(
+            experimentID: experiment.id,
+            kind: .logExcerpt,
+            reference: "evidence/log",
+            fingerprint: "sha256:\(String(repeating: "b", count: 64))"
+        )
+        try await repository.recordResearchArtifact(artifact)
+        try await repository.close()
+
+        try mutateSQLite(databaseURL) { database in
+            try executeSQLite(database, """
+                PRAGMA ignore_check_constraints=ON;
+                UPDATE research_artifacts SET fingerprint='legacy-unchecked'
+                WHERE id='\(artifact.id.uuidString)';
+                PRAGMA ignore_check_constraints=OFF;
+                DELETE FROM schema_migrations WHERE version>=14;
+                PRAGMA user_version=13;
+                """)
+        }
+
+        let failedMigration = CompatibilityRepository(databaseURL: databaseURL)
+        do {
+            try await failedMigration.prepare()
+            XCTFail("La migración debía rechazar la huella v13 incompatible con el contrato v14.")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("CHECK constraint failed"))
+        }
+
+        try mutateSQLite(databaseURL) { database in
+            XCTAssertEqual(try scalarSQLiteText(database, "PRAGMA user_version;"), "13")
+            XCTAssertEqual(try scalarSQLiteText(
+                database,
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' "
+                    + "AND name LIKE 'research_%';"
+            ), "17")
+            XCTAssertEqual(try scalarSQLiteText(
+                database,
+                "SELECT fingerprint FROM research_artifacts WHERE id='\(artifact.id.uuidString)';"
+            ), "legacy-unchecked")
+            XCTAssertEqual(try scalarSQLiteText(
+                database,
+                "SELECT name FROM sqlite_master WHERE type='trigger' "
+                    + "AND name='research_experiment_lock_passed';"
+            ), "research_experiment_lock_passed")
+            XCTAssertNil(try scalarSQLiteText(
+                database,
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                    + "AND name='research_experiments_v14';"
+            ))
+        }
     }
 
     func testRequestReservationPersistsPublishedCrawlDelay() async throws {
@@ -896,12 +1563,13 @@ final class CompatibilityCatalogTests: XCTestCase {
         appID: String,
         name: String,
         configuration: [String: String] = ["backend": "regression"],
-        providerVersion: String = "Test"
+        providerVersion: String = "Test",
+        backend: BackendKind = .regression
     ) -> RunContext {
         return RunContext(
             appID: appID,
             gameName: name,
-            backend: .regression,
+            backend: backend,
             bottleName: "Steam",
             providerVersion: providerVersion,
             command: "$APP/wine",
@@ -947,58 +1615,33 @@ final class CompatibilityCatalogTests: XCTestCase {
             ])
         }
     }
-}
 
-private actor StubCompatibilityProvider: ExternalCompatibilityProviding {
-    nonisolated let source = ExternalCatalogSource(
-        id: "codeweavers",
-        displayName: "CodeWeavers Test",
-        baseURL: URL(string: "https://www.codeweavers.com/compatibility")!,
-        informationURL: URL(string: "https://www.codeweavers.com/compatibility")!,
-        minimumRequestInterval: 0,
-        cacheLifetime: 3_600
-    )
-
-    private let record: ExternalGameRecord
-    private var fetches = 0
-
-    init(appID: String, gameName: String) {
-        record = ExternalGameRecord(
-            sourceID: "codeweavers",
-            externalAppID: "test-record",
-            canonicalURL: CodeWeaversCompatibilityProvider.probableDetailURL(for: gameName)!,
-            name: gameName,
-            company: "Test Publisher",
-            category: "Games",
-            steamAppID: appID,
-            macOSRating: ExternalCompatibilityRating(
-                platform: .macOS,
-                value: 5,
-                testedCrossOverVersion: "26.3.0",
-                testedAt: Date(timeIntervalSince1970: 900)
-            ),
-            linuxRating: ExternalCompatibilityRating(
-                platform: .linux,
-                value: nil,
-                testedCrossOverVersion: nil,
-                testedAt: nil
-            ),
-            fetchedAt: Date(),
-            contentFingerprint: String(repeating: "a", count: 64)
-        )
+    private func scalarSQLiteText(_ database: OpaquePointer, _ sql: String) throws -> String? {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else {
+            throw NSError(domain: "SQLiteTest", code: 2)
+        }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW,
+              let value = sqlite3_column_text(statement, 0) else {
+            return nil
+        }
+        return String(cString: value)
     }
 
-    func fetchRecord(
-        at detailURL: URL,
-        validators: ExternalCatalogValidators?
-    ) async throws -> ExternalCatalogFetchResult {
-        fetches += 1
-        return .modified(record)
+    private func assertExternalCatalogRejected(
+        _ operation: () async throws -> Void,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        do {
+            try await operation()
+            XCTFail("La fuente histórica aceptó una escritura nueva.", file: file, line: line)
+        } catch RegressionCoreError.externalCatalog {
+            return
+        } catch {
+            XCTFail("Error inesperado: \(error)", file: file, line: line)
+        }
     }
-
-    func search(named gameName: String) async throws -> [ExternalCatalogSearchCandidate] {
-        []
-    }
-
-    func fetchCount() -> Int { fetches }
 }

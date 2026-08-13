@@ -7,6 +7,7 @@ source "$(dirname "$0")/toolchain-common.sh"
 
 PUBLIC_BUILD="${REGRESSION_PUBLIC_WINE_BUILD:-$ROOT/build/wine64-dist}"
 PUBLIC_PREFIX="/Applications/Regression.app/Contents/SharedSupport/wine-root"
+WINE_SOURCE="${REGRESSION_WINE_SOURCE:-$SRC/wine}"
 CONFIG_STATUS="$PUBLIC_BUILD/config.status"
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -29,7 +30,7 @@ mkdir -p "$PUBLIC_BUILD"
 if [[ ! -f "$CONFIG_STATUS" ]]; then
     (
         cd "$PUBLIC_BUILD"
-        "$SRC/wine/configure" -C --enable-archs=i386,x86_64 --with-mingw \
+        "$WINE_SOURCE/configure" -C --enable-archs=i386,x86_64 --with-mingw \
             --prefix="$PUBLIC_PREFIX" \
             --build=x86_64-apple-darwin --host=x86_64-apple-darwin \
             --with-gstreamer --with-sdl --with-vulkan \

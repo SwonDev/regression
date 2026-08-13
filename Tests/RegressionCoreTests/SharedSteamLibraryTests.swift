@@ -4,6 +4,271 @@ import Foundation
 import XCTest
 
 final class SharedSteamLibraryTests: XCTestCase {
+    func testCustodyValidationEvidenceAndFactoryAreNotPublicAPI() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let moduleDirectory = Bundle(for: SharedSteamLibraryTests.self).bundleURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("Modules", isDirectory: true)
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: moduleDirectory.appendingPathComponent("RegressionCore.swiftmodule").path
+            )
+        )
+
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-custody-api-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let source = scratch.appendingPathComponent("External.swift")
+        try """
+        import Foundation
+        import RegressionCore
+        func unavailable<T>() -> T { fatalError() }
+        let _: PhysicalLibraryCustodyValidationEvidence = unavailable()
+        _ = try PhysicalLibraryCustodyCommandPolicy.linkedValidationEvidence(
+            request: unavailable(), run: unavailable(), validationBoundary: unavailable()
+        )
+        """.write(to: source, atomically: true, encoding: .utf8)
+
+        let process = Process()
+        let errors = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        process.arguments = [
+            "swiftc", "-typecheck",
+            "-I", moduleDirectory.path,
+            "-Xcc", "-fmodule-map-file=\(root.path)/Sources/CSQLite/module.modulemap",
+            source.path,
+        ]
+        process.standardError = errors
+        try process.run()
+        process.waitUntilExit()
+        let diagnostic = String(
+            data: errors.fileHandleForReading.readDataToEndOfFile(),
+            encoding: .utf8
+        ) ?? ""
+
+        XCTAssertNotEqual(process.terminationStatus, 0, "Un cliente externo fabricó evidencia")
+        XCTAssertTrue(
+            diagnostic.contains("cannot find type 'PhysicalLibraryCustodyValidationEvidence'")
+                && diagnostic.contains("has no member 'linkedValidationEvidence'"),
+            "Diagnóstico inesperado: \(diagnostic)"
+        )
+    }
+
+    func testLegacyBooleanFinalizationAPIIsNotExternallyCallable() throws {
+        let root = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        let moduleDirectory = Bundle(for: SharedSteamLibraryTests.self).bundleURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("Modules", isDirectory: true)
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-custody-finalize-api-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let source = scratch.appendingPathComponent("External.swift")
+        try """
+        import Foundation
+        import RegressionCore
+        func unavailable<T>() -> T { fatalError() }
+        func bypass(_ manager: SharedSteamLibraryManager) async throws {
+            _ = try await manager.finalizePhysicalCustody(
+                regression: unavailable(),
+                legacyIdentity: unavailable(),
+                validationLease: unavailable(),
+                validationPassed: true,
+                runningState: unavailable()
+            )
+            _ = try await manager.finalizePhysicalCustodyValidated(
+                regression: unavailable(),
+                legacyIdentity: unavailable(),
+                request: unavailable(),
+                repository: unavailable(),
+                runningState: unavailable()
+            )
+        }
+        """.write(to: source, atomically: true, encoding: .utf8)
+
+        let process = Process()
+        let errors = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        process.arguments = [
+            "swiftc", "-typecheck",
+            "-I", moduleDirectory.path,
+            "-Xcc", "-fmodule-map-file=\(root.path)/Sources/CSQLite/module.modulemap",
+            source.path,
+        ]
+        process.standardError = errors
+        try process.run()
+        process.waitUntilExit()
+        let diagnostic = String(
+            data: errors.fileHandleForReading.readDataToEndOfFile(),
+            encoding: .utf8
+        ) ?? ""
+
+        XCTAssertNotEqual(process.terminationStatus, 0, "Un cliente externo cerró custodia con Bool")
+        XCTAssertTrue(
+            diagnostic.contains("has no member 'finalizePhysicalCustody'")
+                && diagnostic.contains("inaccessible due to 'package' protection level"),
+            "Diagnóstico inesperado: \(diagnostic)"
+        )
+    }
+
+    func testFreshInstallCreatesIndependentPhysicalRegressionLibraryWithoutLegacySource() async throws {
+        let fixture = try CustodyFixture()
+        defer { fixture.remove() }
+        try FileManager.default.removeItem(at: fixture.crossOverSteamApps)
+        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+
+        let first = await manager.assessPhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningState: .init()
+        )
+
+        XCTAssertEqual(first.status, .independent)
+        XCTAssertTrue(fixture.isPhysicalDirectory(fixture.regressionSteamApps))
+        XCTAssertFalse(fixture.pathExists(fixture.crossOverSteamApps))
+        XCTAssertNil(
+            try? FileManager.default.destinationOfSymbolicLink(atPath: fixture.regressionSteamApps.path)
+        )
+        XCTAssertEqual(first.inventory.manifestAppIDs, [])
+        let originalIdentity = try fixture.identity(at: fixture.regressionSteamApps)
+
+        let second = await manager.assessPhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningState: .init()
+        )
+
+        XCTAssertEqual(second.status, .independent)
+        XCTAssertEqual(try fixture.identity(at: fixture.regressionSteamApps), originalIdentity)
+        let interlock = await manager.currentPhysicalLibraryCustodyInterlock()
+        XCTAssertEqual(
+            interlock,
+            .init(status: .independent, mutationPolicy: .unrestricted)
+        )
+    }
+
+    func testFreshInstallAdoptsExistingPhysicalRegressionLibraryWithoutReplacingIt() async throws {
+        let fixture = try CustodyFixture()
+        defer { fixture.remove() }
+        try FileManager.default.removeItem(at: fixture.crossOverSteamApps)
+        try FileManager.default.createDirectory(
+            at: fixture.regressionSteamApps,
+            withIntermediateDirectories: false
+        )
+        let marker = fixture.regressionSteamApps.appendingPathComponent("libraryfolders.vdf")
+        try Data("biblioteca propia".utf8).write(to: marker)
+        let originalIdentity = try fixture.identity(at: fixture.regressionSteamApps)
+        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+
+        let assessment = await manager.assessPhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningState: .init()
+        )
+
+        XCTAssertEqual(assessment.status, .independent)
+        XCTAssertEqual(try fixture.identity(at: fixture.regressionSteamApps), originalIdentity)
+        XCTAssertEqual(try String(contentsOf: marker, encoding: .utf8), "biblioteca propia")
+        XCTAssertEqual(assessment.inventory.regularFileCount, 1)
+    }
+
+    func testFreshIndependentLibraryDoesNotDependOnFutureCrossOverInstallation() async throws {
+        let fixture = try CustodyFixture()
+        defer { fixture.remove() }
+        try FileManager.default.removeItem(at: fixture.crossOverSteamApps)
+        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+        let initialized = await manager.assessPhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningState: .init()
+        )
+        XCTAssertEqual(initialized.status, .independent)
+
+        try FileManager.default.createDirectory(
+            at: fixture.crossOverSteamApps,
+            withIntermediateDirectories: false
+        )
+        let reassessed = await manager.assessPhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningState: .init()
+        )
+        let interlock = await manager.currentPhysicalLibraryCustodyInterlock()
+
+        XCTAssertEqual(reassessed.status, .independent)
+        XCTAssertEqual(interlock.status, .independent)
+        XCTAssertEqual(interlock.mutationPolicy, .unrestricted)
+        XCTAssertTrue(fixture.isPhysicalDirectory(fixture.regressionSteamApps))
+        XCTAssertTrue(fixture.isPhysicalDirectory(fixture.crossOverSteamApps))
+    }
+
+    func testFreshIndependentLibraryBlocksIfFutureCrossOverSteamAppsContainsFiles() async throws {
+        let fixture = try CustodyFixture()
+        defer { fixture.remove() }
+        try FileManager.default.removeItem(at: fixture.crossOverSteamApps)
+        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+        let initialized = await manager.assessPhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningState: .init()
+        )
+        XCTAssertEqual(initialized.status, .independent)
+
+        try FileManager.default.createDirectory(
+            at: fixture.crossOverSteamApps,
+            withIntermediateDirectories: false
+        )
+        let duplicate = fixture.crossOverSteamApps.appendingPathComponent("appmanifest_42.acf")
+        try Data("AppState".utf8).write(to: duplicate)
+
+        let reassessed = await manager.assessPhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningState: .init()
+        )
+        let interlock = await manager.currentPhysicalLibraryCustodyInterlock()
+
+        XCTAssertTrue(reassessed.blockedReason?.contains("recibo") == true)
+        XCTAssertEqual(interlock.mutationPolicy, .blocked)
+        XCTAssertEqual(try String(contentsOf: duplicate, encoding: .utf8), "AppState")
+        XCTAssertTrue(fixture.isPhysicalDirectory(fixture.regressionSteamApps))
+    }
+
+    func testFreshInstallFailsClosedWhenRegressionSteamAppsIsASymbolicLink() async throws {
+        let fixture = try CustodyFixture()
+        defer { fixture.remove() }
+        try FileManager.default.removeItem(at: fixture.crossOverSteamApps)
+        let external = fixture.root.appendingPathComponent("external-steamapps", isDirectory: true)
+        try FileManager.default.createDirectory(at: external, withIntermediateDirectories: false)
+        let marker = external.appendingPathComponent("preservar")
+        try Data("intacto".utf8).write(to: marker)
+        try FileManager.default.createSymbolicLink(
+            at: fixture.regressionSteamApps,
+            withDestinationURL: external
+        )
+        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+
+        let assessment = await manager.assessPhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningState: .init()
+        )
+
+        XCTAssertTrue(assessment.blockedReason?.contains("no es un directorio físico") == true)
+        XCTAssertEqual(try String(contentsOf: marker, encoding: .utf8), "intacto")
+        XCTAssertEqual(
+            try FileManager.default.destinationOfSymbolicLink(atPath: fixture.regressionSteamApps.path),
+            external.path
+        )
+    }
+
     func testAssessmentDerivesDestinationInsideRegressionBottle() async throws {
         let fixture = try CustodyFixture()
         defer { fixture.remove() }
@@ -94,11 +359,12 @@ final class SharedSteamLibraryTests: XCTestCase {
         XCTAssertTrue(regressionAuthorized)
         XCTAssertFalse(crossOverAuthorized)
 
-        let completed = try await manager.finalizePhysicalCustody(
+        let authority = try await custodyValidationAuthority(in: fixture.root)
+        let completed = try await manager.finalizePhysicalCustodyValidated(
             regression: fixture.regression,
             legacyIdentity: fixture.legacyIdentity,
-            validationLease: lease,
-            validationPassed: true,
+            request: authority.request,
+            repository: authority.repository,
             runningState: .init()
         )
 
@@ -118,6 +384,95 @@ final class SharedSteamLibraryTests: XCTestCase {
         XCTAssertEqual(assessment.status, .independent)
     }
 
+    func testCrossOverNeverReceivesCustodyMutationAuthorityBeforeCutover() async throws {
+        let fixture = try CustodyFixture()
+        defer { fixture.remove() }
+        try fixture.makeSharedLayout()
+        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+
+        let snapshot = await manager.currentPhysicalLibraryCustodyInterlock()
+        XCTAssertEqual(snapshot.status, .eligibleForTransfer)
+        XCTAssertEqual(snapshot.mutationPolicy, .unrestricted)
+        XCTAssertFalse(snapshot.crossOverUnavailable)
+
+        let authorized = await manager.authorizePhysicalLibraryCustodyMutation(
+            backend: .crossOver,
+            validationLease: nil
+        )
+        XCTAssertFalse(authorized)
+        await assertUnsafeLibraryState(containing: "Regression") {
+            _ = try await manager.acquirePhysicalLibraryCustodyMutationPermit(
+                backend: .crossOver,
+                validationLease: nil
+            )
+        }
+        XCTAssertFalse(
+            fixture.pathExists(
+                fixture.backupRoot.appendingPathComponent("physical-custody.lock")
+            )
+        )
+    }
+
+    func testCustodyFinalizationRejectsRequestWithoutExactDatabaseRow() async throws {
+        let fixture = try CustodyFixture()
+        defer { fixture.remove() }
+        try fixture.makeSharedLayout()
+        let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+        _ = try await manager.migratePhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningStateProvider: { .init() }
+        )
+        let authority = try await custodyValidationAuthority(in: fixture.root)
+        let forged = PhysicalLibraryCustodyValidationRequest(
+            appID: authority.request.appID,
+            runID: UUID()
+        )
+
+        await assertInvalidEvidence(containing: "no existe") {
+            _ = try await manager.finalizePhysicalCustodyValidated(
+                regression: fixture.regression,
+                legacyIdentity: fixture.legacyIdentity,
+                request: forged,
+                repository: authority.repository,
+                runningState: .init()
+            )
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.journal.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.receipt.path))
+    }
+
+    func testCustodyFinalizationRejectsHistoricalAndAutomaticDatabaseEvidence() async throws {
+        for scenario in [(VerificationSource.visualInspection, -100.0), (.automatic, 1.0)] {
+            let fixture = try CustodyFixture()
+            defer { fixture.remove() }
+            try fixture.makeSharedLayout()
+            let manager = SharedSteamLibraryManager(backupRootURL: fixture.backupRoot)
+            _ = try await manager.migratePhysicalCustody(
+                regression: fixture.regression,
+                legacyIdentity: fixture.legacyIdentity,
+                runningStateProvider: { .init() }
+            )
+            let authority = try await custodyValidationAuthority(
+                in: fixture.root,
+                source: scenario.0,
+                startedAtOffset: scenario.1
+            )
+
+            await assertInvalidEvidence(containing: "no es una validación local perfecta") {
+                _ = try await manager.finalizePhysicalCustodyValidated(
+                    regression: fixture.regression,
+                    legacyIdentity: fixture.legacyIdentity,
+                    request: authority.request,
+                    repository: authority.repository,
+                    runningState: .init()
+                )
+            }
+            XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.journal.path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.receipt.path))
+        }
+    }
+
     func testFailedRuntimeValidationRestoresExactInitialTopology() async throws {
         let fixture = try CustodyFixture()
         defer { fixture.remove() }
@@ -132,17 +487,15 @@ final class SharedSteamLibraryTests: XCTestCase {
             legacyIdentity: fixture.legacyIdentity,
             runningStateProvider: { .init() }
         )
-        let lease = try await manager.beginPhysicalCustodyValidation(
+        _ = try await manager.beginPhysicalCustodyValidation(
             regression: fixture.regression,
             legacyIdentity: fixture.legacyIdentity,
             runningState: .init()
         )
 
-        let rolledBack = try await manager.finalizePhysicalCustody(
+        let rolledBack = try await manager.rollbackPhysicalCustody(
             regression: fixture.regression,
             legacyIdentity: fixture.legacyIdentity,
-            validationLease: lease,
-            validationPassed: false,
             runningState: .init()
         )
 
@@ -353,7 +706,7 @@ final class SharedSteamLibraryTests: XCTestCase {
         XCTAssertEqual(try fixture.physicalSteamAppsTrees().count, 1)
     }
 
-    func testFinalizeRejectsForgedOrMissingValidationSession() async throws {
+    func testEvidenceFinalizationRejectsAnActiveSteamSession() async throws {
         let fixture = try CustodyFixture()
         defer { fixture.remove() }
         try fixture.makeSharedLayout()
@@ -363,18 +716,19 @@ final class SharedSteamLibraryTests: XCTestCase {
             legacyIdentity: fixture.legacyIdentity,
             runningStateProvider: { .init() }
         )
-        let lease = try await manager.beginPhysicalCustodyValidation(
+        _ = try await manager.beginPhysicalCustodyValidation(
             regression: fixture.regression,
             legacyIdentity: fixture.legacyIdentity,
             runningState: .init()
         )
+        let authority = try await custodyValidationAuthority(in: fixture.root)
 
         await assertUnsafeLibraryState(containing: "Steam debe estar completamente cerrado") {
-            _ = try await manager.finalizePhysicalCustody(
+            _ = try await manager.finalizePhysicalCustodyValidated(
                 regression: fixture.regression,
                 legacyIdentity: fixture.legacyIdentity,
-                validationLease: lease,
-                validationPassed: true,
+                request: authority.request,
+                repository: authority.repository,
                 runningState: .init(regressionPIDs: [99])
             )
         }
@@ -408,12 +762,13 @@ final class SharedSteamLibraryTests: XCTestCase {
                 legacyIdentity: fixture.legacyIdentity,
                 runningStateProvider: { .init() }
             )
+            let authority = try await custodyValidationAuthority(in: fixture.root)
             do {
                 _ = try await injected.finalizePhysicalCustodyValidated(
                     regression: fixture.regression,
                     legacyIdentity: fixture.legacyIdentity,
-                    validationConfirmed: true,
-                    validationEvidence: "Steam, render, entrada y gameplay validados",
+                    request: authority.request,
+                    repository: authority.repository,
                     runningState: .init()
                 )
                 XCTFail("La ventana \(point) debía interrumpirse")
@@ -423,8 +778,8 @@ final class SharedSteamLibraryTests: XCTestCase {
             let result = try await recovered.finalizePhysicalCustodyValidated(
                 regression: fixture.regression,
                 legacyIdentity: fixture.legacyIdentity,
-                validationConfirmed: true,
-                validationEvidence: "Steam, render, entrada y gameplay validados",
+                request: authority.request,
+                repository: authority.repository,
                 runningState: .init()
             )
             XCTAssertEqual(result.status, .independent, "Fallo al recuperar \(point)")
@@ -456,12 +811,13 @@ final class SharedSteamLibraryTests: XCTestCase {
             legacyIdentity: fixture.legacyIdentity,
             runningStateProvider: { .init() }
         )
+        let authority = try await custodyValidationAuthority(in: fixture.root)
         do {
             _ = try await manager.finalizePhysicalCustodyValidated(
                 regression: fixture.regression,
                 legacyIdentity: fixture.legacyIdentity,
-                validationConfirmed: true,
-                validationEvidence: "Validación completa",
+                request: authority.request,
+                repository: authority.repository,
                 runningState: .init()
             )
             XCTFail("Se esperaba interrupción")
@@ -598,11 +954,12 @@ final class SharedSteamLibraryTests: XCTestCase {
             legacyIdentity: fixture.legacyIdentity,
             runningStateProvider: { .init() }
         )
+        let authority = try await custodyValidationAuthority(in: fixture.root)
         _ = try await manager.finalizePhysicalCustodyValidated(
             regression: fixture.regression,
             legacyIdentity: fixture.legacyIdentity,
-            validationConfirmed: true,
-            validationEvidence: "Validación completa",
+            request: authority.request,
+            repository: authority.repository,
             runningState: .init()
         )
         try FileManager.default.removeItem(at: fixture.receipt)
@@ -752,13 +1109,14 @@ final class SharedSteamLibraryTests: XCTestCase {
         let rawTarget = try FileManager.default.destinationOfSymbolicLink(atPath: marker.path)
         try FileManager.default.removeItem(at: marker)
         try FileManager.default.createSymbolicLink(atPath: marker.path, withDestinationPath: rawTarget)
+        let authority = try await custodyValidationAuthority(in: fixture.root)
 
         await assertUnsafeLibraryState(containing: "sustituido") {
             _ = try await manager.finalizePhysicalCustodyValidated(
                 regression: fixture.regression,
                 legacyIdentity: fixture.legacyIdentity,
-                validationConfirmed: true,
-                validationEvidence: "Validación completa",
+                request: authority.request,
+                repository: authority.repository,
                 runningState: .init()
             )
         }
@@ -826,13 +1184,14 @@ final class SharedSteamLibraryTests: XCTestCase {
             legacyIdentity: fixture.legacyIdentity,
             runningStateProvider: { .init() }
         )
+        let authority = try await custodyValidationAuthority(in: fixture.root)
 
         await assertUnsafeLibraryState(containing: "sustituido") {
             _ = try await manager.finalizePhysicalCustodyValidated(
                 regression: fixture.regression,
                 legacyIdentity: fixture.legacyIdentity,
-                validationConfirmed: true,
-                validationEvidence: "Validación completa",
+                request: authority.request,
+                repository: authority.repository,
                 runningState: .init()
             )
         }
@@ -906,6 +1265,78 @@ private final class LockedFlag: @unchecked Sendable {
     }
 }
 
+private struct CustodyValidationAuthority {
+    let request: PhysicalLibraryCustodyValidationRequest
+    let repository: CompatibilityRepository
+}
+
+private func custodyValidationAuthority(
+    in root: URL,
+    source: VerificationSource = .visualInspection,
+    startedAtOffset: TimeInterval = 1,
+    requestAppID: String = "219990"
+) async throws -> CustodyValidationAuthority {
+    let runID = UUID()
+    let boundary = Date()
+    let startedAt = boundary.addingTimeInterval(startedAtOffset)
+    let endedAt = startedAt.addingTimeInterval(100)
+    let request = PhysicalLibraryCustodyValidationRequest(appID: requestAppID, runID: runID)
+    let repository = CompatibilityRepository(
+        databaseURL: root.appendingPathComponent(
+            "custody-authority-\(runID.uuidString).sqlite"
+        )
+    )
+    try await repository.prepare()
+    try await repository.beginRun(RunContext(
+        id: runID,
+        appID: request.appID,
+        gameName: "Prueba de custodia",
+        backend: .regression,
+        bottleName: "Steam",
+        providerVersion: "test",
+        startedAt: startedAt,
+        command: "$APP/regression-engine",
+        arguments: ["-applaunch", request.appID],
+        system: SystemSnapshot(
+            macOSVersion: "test",
+            architecture: "arm64",
+            deviceModel: "test",
+            displayWidth: 1,
+            displayHeight: 1,
+            displayScale: 1
+        ),
+        configuration: [:],
+        configurationFingerprint: "custody-test"
+    ))
+    try await repository.markLaunched(
+        id: runID,
+        processID: 123,
+        executable: "game.exe",
+        startedAt: startedAt,
+        launchMilliseconds: 50
+    )
+    try await repository.finishRun(
+        id: runID,
+        endedAt: endedAt,
+        exitCode: 0,
+        result: .succeeded,
+        afterConfiguration: [:],
+        delta: ConfigurationDelta(added: [:], removed: [:], changed: [:])
+    )
+    let verification = RunVerification(
+        runID: runID,
+        verdict: .perfect,
+        rendering: .passed,
+        inputPrecision: .passed,
+        graphicsSettings: .passed,
+        gameplay: .passed,
+        source: source,
+        verifiedAt: endedAt.addingTimeInterval(1)
+    )
+    try await repository.verifyRun(verification)
+    return CustodyValidationAuthority(request: request, repository: repository)
+}
+
 private func assertUnsafeLibraryState(
     containing expected: String,
     operation: () async throws -> Void,
@@ -916,6 +1347,22 @@ private func assertUnsafeLibraryState(
         try await operation()
         XCTFail("Se esperaba unsafeLibraryState", file: file, line: line)
     } catch let RegressionCoreError.unsafeLibraryState(detail) {
+        XCTAssertTrue(detail.contains(expected), "Detalle inesperado: \(detail)", file: file, line: line)
+    } catch {
+        XCTFail("Error inesperado: \(error)", file: file, line: line)
+    }
+}
+
+private func assertInvalidEvidence(
+    containing expected: String,
+    operation: () async throws -> Void,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async {
+    do {
+        try await operation()
+        XCTFail("Se esperaba invalidEvidence", file: file, line: line)
+    } catch let RegressionCoreError.invalidEvidence(detail) {
         XCTAssertTrue(detail.contains(expected), "Detalle inesperado: \(detail)", file: file, line: line)
     } catch {
         XCTFail("Error inesperado: \(error)", file: file, line: line)

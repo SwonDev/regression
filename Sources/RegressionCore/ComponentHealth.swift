@@ -63,6 +63,34 @@ public struct TrustedComponentDescriptor: Equatable, Sendable {
   }
 }
 
+/// Archivo individual cuya identidad criptográfica forma parte de un descriptor compilado.
+///
+/// El inicializador no es público deliberadamente: solo el catálogo de la aplicación puede
+/// convertir una ruta y un hash en autoridad. Los consumidores pueden inspeccionar el contrato,
+/// pero no construir uno desde datos descargados o persistidos.
+public struct TrustedComponentFile: Equatable, Sendable {
+  public let relativePath: String
+  public let expectedSHA256: String
+
+  init(relativePath: String, expectedSHA256: String) {
+    self.relativePath = relativePath
+    self.expectedSHA256 = expectedSHA256.lowercased()
+  }
+}
+
+/// Descriptor compilado para un conjunto pequeño y explícito de archivos dentro de una raíz.
+///
+/// A diferencia de `TrustedComponentDescriptor`, este contrato no acepta un manifiesto situado
+/// junto al payload. Tampoco inventaría el Wine root: solo abre las rutas enumeradas, sin seguir
+/// enlaces y sin recorrer el resto del runtime.
+public struct TrustedComponentFileSetDescriptor: Equatable, Sendable {
+  public let identity: ComponentIdentity
+  public let payloadRootURL: URL
+  public let files: [TrustedComponentFile]
+  let maximumFileBytes: Int64
+  let maximumPayloadBytes: Int64
+}
+
 /// Catálogo mínimo de componentes que forman parte del código y del bundle firmado de Regression.
 ///
 /// Este catálogo fija la identidad y el hash esperado, pero no convierte una ruta arbitraria en
@@ -73,16 +101,53 @@ public struct TrustedComponentDescriptor: Equatable, Sendable {
 public enum TrustedComponentCatalog {
   public static let windowsMediaComponentID = "windows-media-gstreamer"
   public static let windowsMediaComponentVersion = "1"
-  public static let supportedApplicationVersion = "1.10.1"
-  public static let supportedBuildIdentifier = "36"
+  public static let steamRuntimePrerequisitesComponentID = "steam-runtime-prerequisites"
+  public static let steamRuntimePrerequisitesComponentVersion = "1"
+  public static let supportedApplicationVersion = "1.11.0"
+  public static let supportedBuildIdentifier = "37"
 
   private static let windowsMediaDevelopmentManifestSHA256 =
     "ac662661fb3384c6ad100066391cab209f9de60b2e129fb92e07365ee6fe9bb1"
-  private static let windowsMediaPublicManifestSHA256 =
-    "da8ba98d99d157f981ef3a2472dc9d74c9ce4673ef126bdd61851b9dd21dedb3"
+  // Medido sobre el manifiesto regenerado después de relocalizar, firmar y sanear el primer
+  // candidato público 1.11.0 (37). La aplicación se recompila tras fijarlo para que la autoridad
+  // no proceda del propio payload descargado.
+  private static let windowsMediaPublicManifestSHA256: String? = "da8ba98d99d157f981ef3a2472dc9d74c9ce4673ef126bdd61851b9dd21dedb3"
   private static let unsupportedManifestPlaceholder = String(repeating: "0", count: 64)
+  private static let steamRuntimeMaximumFileBytes: Int64 = 128 * 1_024 * 1_024
+  private static let steamRuntimeMaximumPayloadBytes: Int64 = 512 * 1_024 * 1_024
 
-  /// Describe el payload LGPL de Windows Media incluido en Regression 1.10.1 (36).
+  private static let steamRuntimePrerequisiteFiles: [TrustedComponentFile] = [
+    TrustedComponentFile(
+      relativePath: "lib/wine/x86_64-windows/vcruntime140.dll",
+      expectedSHA256: "f03a7c92ed8cda87fc0bf72a5af29962d26ca981b546b3ce0550fb57ca3ee7ff"
+    ),
+    TrustedComponentFile(
+      relativePath: "lib/wine/x86_64-windows/msvcp140.dll",
+      expectedSHA256: "2a53d2db7e7b760d2b1d7ecd46b05653e11850363a10b097303d3491aaa4e94a"
+    ),
+    TrustedComponentFile(
+      relativePath: "lib/wine/x86_64-windows/ucrtbase.dll",
+      expectedSHA256: "019e4bebf86cc4642fff63bc371223280ddfb0306ff379b04fe3f4dc2311ad22"
+    ),
+    TrustedComponentFile(
+      relativePath: "lib/wine/x86_64-windows/vcruntime140_1.dll",
+      expectedSHA256: "69e58956261ae1081a6429c3813b143689f29849ffb693eb4fee399f335e4608"
+    ),
+    TrustedComponentFile(
+      relativePath: "lib/wine/i386-windows/vcruntime140.dll",
+      expectedSHA256: "02037225c495c37747ae4cde08de6ff31119b850997799fa27237ca61bed7b35"
+    ),
+    TrustedComponentFile(
+      relativePath: "lib/wine/i386-windows/msvcp140.dll",
+      expectedSHA256: "2727caf41f37eec4141c891e42365e261cc909b01d0ae568b12b9bf2fdcffa85"
+    ),
+    TrustedComponentFile(
+      relativePath: "lib/wine/i386-windows/ucrtbase.dll",
+      expectedSHA256: "935fbefeb5462924e628df486ebfdad49b70a91154c9a8a57d9aa221fc91c119"
+    ),
+  ]
+
+  /// Describe el payload LGPL de Windows Media incluido en Regression 1.11.0 (37).
   ///
   /// `applicationBundleURL` y `applicationSupportURL` se inyectan para que la app, los tests y
   /// un futuro verificador de staging inspeccionen exactamente el mismo contrato sin depender
@@ -111,8 +176,15 @@ public enum TrustedComponentCatalog {
         resolvedVariant = .development
         expectedManifestSHA256 = windowsMediaDevelopmentManifestSHA256
       case .publicInstalled:
-        resolvedVariant = .publicInstalled
-        expectedManifestSHA256 = windowsMediaPublicManifestSHA256
+        if let publicManifestSHA256 = windowsMediaPublicManifestSHA256 {
+          resolvedVariant = .publicInstalled
+          expectedManifestSHA256 = publicManifestSHA256
+        } else {
+          resolvedVariant = .unsupported(
+            "Regression 1.11.0 (37): manifiesto público pendiente de medir"
+          )
+          expectedManifestSHA256 = unsupportedManifestPlaceholder
+        }
       case .unsupported(let name):
         resolvedVariant = .unsupported(name)
         expectedManifestSHA256 = unsupportedManifestPlaceholder
@@ -139,6 +211,41 @@ public enum TrustedComponentCatalog {
         "Components/WindowsMedia/1",
         isDirectory: false
       )
+    )
+  }
+
+  /// Describe los redistribuibles Windows incluidos en el Wine root de Regression 1.11.0 (37).
+  ///
+  /// Es una comprobación del conjunto sellado que la release ya debe contener, no un instalador:
+  /// el resultado nunca descarga, copia, sustituye ni registra DLLs.
+  public static func steamRuntimePrerequisitesDescriptor(
+    applicationVersion: String,
+    buildIdentifier: String,
+    variant: ComponentArtifactVariant,
+    wineRootURL: URL
+  ) -> TrustedComponentFileSetDescriptor {
+    let resolvedVariant: ComponentArtifactVariant
+    if applicationVersion != supportedApplicationVersion
+      || buildIdentifier != supportedBuildIdentifier
+    {
+      resolvedVariant = .unsupported(
+        "Regression \(applicationVersion) (\(buildIdentifier))"
+      )
+    } else {
+      resolvedVariant = variant
+    }
+
+    return TrustedComponentFileSetDescriptor(
+      identity: ComponentIdentity(
+        componentID: steamRuntimePrerequisitesComponentID,
+        componentVersion: steamRuntimePrerequisitesComponentVersion,
+        variant: resolvedVariant,
+        buildIdentifier: buildIdentifier
+      ),
+      payloadRootURL: wineRootURL.standardizedFileURL,
+      files: steamRuntimePrerequisiteFiles,
+      maximumFileBytes: steamRuntimeMaximumFileBytes,
+      maximumPayloadBytes: steamRuntimeMaximumPayloadBytes
     )
   }
 }
@@ -176,6 +283,8 @@ public enum ComponentHealthIssue: Equatable, Sendable {
   case duplicateManifestPath(String)
   case payloadEntryMissing(String)
   case payloadEntryIsSymbolicLink(String)
+  case payloadEntryIsNotRegularFile(String)
+  case payloadEntryExceedsLimit(String)
   case payloadDigestMismatch(String)
   case unlistedPayloadEntry(String)
   case externalLinkMissing
@@ -387,6 +496,119 @@ public enum ComponentHealthService {
     return report(descriptor, status: .ready, recovery: .none)
   }
 
+  /// Evalúa un conjunto pequeño sellado por código mediante aperturas relativas a una raíz fija.
+  ///
+  /// No inventaría el directorio ni recorre el Wine root. Cada archivo se abre con
+  /// `O_NOFOLLOW`, se limita antes de leer y conserva la misma identidad durante el hash.
+  public static func evaluate(
+    _ descriptor: TrustedComponentFileSetDescriptor
+  ) -> ComponentHealthReport {
+    if case .unsupported(let name) = descriptor.identity.variant {
+      return fileSetReport(
+        descriptor,
+        status: .unsupportedVariant,
+        recovery: .installSupportedApplicationBuild,
+        issue: .unsupportedVariant(name)
+      )
+    }
+
+    guard validFileSetDescriptor(descriptor) else {
+      return fileSetDriftReport(descriptor, issue: .invalidDescriptor)
+    }
+
+    guard let payloadRoot = AnchoredDirectory.open(descriptor.payloadRootURL) else {
+      var metadata = stat()
+      let existsWithoutFollowing = descriptor.payloadRootURL.path.withCString {
+        Darwin.lstat($0, &metadata) == 0
+      }
+      if existsWithoutFollowing {
+        return fileSetDriftReport(
+          descriptor,
+          issue: .payloadIsNotARegularDirectory
+        )
+      }
+      return fileSetReport(
+        descriptor,
+        status: .missing,
+        recovery: .reinstallTrustedArtifact,
+        issue: .payloadMissing
+      )
+    }
+
+    var totalBytes: Int64 = 0
+    for file in descriptor.files {
+      let remainingPayloadBytes = descriptor.maximumPayloadBytes - totalBytes
+      guard remainingPayloadBytes >= 0 else {
+        return fileSetDriftReport(
+          descriptor,
+          issue: .payloadEntryExceedsLimit(file.relativePath)
+        )
+      }
+
+      let digest: AnchoredFileDigest
+      do {
+        digest = try payloadRoot.hashRegularFile(
+          relativePath: file.relativePath,
+          maximumBytes: min(descriptor.maximumFileBytes, remainingPayloadBytes)
+        )
+      } catch AnchoredFileError.symbolicLink {
+        return fileSetDriftReport(
+          descriptor,
+          issue: .payloadEntryIsSymbolicLink(file.relativePath)
+        )
+      } catch AnchoredFileError.notRegularFile {
+        return fileSetDriftReport(
+          descriptor,
+          issue: .payloadEntryIsNotRegularFile(file.relativePath)
+        )
+      } catch AnchoredFileError.notDirectory {
+        return fileSetDriftReport(
+          descriptor,
+          issue: .payloadEntryIsNotRegularFile(file.relativePath)
+        )
+      } catch AnchoredFileError.exceedsBudget {
+        return fileSetDriftReport(
+          descriptor,
+          issue: .payloadEntryExceedsLimit(file.relativePath)
+        )
+      } catch AnchoredFileError.changedDuringRead {
+        return fileSetDriftReport(
+          descriptor,
+          issue: .payloadDigestMismatch(file.relativePath)
+        )
+      } catch {
+        return fileSetReport(
+          descriptor,
+          status: .missing,
+          recovery: .reinstallTrustedArtifact,
+          issue: .payloadEntryMissing(file.relativePath)
+        )
+      }
+
+      guard totalBytes <= descriptor.maximumPayloadBytes - digest.byteCount else {
+        return fileSetDriftReport(
+          descriptor,
+          issue: .payloadEntryExceedsLimit(file.relativePath)
+        )
+      }
+      totalBytes += digest.byteCount
+      guard digest.sha256 == file.expectedSHA256 else {
+        return fileSetDriftReport(
+          descriptor,
+          issue: .payloadDigestMismatch(file.relativePath)
+        )
+      }
+    }
+
+    guard payloadRoot.isStillNamedBy(descriptor.payloadRootURL) else {
+      return fileSetDriftReport(
+        descriptor,
+        issue: .payloadIsNotARegularDirectory
+      )
+    }
+    return fileSetReport(descriptor, status: .ready, recovery: .none)
+  }
+
   private static func report(
     _ descriptor: TrustedComponentDescriptor,
     status: ComponentHealthStatus,
@@ -397,6 +619,32 @@ public enum ComponentHealthService {
       identity: descriptor.identity,
       status: status,
       recovery: recovery,
+      issue: issue
+    )
+  }
+
+  private static func fileSetReport(
+    _ descriptor: TrustedComponentFileSetDescriptor,
+    status: ComponentHealthStatus,
+    recovery: ComponentRecoveryAction,
+    issue: ComponentHealthIssue? = nil
+  ) -> ComponentHealthReport {
+    ComponentHealthReport(
+      identity: descriptor.identity,
+      status: status,
+      recovery: recovery,
+      issue: issue
+    )
+  }
+
+  private static func fileSetDriftReport(
+    _ descriptor: TrustedComponentFileSetDescriptor,
+    issue: ComponentHealthIssue
+  ) -> ComponentHealthReport {
+    fileSetReport(
+      descriptor,
+      status: .drifted,
+      recovery: .reinstallTrustedArtifact,
       issue: issue
     )
   }
@@ -424,6 +672,33 @@ public enum ComponentHealthService {
       safeRelativePath(descriptor.manifestRelativePath) != nil
     else {
       return false
+    }
+    return true
+  }
+
+  private static func validFileSetDescriptor(
+    _ descriptor: TrustedComponentFileSetDescriptor
+  ) -> Bool {
+    let identity = descriptor.identity
+    guard !identity.componentID.isEmpty,
+      !identity.componentVersion.isEmpty,
+      !identity.buildIdentifier.isEmpty,
+      !descriptor.files.isEmpty,
+      descriptor.files.count <= 64,
+      descriptor.maximumFileBytes > 0,
+      descriptor.maximumPayloadBytes > 0
+    else {
+      return false
+    }
+
+    var seen: Set<String> = []
+    for file in descriptor.files {
+      guard safeRelativePath(file.relativePath) == file.relativePath,
+        isSHA256(file.expectedSHA256),
+        seen.insert(file.relativePath).inserted
+      else {
+        return false
+      }
     }
     return true
   }

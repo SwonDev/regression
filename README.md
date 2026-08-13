@@ -69,6 +69,15 @@ no hace falta volver a GitHub. [Detalles y garantías](docs/automatic-updates.md
 - Rosetta 2; el instalador la prepara si falta.
 - Cuenta gratuita de Apple Developer solo para los perfiles que necesiten GPTK/D3DMetal.
 
+Los juegos que usan DXMT, DXVK u OpenGL no necesitan Apple GPTK. Cuando un perfil sí requiere
+D3DMetal, Regression identifica también su generación exacta. Para GPTK 4.0b2 abre exclusivamente
+la descarga oficial de Apple; después verifica el DMG, muestra la licencia completa y solo instala
+tras una aceptación explícita. Los perfiles históricos fijados a GPTK 3.0 nunca se sustituyen por
+4.0b2: si falta una fuente y autorización demostrables, el juego queda bloqueado con una explicación
+en vez de arrancar sobre un backend incorrecto. El DMG autorizado queda en una caché privada para
+futuras reparaciones; Regression nunca toma binarios de CrossOver, Whisky, Mythic o Homebrew.
+[Flujo completo](docs/apple-gptk-onboarding.md).
+
 <details>
 <summary><strong>Qué prepara automáticamente</strong></summary>
 
@@ -79,7 +88,7 @@ no hace falta volver a GitHub. [Detalles y garantías](docs/automatic-updates.md
 | Medios | Windows Media WMA/WMV/ASF cuando el contenido del juego lo exige |
 | Entrada | SDL y Switch2Bridge para mandos compatibles |
 | Fuentes | Source Han Sans y recursos redistribuibles permitidos |
-| Apple GPTK | Verificación y reparación desde una copia autorizada del usuario; nunca se redistribuye |
+| Apple GPTK | Asistente nativo, licencia explícita y reparación desde el DMG oficial ya autorizado; nunca se redistribuye |
 
 Modos disponibles: `--check`, `--verify-release`, `--yes`, `--launch` y `--help`.
 
@@ -234,7 +243,7 @@ bash Scripts/package_regression.sh
 codesign --verify --deep --strict Regression.app
 
 # Verificación del asset que recibiría un Mac limpio
-bash build/verify-release-asset.sh ASSET CHECKSUM VERSION
+bash build/verify-release-asset.sh ASSET CHECKSUM VERSION BUILD
 ```
 
 El verificador extrae el mismo tar que recibirá el usuario, audita dependencias, firmas,

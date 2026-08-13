@@ -291,7 +291,7 @@ final class CompiledGameRepairTests: XCTestCase {
         XCTAssertNil(GameDisplayStateRepair.repairedTinkerlandsOptions(Data("[]".utf8)))
     }
 
-    func testTinkerlandsRepairCreatesRollbackAndIsIdempotent() throws {
+    func testTinkerlandsRepairCreatesRollbackAndIsIdempotent() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("regression-tinkerlands-repair-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -304,7 +304,14 @@ final class CompiledGameRepairTests: XCTestCase {
         try Data("{\"fullscreen\":0,\"resolution\":6,\"volume\":0.5}".utf8)
             .write(to: options)
 
-        let first = try GameDisplayStateRepair.repairTinkerlands(in: root)
+        let firstOutcome = await GameDisplayStateRepair.prepareTinkerlandsTransaction(
+            in: root,
+            prepareLedger: {},
+            recordReceipt: { _ in }
+        )
+        guard case let .committed(first) = firstOutcome else {
+            return XCTFail("la reparación debía comprometerse")
+        }
         XCTAssertEqual(first.repairedFiles.count, 1)
         XCTAssertEqual(first.rollbackFiles.count, 1)
         XCTAssertTrue(FileManager.default.fileExists(atPath: first.rollbackFiles[0].path))
@@ -314,12 +321,15 @@ final class CompiledGameRepairTests: XCTestCase {
             0
         )
 
-        let second = try GameDisplayStateRepair.repairTinkerlands(in: root)
-        XCTAssertTrue(second.repairedFiles.isEmpty)
-        XCTAssertTrue(second.rollbackFiles.isEmpty)
+        let second = await GameDisplayStateRepair.prepareTinkerlandsTransaction(
+            in: root,
+            prepareLedger: {},
+            recordReceipt: { _ in XCTFail("un no-op no registra recibo") }
+        )
+        XCTAssertEqual(second, .noOp)
     }
 
-    func testTinkerlandsRepairDoesNotFollowAParentDirectorySymlink() throws {
+    func testTinkerlandsRepairDoesNotFollowAParentDirectorySymlink() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("regression-tinkerlands-symlink-\(UUID().uuidString)")
         let outside = FileManager.default.temporaryDirectory
@@ -342,43 +352,558 @@ final class CompiledGameRepairTests: XCTestCase {
             withDestinationURL: outside
         )
 
-        XCTAssertTrue(try GameDisplayStateRepair.repairTinkerlands(in: root).entries.isEmpty)
+        let outcome = await GameDisplayStateRepair.prepareTinkerlandsTransaction(
+            in: root,
+            prepareLedger: {},
+            recordReceipt: { _ in XCTFail("un symlink no registra recibo") }
+        )
+        XCTAssertEqual(outcome, .noOp)
         XCTAssertEqual(try Data(contentsOf: outsideOptions), original)
     }
 
-    func testCompiledActivationStoresOnlyKnownRecipeForExactExecutable() throws {
+    func testTinkerlandsTransactionPreparesLedgerBeforeInspectingOrMutating() async throws {
+        let fixture = try makeTinkerlandsTransactionFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        var receiptWasAttempted = false
+
+        let outcome = await GameDisplayStateRepair.prepareTinkerlandsTransaction(
+            in: fixture.root,
+            prepareLedger: {
+                throw RegressionCoreError.database("fallo prepare inyectado")
+            },
+            recordReceipt: { _ in receiptWasAttempted = true }
+        )
+
+        guard case let .unsafe(failure) = outcome else {
+            return XCTFail("un prepare fallido debe producir un resultado inseguro estructurado")
+        }
+        XCTAssertFalse(failure.mutationOccurred)
+        XCTAssertFalse(receiptWasAttempted)
+        XCTAssertEqual(try Data(contentsOf: fixture.options), fixture.original)
+        let journalDirectory = fixture.root.appendingPathComponent(".regression/repair-transactions")
+        XCTAssertFalse(
+            try FileManager.default.contentsOfDirectory(atPath: journalDirectory.path)
+                .contains { $0.hasSuffix(".json") }
+        )
+    }
+
+    func testTinkerlandsTransactionRollsBackExactBytesWhenReceiptFailsAfterMutation() async throws {
+        let fixture = try makeTinkerlandsTransactionFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        var receiptResults: [RepairReceiptResult] = []
+
+        let outcome = await GameDisplayStateRepair.prepareTinkerlandsTransaction(
+            in: fixture.root,
+            prepareLedger: {},
+            recordReceipt: { receiptResults.append($0.result) },
+            faultInjection: .receipt
+        )
+
+        guard case let .rolledBack(report) = outcome else {
+            return XCTFail("un fallo de ledger posterior a la mutación debe restaurar")
+        }
+        XCTAssertEqual(report.entries.count, 1)
+        XCTAssertEqual(try Data(contentsOf: fixture.options), fixture.original)
+        XCTAssertEqual(try Data(contentsOf: report.entries[0].rollbackURL), fixture.original)
+        XCTAssertEqual(receiptResults, [.rolledBack])
+    }
+
+    func testTargetRenameFollowedByDirectorySyncFailureRollsBackExactBytes() async throws {
+        let fixture = try makeTinkerlandsTransactionFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let outcome = await GameDisplayStateRepair.prepareTinkerlandsTransaction(
+            in: fixture.root,
+            prepareLedger: {},
+            recordReceipt: { _ in },
+            faultInjection: .targetAfterRename
+        )
+        guard case .rolledBack = outcome else {
+            return XCTFail("un fallo post-rename debe tratarse como mutación y restaurarse")
+        }
+        XCTAssertEqual(try Data(contentsOf: fixture.options), fixture.original)
+    }
+
+    func testTinkerlandsTransactionFailsClosedWhenRollbackCannotBeVerified() async throws {
+        let fixture = try makeTinkerlandsTransactionFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let outcome = await GameDisplayStateRepair.prepareTinkerlandsTransaction(
+            in: fixture.root,
+            prepareLedger: {},
+            recordReceipt: { _ in
+                throw RegressionCoreError.database("fallo receipt inyectado")
+            },
+            faultInjection: .rollback
+        )
+
+        guard case let .unsafe(failure) = outcome else {
+            return XCTFail("un rollback no verificable debe bloquear el lanzamiento")
+        }
+        XCTAssertTrue(failure.mutationOccurred)
+        XCTAssertNotEqual(try Data(contentsOf: fixture.options), fixture.original)
+    }
+
+    func testTinkerlandsTransactionCommitsOneReceiptWithAggregateFingerprintsAndThenIsNoOp() async throws {
+        let fixture = try makeTinkerlandsTransactionFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        var recordedContexts: [GameDisplayStateRepairReceiptContext] = []
+
+        let first = await GameDisplayStateRepair.prepareTinkerlandsTransaction(
+            in: fixture.root,
+            prepareLedger: {},
+            recordReceipt: { recordedContexts.append($0) }
+        )
+        guard case let .committed(report) = first else {
+            return XCTFail("la reparación válida debía quedar comprometida")
+        }
+        XCTAssertEqual(report.entries.count, 1)
+        XCTAssertEqual(recordedContexts.count, 1)
+        XCTAssertEqual(recordedContexts[0].beforeFingerprint, report.aggregateBeforeFingerprint)
+        XCTAssertEqual(recordedContexts[0].afterFingerprint, report.aggregateAfterFingerprint)
+        XCTAssertEqual(recordedContexts[0].result, .succeeded)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: recordedContexts[0].intentURL.path),
+            "el journal debe desaparecer únicamente después de persistir el recibo"
+        )
+
+        let second = await GameDisplayStateRepair.prepareTinkerlandsTransaction(
+            in: fixture.root,
+            prepareLedger: {},
+            recordReceipt: { _ in XCTFail("un no-op no debe generar otro recibo") }
+        )
+        XCTAssertEqual(second, .noOp)
+    }
+
+    func testTinkerlandsTransactionRecoversCrashAfterIntentAsVerifiedRollback() async throws {
+        let fixture = try makeTinkerlandsTransactionFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let interrupted = await GameDisplayStateRepair.prepareTinkerlandsTransaction(
+            in: fixture.root,
+            prepareLedger: {},
+            recordReceipt: { _ in XCTFail("no hay mutación ni recibo antes del crash") },
+            faultInjection: .crashAfterIntent
+        )
+        guard case let .unsafe(failure) = interrupted else {
+            return XCTFail("la interrupción debía quedar pendiente")
+        }
+        XCTAssertFalse(failure.mutationOccurred)
+        XCTAssertEqual(try Data(contentsOf: fixture.options), fixture.original)
+
+        var recoveryReceipts: [GameDisplayStateRepairReceiptContext] = []
+        let recovered = await GameDisplayStateRepair.prepareTinkerlandsTransaction(
+            in: fixture.root,
+            prepareLedger: {},
+            recordReceipt: { recoveryReceipts.append($0) }
+        )
+        guard case .rolledBack = recovered else {
+            return XCTFail("un intent pendiente debía reconciliarse como rollback")
+        }
+        XCTAssertEqual(try Data(contentsOf: fixture.options), fixture.original)
+        XCTAssertEqual(recoveryReceipts.map(\.result), [.rolledBack])
+    }
+
+    func testTinkerlandsTransactionRecoversCrashAfterMutationBeforeReceiptByExactRollback() async throws {
+        let fixture = try makeTinkerlandsTransactionFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let interrupted = await GameDisplayStateRepair.prepareTinkerlandsTransaction(
+            in: fixture.root,
+            prepareLedger: {},
+            recordReceipt: { _ in XCTFail("el crash precede al recibo") },
+            faultInjection: .crashAfterMutation
+        )
+        guard case let .unsafe(failure) = interrupted else {
+            return XCTFail("la interrupción debía conservar un journal")
+        }
+        XCTAssertTrue(failure.mutationOccurred)
+        XCTAssertNotEqual(try Data(contentsOf: fixture.options), fixture.original)
+
+        let recovered = await GameDisplayStateRepair.prepareTinkerlandsTransaction(
+            in: fixture.root,
+            prepareLedger: {},
+            recordReceipt: { _ in }
+        )
+        guard case .rolledBack = recovered else {
+            return XCTFail("un journal pending con bytes mutados debía restaurarse")
+        }
+        XCTAssertEqual(try Data(contentsOf: fixture.options), fixture.original)
+    }
+
+    func testPendingCrashJournalAndLedgerPrepareFailureBlocksUntilRecoverySucceeds() async throws {
+        let fixture = try makeTinkerlandsTransactionFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        _ = await GameDisplayStateRepair.prepareTinkerlandsTransaction(
+            in: fixture.root,
+            prepareLedger: {},
+            recordReceipt: { _ in XCTFail("el crash precede al recibo") },
+            faultInjection: .crashAfterMutation
+        )
+        let mutated = try Data(contentsOf: fixture.options)
+        XCTAssertNotEqual(mutated, fixture.original)
+
+        let blocked = await GameDisplayStateRepair.prepareTinkerlandsTransaction(
+            in: fixture.root,
+            prepareLedger: { throw RegressionCoreError.database("SQLite no disponible") },
+            recordReceipt: { _ in XCTFail("sin ledger no se registra recibo") }
+        )
+        guard case let .unsafe(failure) = blocked else {
+            return XCTFail("un journal pendiente más fallo del ledger debe bloquear")
+        }
+        XCTAssertTrue(failure.mutationOccurred)
+        XCTAssertFalse(blocked.allowsLaunch)
+        XCTAssertEqual(try Data(contentsOf: fixture.options), mutated)
+
+        let recovered = await GameDisplayStateRepair.prepareTinkerlandsTransaction(
+            in: fixture.root,
+            prepareLedger: {},
+            recordReceipt: { _ in }
+        )
+        guard case .rolledBack = recovered else {
+            return XCTFail("al recuperar el ledger debe reconciliarse el crash")
+        }
+        XCTAssertEqual(try Data(contentsOf: fixture.options), fixture.original)
+    }
+
+    func testTinkerlandsTransactionRecoversPartialMultiUserMutationWithoutTouchingTheSecondUser() async throws {
+        let fixture = try makeTinkerlandsTransactionFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let secondOptions = fixture.root.appendingPathComponent(
+            "drive_c/users/second/AppData/Local/Tinkerlands/useroptions.conf"
+        )
+        try FileManager.default.createDirectory(
+            at: secondOptions.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let secondOriginal = Data("{\"fullscreen\":0,\"resolution\":7,\"volume\":0.25}".utf8)
+        try secondOriginal.write(to: secondOptions)
+
+        let interrupted = await GameDisplayStateRepair.prepareTinkerlandsTransaction(
+            in: fixture.root,
+            prepareLedger: {},
+            recordReceipt: { _ in XCTFail("un crash parcial no registra éxito") },
+            faultInjection: .crashAfterFirstMutation
+        )
+        guard case let .unsafe(failure) = interrupted else {
+            return XCTFail("la interrupción parcial debía conservar el journal")
+        }
+        XCTAssertTrue(failure.mutationOccurred)
+        XCTAssertNotEqual(try Data(contentsOf: fixture.options), fixture.original)
+        XCTAssertEqual(try Data(contentsOf: secondOptions), secondOriginal)
+
+        let recovered = await GameDisplayStateRepair.prepareTinkerlandsTransaction(
+            in: fixture.root,
+            prepareLedger: {},
+            recordReceipt: { _ in }
+        )
+        guard case .rolledBack = recovered else {
+            return XCTFail("el reinicio debía restaurar la mutación parcial")
+        }
+        XCTAssertEqual(try Data(contentsOf: fixture.options), fixture.original)
+        XCTAssertEqual(try Data(contentsOf: secondOptions), secondOriginal)
+    }
+
+    func testTinkerlandsTransactionFailsClosedWhenParentBecomesSymlinkAfterIntent() async throws {
+        let fixture = try makeTinkerlandsTransactionFixture()
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-tinkerlands-swap-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: fixture.root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        let appData = fixture.root.appendingPathComponent("drive_c/users/crossover/AppData")
+        let anchoredOriginal = appData.deletingLastPathComponent()
+            .appendingPathComponent("AppData-anchored-original")
+        let outsideOptions = outside.appendingPathComponent("Local/Tinkerlands/useroptions.conf")
+        try FileManager.default.createDirectory(
+            at: outsideOptions.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let outsideOriginal = Data("{\"fullscreen\":0,\"resolution\":6,\"outside\":true}".utf8)
+        try outsideOriginal.write(to: outsideOptions)
+
+        let outcome = await GameDisplayStateRepair.prepareTinkerlandsTransaction(
+            in: fixture.root,
+            prepareLedger: {},
+            recordReceipt: { _ in XCTFail("un swap de symlink no puede registrar éxito") },
+            faultInjection: .none,
+            beforeMutation: {
+                try FileManager.default.moveItem(at: appData, to: anchoredOriginal)
+                try FileManager.default.createSymbolicLink(at: appData, withDestinationURL: outside)
+            }
+        )
+        guard case let .unsafe(failure) = outcome else {
+            return XCTFail("el swap posterior a la intención debe fallar cerrado")
+        }
+        XCTAssertFalse(failure.mutationOccurred)
+        let originalOptions = anchoredOriginal.appendingPathComponent(
+            "Local/Tinkerlands/useroptions.conf"
+        )
+        XCTAssertEqual(try Data(contentsOf: originalOptions), fixture.original)
+        XCTAssertEqual(try Data(contentsOf: outsideOptions), outsideOriginal)
+    }
+
+    func testTinkerlandsTransactionLockPreventsConcurrentMutation() async throws {
+        let fixture = try makeTinkerlandsTransactionFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let enteredMutation = DispatchSemaphore(value: 0)
+        let releaseMutation = DispatchSemaphore(value: 0)
+
+        let first = Task {
+            await GameDisplayStateRepair.prepareTinkerlandsTransaction(
+                in: fixture.root,
+                prepareLedger: {},
+                recordReceipt: { _ in },
+                faultInjection: .none,
+                beforeMutation: {
+                    enteredMutation.signal()
+                    releaseMutation.wait()
+                }
+            )
+        }
+        XCTAssertEqual(enteredMutation.wait(timeout: .now() + 2), .success)
+
+        let concurrent = await GameDisplayStateRepair.prepareTinkerlandsTransaction(
+            in: fixture.root,
+            prepareLedger: {},
+            recordReceipt: { _ in XCTFail("la segunda transacción no debe adquirir el lock") }
+        )
+        guard case let .unsafe(failure) = concurrent else {
+            releaseMutation.signal()
+            _ = await first.value
+            return XCTFail("una reparación concurrente debe fallar cerrada")
+        }
+        XCTAssertTrue(failure.mutationOccurred)
+        XCTAssertFalse(concurrent.allowsLaunch)
+
+        releaseMutation.signal()
+        guard case .committed = await first.value else {
+            return XCTFail("la transacción que posee el lock debe completar")
+        }
+    }
+
+    func testTinkerlandsTransactionRecoversCrashAfterReceiptIdempotently() async throws {
+        let fixture = try makeTinkerlandsTransactionFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        var receiptIDs = Set<UUID>()
+        var receiptCalls = 0
+        let recorder: (GameDisplayStateRepairReceiptContext) async throws -> Void = { context in
+            receiptCalls += 1
+            receiptIDs.insert(context.receiptID)
+        }
+
+        let interrupted = await GameDisplayStateRepair.prepareTinkerlandsTransaction(
+            in: fixture.root,
+            prepareLedger: {},
+            recordReceipt: recorder,
+            faultInjection: .crashAfterReceipt
+        )
+        guard case let .unsafe(failure) = interrupted else {
+            return XCTFail("la interrupción posterior al recibo debía conservar el journal")
+        }
+        XCTAssertTrue(failure.mutationOccurred)
+        XCTAssertEqual(receiptCalls, 1)
+
+        let recovered = await GameDisplayStateRepair.prepareTinkerlandsTransaction(
+            in: fixture.root,
+            prepareLedger: {},
+            recordReceipt: recorder
+        )
+        guard case .committed = recovered else {
+            return XCTFail("el journal mutated debía completar el mismo commit")
+        }
+        XCTAssertEqual(receiptCalls, 2)
+        XCTAssertEqual(receiptIDs.count, 1, "el retry del recibo debe conservar identidad")
+    }
+
+    func testCleanupFailureAfterSucceededReceiptNeverRollsBackCommittedBytes() async throws {
+        let fixture = try makeTinkerlandsTransactionFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        var receipts: [UUID: RepairReceiptResult] = [:]
+        let recorder: (GameDisplayStateRepairReceiptContext) async throws -> Void = { context in
+            if let existing = receipts[context.receiptID] {
+                XCTAssertEqual(existing, context.result)
+                return
+            }
+            receipts[context.receiptID] = context.result
+        }
+
+        let interrupted = await GameDisplayStateRepair.prepareTinkerlandsTransaction(
+            in: fixture.root,
+            prepareLedger: {},
+            recordReceipt: recorder,
+            faultInjection: .cleanupAfterReceipt
+        )
+        guard case let .unsafe(failure) = interrupted else {
+            return XCTFail("el cleanup fallido debe conservar el journal y bloquear")
+        }
+        XCTAssertTrue(failure.mutationOccurred)
+        XCTAssertFalse(interrupted.allowsLaunch)
+        XCTAssertEqual(Array(receipts.values), [.succeeded])
+        XCTAssertNotEqual(try Data(contentsOf: fixture.options), fixture.original)
+
+        let recovered = await GameDisplayStateRepair.prepareTinkerlandsTransaction(
+            in: fixture.root,
+            prepareLedger: {},
+            recordReceipt: recorder
+        )
+        guard case .committed = recovered else {
+            return XCTFail("el reinicio debe cerrar el mismo commit")
+        }
+        XCTAssertEqual(receipts.count, 1)
+        XCTAssertEqual(Array(receipts.values), [.succeeded])
+        XCTAssertNotEqual(try Data(contentsOf: fixture.options), fixture.original)
+    }
+
+    func testTinkerlandsTransactionRejectsJournalDirectorySymlink() async throws {
+        let fixture = try makeTinkerlandsTransactionFixture()
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-journal-outside-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: fixture.root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let regression = fixture.root.appendingPathComponent(".regression")
+        try FileManager.default.createDirectory(at: regression, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: regression.appendingPathComponent("repair-transactions"),
+            withDestinationURL: outside
+        )
+
+        let outcome = await GameDisplayStateRepair.prepareTinkerlandsTransaction(
+            in: fixture.root,
+            prepareLedger: {},
+            recordReceipt: { _ in XCTFail("un journal enlazado no registra recibos") }
+        )
+        guard case let .unsafe(failure) = outcome else {
+            return XCTFail("un journal enlazado debe fallar cerrado")
+        }
+        XCTAssertTrue(failure.mutationOccurred, "un journal no inspeccionable mantiene el estado indeterminado")
+        XCTAssertEqual(try Data(contentsOf: fixture.options), fixture.original)
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: outside.path).isEmpty)
+    }
+
+    func testCompiledActivationIsFailClosedUntilTheLoaderSupportsAppIDIsolation() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("regression-activation-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
 
-        let report = try XCTUnwrap(CompiledRepairActivationStore.activate(
+        XCTAssertThrowsError(try CompiledRepairActivationStore.activate(
+            appID: "424242",
             executable: #"C:\Games\Future\Future-Win64-Shipping.exe"#,
             recipe: .unrealD3D11DualOverlayIsolation,
             in: root
         ))
-        XCTAssertNotEqual(report.beforeFingerprint, report.afterFingerprint)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: report.rollbackURL.path))
-        XCTAssertEqual(
-            try CompiledRepairActivationStore.activations(in: root),
-            [CompiledRepairActivation(
-                executable: "future-win64-shipping.exe",
-                recipe: .unrealD3D11DualOverlayIsolation
-            )]
-        )
-        XCTAssertNil(try CompiledRepairActivationStore.activate(
+        XCTAssertThrowsError(try CompiledRepairActivationStore.activate(
             executable: "Future-Win64-Shipping.exe",
             recipe: .unrealD3D11DualOverlayIsolation,
             in: root
         ))
-        XCTAssertThrowsError(try CompiledRepairActivationStore.activate(
-            executable: "../Future-Win64-Shipping.exe",
-            recipe: .unrealD3D11DualOverlayIsolation,
-            in: root
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: CompiledRepairActivationStore.activationURL(in: root).path
+        ))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: CompiledRepairActivationStore.legacyActivationURL(in: root).path
         ))
     }
 
-    func testCrashLearnerActivatesKnownRecipeFromBoundedRecentLog() throws {
+    func testLegacyActivationReaderQuarantinesAmbiguousBasenames() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-activation-app-scope-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appendingPathComponent(".regression")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("""
+        REGRESSION-COMPILED-REPAIRS\t1
+        shared.exe\tunreal-d3d11-dual-overlay-isolation-v1
+        shared.exe\tunity-intro-winegstreamer-isolation-v1
+        """.utf8).write(to: CompiledRepairActivationStore.legacyActivationURL(in: root))
+
+        XCTAssertThrowsError(try CompiledRepairActivationStore.activations(in: root))
+    }
+
+    private func makeTinkerlandsTransactionFixture() throws -> (
+        root: URL,
+        options: URL,
+        original: Data
+    ) {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-tinkerlands-transaction-\(UUID().uuidString)")
+        let options = root.appendingPathComponent(
+            "drive_c/users/crossover/AppData/Local/Tinkerlands/useroptions.conf"
+        )
+        try FileManager.default.createDirectory(
+            at: options.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let original = Data("{\"fullscreen\":0,\"resolution\":6,\"volume\":0.5}\n".utf8)
+        try original.write(to: options)
+        return (root, options, original)
+    }
+
+    func testLegacyActivationReaderRejectsSymlinkAndHardlink() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-activation-link-\(UUID().uuidString)")
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-activation-outside-\(UUID().uuidString).tsv")
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        let directory = root.appendingPathComponent(".regression")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let data = Data("""
+        REGRESSION-COMPILED-REPAIRS\t1
+        future.exe\tunreal-d3d11-dual-overlay-isolation-v1
+        """.utf8)
+        try data.write(to: outside)
+        let legacyURL = CompiledRepairActivationStore.legacyActivationURL(in: root)
+        try FileManager.default.createSymbolicLink(at: legacyURL, withDestinationURL: outside)
+        XCTAssertThrowsError(try CompiledRepairActivationStore.activations(in: root))
+        try FileManager.default.removeItem(at: legacyURL)
+        try FileManager.default.linkItem(at: outside, to: legacyURL)
+        XCTAssertThrowsError(try CompiledRepairActivationStore.activations(in: root))
+    }
+
+    func testCrashDetectionIsPureUntilActivationIsExplicit() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-crash-pure-detection-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let logs = root.appendingPathComponent(
+            "drive_c/users/test/AppData/Local/Future/Saved/Crashes/UECC-1",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+        let crashURL = logs.appendingPathComponent("Future.log")
+        try Data("""
+        Unhandled Exception: EXCEPTION_ACCESS_VIOLATION reading address 0x1
+        d3d11.dll
+        gameoverlayrenderer64.dll
+        EOSOVH-Win64-Shipping.dll
+        EOSSDK-Win64-Shipping.dll
+        Future.exe
+        """.utf8).write(to: crashURL)
+        let now = Date()
+        try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: crashURL.path)
+
+        let detection = try XCTUnwrap(CompiledCrashRepairLearner.detect(
+            appID: "424242",
+            executable: "Future.exe",
+            bottleURL: root,
+            startedAt: now.addingTimeInterval(-10),
+            endedAt: now.addingTimeInterval(1)
+        ))
+        XCTAssertEqual(detection.recipe, .unrealD3D11DualOverlayIsolation)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: CompiledRepairActivationStore.activationURL(in: root).path
+        ))
+    }
+
+    func testCrashLearnerCompatibilityAPIDoesNotMutateWithoutAnIsolatedLoader() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("regression-crash-learning-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -403,16 +928,19 @@ final class CompiledGameRepairTests: XCTestCase {
             ofItemAtPath: crashURL.path
         )
 
-        let report = try XCTUnwrap(CompiledCrashRepairLearner.learn(
+        XCTAssertNil(try CompiledCrashRepairLearner.learn(
             appID: "424242",
             executable: #"C:\Games\Future\Future-Win64-Shipping.exe"#,
             bottleURL: root,
             startedAt: now.addingTimeInterval(-10),
             endedAt: now.addingTimeInterval(1)
         ))
-        XCTAssertEqual(report.recipe, .unrealD3D11DualOverlayIsolation)
-        XCTAssertEqual(report.executable, "future-win64-shipping.exe")
-        XCTAssertEqual(report.appID, "424242")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: CompiledRepairActivationStore.activationURL(in: root).path
+        ))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: CompiledRepairActivationStore.legacyActivationURL(in: root).path
+        ))
     }
 
     func testCrashLearnerRejectsAConcurrentCrashFromAnotherExecutable() throws {

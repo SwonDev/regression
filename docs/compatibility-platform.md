@@ -1,11 +1,11 @@
 # Plataforma local de compatibilidad y aprendizaje
 
-Fecha de contrato: 28 de julio de 2026. Esquema SQLite actual: **v12**.
+Fecha de contrato: 13 de agosto de 2026. Esquema SQLite actual: **v14**.
 
-Esta capa conserva evidencia reproducible de cada ejecución y permite comparar Regression con
-fuentes públicas. No altera el motor, la botella ni la configuración de un juego. La aplicación
-automática de perfiles queda expresamente fuera de alcance hasta que exista un protocolo separado
-con rollback y matriz de validación.
+Esta capa conserva evidencia reproducible de cada ejecución de Regression. No consulta servicios
+de compatibilidad de terceros ni altera el motor, la botella o la configuración de un juego. La
+aplicación automática de perfiles queda expresamente fuera de alcance hasta que exista un protocolo
+separado con rollback y matriz de validación.
 
 ## Fuentes de verdad y precedencia
 
@@ -14,8 +14,8 @@ con rollback y matriz de validación.
    `Verificado perfecto: Regression`.
 2. **Ejecuciones y observaciones locales**: conservan éxitos, incidencias, fallos y estados sin
    verificar. Un código de salida 0 nunca se convierte por sí solo en compatibilidad.
-3. **Catálogo público externo**: contexto de investigación. Una valoración alta de CodeWeavers no
-   certifica Regression, no instala dependencias y no aplica configuraciones.
+3. **Referencias históricas importadas**: contexto de expedientes anteriores, sin red ni autoridad
+   operativa. Nunca certifican, instalan dependencias o aplican configuraciones.
 
 Los fallos históricos no se borran cuando aparece un perfil perfecto: sirven para comparar qué
 cambió. La certificación perfecta tiene prioridad visual, pero no reescribe el historial.
@@ -35,7 +35,7 @@ integridad en cada apertura.
 | Configuración | `configuration_snapshots` | Snapshot completo y deduplicado por SHA-256. |
 | Motores | `engine_snapshots`, `engine_facts`, `run_engine_snapshots`, `observation_engine_snapshots` | Identidad consultable del stack y vínculo con cada evidencia. |
 | Blindados | `verified_game_certifications` | Catálogo canónico y certificaciones locales con procedencia, configuración y motor exactos. |
-| Fuentes públicas | `external_catalog_sources`, `external_catalog_sync_state`, `external_game_records`, `external_game_links` | Caché, cadencia, ficha normalizada y vínculo local. |
+| Referencias históricas | `external_catalog_sources`, `external_catalog_sync_state`, `external_game_records`, `external_game_links` | Datos heredados conservados para explicar expedientes antiguos; no se sincronizan ni gobiernan el producto. |
 | Evolución de runtimes | `runtime_technologies`, `runtime_candidates` | Baselines, versiones observadas y candidatos aislados con gates de promoción. |
 | Rendimiento | `optimization_assessments` | Métricas separadas de la certificación funcional. |
 | Requisitos y reparación | `game_runtime_requirements`, `repair_receipts` | Requisitos declarativos y recibos de recetas permitidas; nunca comandos aprendidos. |
@@ -76,8 +76,8 @@ activa del mismo run de Regression. Los expedientes fallidos se conservan y una 
 veredicto reabre automáticamente el que se había cerrado.
 
 Antes de cada lanzamiento, el protocolo v2 de preparación comprueba de forma no destructiva la
-base, el backend, la instalación del juego, el aislamiento de Steam y Wine, servicios huérfanos,
-marcadores de presentación, almacenamiento, telemetría y biblioteca compartida. Un bloqueo
+base, el motor Regression, la instalación del juego, el aislamiento de Steam y Wine, servicios huérfanos,
+marcadores de presentación, almacenamiento, telemetría y biblioteca propia. Un bloqueo
 inequívoco impide crear una prueba contaminada; un aviso se permite y se conserva. Cada informe
 se vincula por App ID y backend al `run` exacto, se codifica como JSON canónico, se acompaña de
 SHA-256 y se revalida al leer y exportar. Desde el botón de Regression la fase es `preLaunch` y
@@ -90,7 +90,7 @@ como evidencia previa exacta. Un informe verde no certifica render, entrada, opc
 
 El fingerprint de motor se calcula solo con:
 
-- backend y versión del proveedor;
+- runtime y versión de Regression;
 - configuración permitida de botella y registro;
 - backend gráfico observado;
 - firmas SHA-256 y tamaños de DLLs gráficas y componentes runtime.
@@ -104,38 +104,13 @@ pueden comparar sin mezclarlas.
 incidencias, fallidos o pendientes. Esto permite responder qué stack produjo el mejor resultado
 sin asumir que todos los perfiles de un mismo backend son equivalentes.
 
-## Referencia pública de CodeWeavers
+## Datos externos heredados — solo historia
 
-La integración usa exclusivamente páginas públicas de la
-[Compatibility Database](https://www.codeweavers.com/compatibility) y su JSON-LD de Schema.org.
-No consulta ni copia `cxcompatdb`, crossties privados, binarios, datos de licencia ni bases internas.
-
-Proceso de enlace:
-
-1. Prioriza un mapeo conocido y revisable por Steam App ID cuando existe.
-2. Prueba una URL de ficha probable derivada del nombre público.
-3. Si no coincide exactamente, usa la búsqueda pública y acepta únicamente título normalizado
-   exacto o Steam App ID exacto.
-4. Rechaza redirecciones, fichas canónicas o enlaces fuera de HTTPS y de
-   `codeweavers.com/compatibility`.
-5. Guarda solo nombre, compañía/categoría públicas, Steam App ID, valoración macOS/Linux,
-   versión de CrossOver, fecha, URL, validadores HTTP y fingerprint del JSON-LD.
-
-Las valoraciones públicas se conservan en su escala original 0–5. La comparación derivada puede
-indicar acuerdo, que Regression supera la referencia o que la referencia pública supera el
-resultado local; si falta evidencia local o pública, queda como `insufficientEvidence`.
-
-### Red, caché y privacidad
-
-- Sesión efímera sin cookies, caché del sistema ni credenciales.
-- Límite de respuesta de 3 MB, timeouts y lista cerrada de hosts/rutas.
-- `ETag`/`Last-Modified` para no descargar fichas sin cambios.
-- Caché positiva de 7 días y negativa de 30 días.
-- Cadencia persistente mínima de 100 segundos entre peticiones, incluso entre reinicios, conforme
-  al `Crawl-delay` público observado; la sincronización es secuencial y nunca bloquea Steam.
-- La opción puede desactivarse desde “Aprendizaje local”. La app envía únicamente el nombre
-  público del juego cuando necesita buscarlo y conserva los metadatos normalizados localmente.
-- Un fallo de red mantiene la última ficha válida y se muestra como incidencia recuperable.
+Las tablas `external_*` pueden contener metadatos públicos capturados por versiones antiguas. Se
+conservan para que los expedientes históricos sigan siendo interpretables, pero la aplicación y
+el CLI actuales no realizan peticiones a CodeWeavers, no exponen una sincronización y no usan esos
+datos para seleccionar motores, reparar, lanzar o certificar. No existe un backend, proceso de
+enlace o requisito de red asociado a ellos.
 
 ## Migraciones y recuperación
 
@@ -171,6 +146,9 @@ y App ID. El launcher, el binario principal y sus cierres siguen siendo auditabl
 cuentan como pruebas independientes. También añade fase y latencia al diagnóstico: los informes
 v1 existentes migran como `preLaunch`, mientras que los futuros lanzamientos observados dentro de
 Steam se distinguen como `processStartBoundary`. El historial anterior no se fusiona ni reescribe.
+La v13 incorpora el ciclo durable de reparaciones compiladas, con estado y recibos recuperables.
+La v14 reconstruye el subgrafo de I+D para que el baseline operativo sea Regression y conserva los
+valores antiguos exclusivamente por compatibilidad de lectura del historial.
 
 Comprobaciones:
 
@@ -185,24 +163,12 @@ Regression.app/Contents/SharedSupport/bin/regressionctl research
 Regression.app/Contents/SharedSupport/bin/regressionctl research-protocol
 Regression.app/Contents/SharedSupport/bin/regressionctl preflight
 Regression.app/Contents/SharedSupport/bin/regressionctl preflight 219990 --backend regression
-Regression.app/Contents/SharedSupport/bin/regressionctl catalog
-Regression.app/Contents/SharedSupport/bin/regressionctl comparisons
 Regression.app/Contents/SharedSupport/bin/regressionctl export /tmp/regression.json
 ```
 
 Para ensayar una migración sobre una copia, `regressionctl` admite únicamente por terminal
 `REGRESSION_COMPATIBILITY_DATABASE_PATH=/ruta/copia.sqlite`; la app instalada siempre usa la ruta
 canónica. Este override existe para diagnóstico y CI, no para dividir el historial del usuario.
-
-## Cómo añadir otra fuente pública
-
-1. Implementar `ExternalCompatibilityProviding` con modelo normalizado y lista cerrada de URLs.
-2. Definir cadencia, TTL y página informativa oficiales en `ExternalCatalogSource`.
-3. Añadir tests de parser con HTML mínimo, redirecciones hostiles, documentos incompletos y
-   coincidencias ambiguas.
-4. Mantener la fuente identificada en todas las claves. Nunca combinar entradas solo por App ID.
-5. Elegir explícitamente qué fuente alimenta cada comparación; ninguna puede producir una
-   certificación local.
 
 ## Gates de esta capa
 
@@ -214,10 +180,7 @@ canónica. Este override existe para diagnóstico y CI, no para dividir el histo
 - Rechazo de una opción `bestKnown` sin ninguna métrica de rendimiento.
 - Reconciliación de observaciones interrumpidas como `unknown`, nunca como éxito o fallo inferido.
 - Normalización de dos configuraciones gráficas de juego bajo un mismo motor.
-- Caché y cadencia persistente.
-- Parser JSON-LD macOS/Linux y filtrado de enlaces.
-- Rechazo de una URL canónica que imita el dominio oficial.
-- Confirmación de que una valoración pública 5/5 deja el estado local como no verificado.
+- Ausencia de sincronización externa o autoridad operativa en las referencias heredadas.
 - Rechazo de informes de preparación vinculados a otro juego o backend.
 - Verificación SHA-256 y exportación del diagnóstico previo sin convertirlo en certificación.
 - Agrupación de launcher y ejecutable principal en un run con procesos exportables por separado.

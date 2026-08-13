@@ -8,6 +8,7 @@ BASELINE_VERSION="${3:-}"
 BASELINE_BUILD="${4:-}"
 TARGET_VERSION="${5:-}"
 TARGET_BUILD="${6:-}"
+TRANSITION_POLICY="${7:-}"
 VERIFY_SCRATCH=""
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -41,7 +42,16 @@ plutil -replace CFBundleShortVersionString -string "$BASELINE_VERSION" \
     "$VERIFY_SCRATCH/normalized.plist"
 plutil -replace CFBundleVersion -string "$BASELINE_BUILD" \
     "$VERIFY_SCRATCH/normalized.plist"
-cmp -s "$BASELINE_PLIST" "$VERIFY_SCRATCH/normalized.plist" \
+BASELINE_COMPARISON="$BASELINE_PLIST"
+if [[ "$TRANSITION_POLICY" == "--remove-apple-events-description" ]]; then
+    cp "$BASELINE_PLIST" "$VERIFY_SCRATCH/baseline-normalized.plist"
+    plutil -remove NSAppleEventsUsageDescription \
+        "$VERIFY_SCRATCH/baseline-normalized.plist" 2>/dev/null || true
+    BASELINE_COMPARISON="$VERIFY_SCRATCH/baseline-normalized.plist"
+elif [[ -n "$TRANSITION_POLICY" ]]; then
+    fail "política de transición desconocida: $TRANSITION_POLICY"
+fi
+cmp -s "$BASELINE_COMPARISON" "$VERIFY_SCRATCH/normalized.plist" \
     || fail "Info.plist contiene cambios ajenos a versión/build"
 
 printf 'Promoción Info.plist exacta: %s (%s) -> %s (%s).\n' \

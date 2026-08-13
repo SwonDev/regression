@@ -1,7 +1,12 @@
 # Auditoría integral de la base nativa
 
-Fecha: 28 de julio de 2026. Alcance: SwiftUI/AppKit, coordinación de backends, aprendizaje local,
-catálogo público, CLI, privacidad, rendimiento, ciclo de vida, empaquetado, documentación y
+> **Documento histórico.** Registra la auditoría realizada el 28 de julio de 2026 y no describe
+> la arquitectura operativa actual. Hoy Regression es el único motor, usa botella y `steamapps`
+> propios y no contiene red, CLI ni backend de CodeWeavers. Las menciones posteriores a CrossOver
+> se conservan únicamente como evidencia fechada de aquella etapa; no son instrucciones vigentes.
+
+Fecha: 28 de julio de 2026. Alcance histórico: SwiftUI/AppKit, coordinación de motores, aprendizaje local,
+catálogo externo entonces existente, CLI, privacidad, rendimiento, ciclo de vida, empaquetado, documentación y
 coherencia del proyecto. Esta pasada no modificó Wine, DXMT, DXVK, D3DMetal, Apple GPTK, la
 botella ni los perfiles de juegos blindados, y no lanzó ningún juego.
 
@@ -14,9 +19,9 @@ el launcher propio y la botella canónica. En esta auditoría histórica de juli
 está vigente: la distribución actual instala un bundle físico único recompilado para
 `/Applications`; ver `canonical-installation.md`.
 
-El trabajo se limitó a la capa nativa y a su base de evidencia. El backend CrossOver continúa
-usando únicamente su CLI oficial; el motor propio no incorporó ni enlazó binarios propietarios.
-La referencia pública de CodeWeavers se trata como contexto, nunca como certificación local.
+En aquel corte, el trabajo se limitó a la capa nativa y a su base de evidencia. Existía todavía un
+comparador basado en el CLI oficial de CrossOver; nunca se incorporaron binarios propietarios.
+Ese comparador y la consulta pública de CodeWeavers fueron retirados posteriormente del producto.
 
 ## Plataforma de aprendizaje v11
 
@@ -53,9 +58,8 @@ La referencia pública de CodeWeavers se trata como contexto, nunca como certifi
 - Los nombres públicos descubiertos en los `appmanifest` prevalecen sobre el marcador provisional
   `Steam App <ID>`. El arranque reconcilia el catálogo antes de leer el historial y repara
   ejecuciones antiguas sin recrearlas ni perder sus incidencias.
-- El lector de manifests resuelve el symlink canónico de `steamapps` antes de enumerarlo. Así el
-  motor Regression ve la misma biblioteca física que CrossOver sin duplicarla y sin que
-  Foundation confunda el enlace con un archivo ordinario.
+- Históricamente, el lector resolvía el symlink compartido de `steamapps` antes de enumerarlo. La
+  arquitectura actual ya no comparte esa ruta: la única carpeta física vive en la botella propia.
 - La base viva está en v11 con `quick_check=ok`, 0 referencias huérfanas, 10 juegos, 25 ejecuciones,
   7 verificaciones, 2 observaciones, 3 certificaciones activas, 9 motores normalizados y
   9 tecnologías inventariadas. Aún no hay candidatos, reparaciones, optimizaciones, expedientes
@@ -65,19 +69,21 @@ La referencia pública de CodeWeavers se trata como contexto, nunca como certifi
 El contrato completo, el esquema y las reglas de extensión están en
 [`docs/compatibility-platform.md`](compatibility-platform.md).
 
-## Catálogo público de CodeWeavers
+## Catálogo público de CodeWeavers — funcionalidad histórica retirada
 
-- Se añadió un proveedor desacoplado para las páginas públicas de Compatibility Database y su
-  JSON-LD. Solo enlaza coincidencias exactas por Steam App ID o título normalizado.
-- La red usa sesión efímera sin cookies, HTTPS y hosts/rutas permitidos, límite de 3 MB, timeouts,
+Los puntos de esta sección describen lo auditado en julio de 2026. No existe actualmente una
+consulta, caché, comando de sincronización ni comparación CodeWeavers en la aplicación o el CLI.
+
+- Se había añadido un proveedor desacoplado para las páginas públicas de Compatibility Database
+  y su JSON-LD. Solo enlazaba coincidencias exactas por Steam App ID o título normalizado.
+- La red usaba sesión efímera sin cookies, HTTPS y hosts/rutas permitidos, límite de 3 MB, timeouts,
   validación de URL canónica y caché persistente con `ETag`/`Last-Modified`.
-- La caché positiva dura 7 días y la negativa 30. Una reserva persistente impone 100 segundos
-  entre peticiones y la sincronización es secuencial, por lo que abrir el menú no martillea el
-  servicio ni bloquea Steam.
-- Un fallo conserva la última ficha válida. El usuario puede desactivar la consulta desde el área
-  de aprendizaje local.
-- La comparación pública nunca altera el motor, instala dependencias ni concede el distintivo
-  verde. El CLI expone `catalog`, `catalog-sync` y `comparisons` para auditar los datos.
+- La caché positiva duraba 7 días y la negativa 30. Una reserva persistente imponía 100 segundos
+  entre peticiones y la sincronización era secuencial.
+- Un fallo conservaba la última ficha válida. El usuario podía desactivar la consulta desde el
+  área de aprendizaje local.
+- La comparación pública no alteraba el motor, no instalaba dependencias ni concedía el distintivo
+  verde. Sus herramientas de auditoría por CLI fueron retiradas junto con la integración.
 - La prueba real enlazó Cube World con su ficha oficial, valoración macOS 4/5 y CrossOver 26.0.0;
   la comparación conserva por separado el blindado perfecto de Regression.
 
@@ -96,13 +102,12 @@ El contrato completo, el esquema y las reglas de extensión están en
 - El Steam App ID tiene una frontera canónica única: dígitos ASCII, rango `UInt32`, valor distinto
   de cero y eliminación de ceros iniciales. La recogida de ajustes rechaza traversal, separadores,
   NUL y enlaces simbólicos que salgan de las raíces del juego o usuario.
-- Coordinador, detección e inspector dependen de protocolos mínimos para comprobar conflictos,
+- Coordinador, detección e inspector dependían de protocolos mínimos para comprobar conflictos,
   cierre oficial, botella dañada y atribución de procesos sin ejecutar Wine en los tests. La
-  consulta de actualización de CrossOver es inyectable, limita el appcast a 1 MiB y nunca afirma
-  que el producto está al día si la respuesta no puede validarse.
-- La consulta de ficha externa usa SQL indexado directo; perfiles, certificaciones y comparaciones
-  se agrupan una sola vez por refresco. La comprobación de salud SQLite deja de ejecutarse en el
-  bucle corto y pasa a una cadencia de 30 minutos o a petición.
+  consulta de actualización mencionada en el corte histórico ya no forma parte del producto.
+- La consulta externa del corte histórico usaba SQL indexado directo; perfiles, certificaciones y
+  comparaciones se agrupaban una sola vez por refresco. La comprobación de salud SQLite pasó del
+  bucle corto a una cadencia de 30 minutos o a petición.
 - El icono de estado usa observación nativa en lugar de un timer de 250 ms. Los estados son iconos
   estáticos y nítidos (`ready`, `working`, `running`, `error`), sin spritesheet ni animación
   artificial.
@@ -115,9 +120,8 @@ El contrato completo, el esquema y las reglas de extensión están en
   arm64/WoW64 se investigan como candidatos por juego. SQLite no puede almacenar ni ejecutar
   comandos arbitrarios: una futura autorreparación solo podrá invocar recetas compiladas,
   permitidas, versionadas y reversibles.
-- El cierre de la app cancela tareas, reconcilia evidencias y serializa el cierre SQLite antes de
-  responder a AppKit, pero no espera indefinidamente a una petición de red ya cancelada. AppKit
-  usa terminación diferida únicamente durante esa secuencia acotada.
+- El cierre de la app cancela tareas locales, reconcilia evidencias y serializa SQLite antes de
+  responder a AppKit. No depende de finalizar una petición a CodeWeavers.
 - La jerarquía del popover usa pilas deterministas dentro de su único `ScrollView`. La combinación
   anterior de `LazyVStack` anidados con `DisclosureGroup` podía dejar AttributeGraph recalculando
   geometría indefinidamente, bloquear el hilo principal y consumir un núcleo completo. El caso se
@@ -132,8 +136,7 @@ El contrato completo, el esquema y las reglas de extensión están en
 ## Interfaz y limpieza
 
 - El popover se reorganizó por intención: estado y acciones, motor/biblioteca, métricas, juegos,
-  aprendizaje y diagnóstico. Los blindados locales y la referencia pública usan jerarquía y color
-  distintos para evitar confundir evidencia con contexto externo.
+  aprendizaje y diagnóstico. La referencia pública citada pertenecía al corte histórico y fue retirada.
 - El icono de Regression queda centrado y con peso óptico equivalente al resto de la barra de
   menús. Cambia de forma estática según estado y conserva contraste en claro/oscuro.
 - Los recursos derivados del spritesheet descartado se retiraron de Assets y se movieron de forma
@@ -146,8 +149,7 @@ El contrato completo, el esquema y las reglas de extensión están en
 - “Mantenimiento” muestra la preparación global con semántica verde/ámbar/roja, los avisos y su
   acción concreta, y permite repetir la comprobación. El estado general es informativo; al pulsar
   Jugar se calcula de nuevo para el App ID exacto y se persiste justo antes de `-applaunch`.
-- La app sigue siendo `LSUIElement`: no ocupa el Dock y CrossOver solo aparece cuando una acción de
-  configuración, reparación, actualización o licencia lo exige.
+- La app sigue siendo `LSUIElement`: no ocupa el Dock. La UI actual no muestra ni abre CrossOver.
 
 ## Identidad, privacidad y permisos
 
@@ -155,9 +157,8 @@ El contrato completo, el esquema y las reglas de extensión están en
   identidad Apple Development local y estable. El repositorio no contiene el nombre, el equipo ni
   ningún dato del certificado. `Scripts/sign_regression.sh` permite elegir otra identidad mediante
   entorno y mantiene un fallback ad hoc explícito para otras máquinas.
-- La firma usa runtime endurecido y las capacidades públicas observadas en el host de CrossOver:
-  automatización Apple Events, memoria ejecutable sin firma, entrada de audio y cámara. No se
-  añadió App Sandbox porque Regression debe ejecutar Wine y acceder a botellas externas.
+- La firma histórica usaba runtime endurecido y capacidades necesarias para Wine y juegos. La
+  arquitectura actual no necesita automatizar CrossOver ni acceder a sus botellas.
 - `Info.plist` explica micrófono, cámara, Escritorio, Documentos y Descargas. macOS solo pregunta
   cuando un juego usa ese recurso; no se intenta conceder permisos en silencio ni se ejecuta
   `tccutil reset`. El usuario aceptó el diálogo mostrado durante esta validación.
@@ -215,7 +216,7 @@ Evidencia visual de los builds precedentes, conservada como historial:
 - Búsqueda real filtrada a Grim Dawn:
   `backups/native-audit-20260728/popover-search-1.5.1-22.png`, SHA-256
   `018bba64759bd02f556b63237b97184d648b29784fd351294491c6a8e394aeec`.
-- Tienda de Steam renderizada mediante CrossOver, sin lanzar juegos:
+- Captura histórica de tienda generada mediante el comparador entonces existente, sin lanzar juegos:
   `backups/native-audit-20260728/steam-render-1.5.1-22.png`, SHA-256
   `02b3b04efda706e545ef6184429244d1e85b7304bc224426be2c4f845a27742f`.
 
@@ -228,8 +229,8 @@ Evidencia visual de los builds precedentes, conservada como historial:
 - La captura histórica de tienda del motor propio 1.4.0 (16) se conserva como evidencia del
   runtime, que esta pasada no modificó.
 
-La app permanece sin App Sandbox deliberadamente porque debe ejecutar Wine/CrossOver y acceder a
-botellas externas. La mitigación es alcance local, permisos privados, saneado de telemetría,
+La app permanece sin App Sandbox deliberadamente porque debe ejecutar su Wine y acceder a su
+botella propia. La mitigación es alcance local, permisos privados, saneado de telemetría,
 ausencia de secretos y ausencia de envío propio a servidores.
 
 ## Gates ejecutados
@@ -249,13 +250,14 @@ ausencia de secretos y ausencia de envío propio a servidores.
   integral cubierta por tests: integridad, referencias, ejecuciones y certificaciones
   conservadas. La base viva quedó en v11 y su backup anterior coincide byte a byte con el creado
   por la migración.
-- Consulta pública real: ficha de Cube World enlazada; fuente externa separada del veredicto local.
+- Evidencia histórica: en aquel corte se enlazó una ficha pública de Cube World; esta integración
+  fue retirada y nunca gobernó el veredicto local.
 - Inspección visual instalada: popover correcto, motor propio activo, esquema v11, bloque de I+D
   verificable y nombres `DragonSword : Awakening` y `Dragon's Dogma 2` visibles en el historial.
   Mantenimiento mostró el preflight verde del backend Regression. La tienda de Steam renderizó a
   3024×1740. No se lanzó ningún juego.
 - `regressionctl preflight 219990 --backend regression` validó las diez dimensiones de Grim Dawn
-  contra la instalación compartida real; solo comprobó el entorno y no envió `-applaunch`.
+  contra la instalación entonces compartida; solo comprobó el entorno y no envió `-applaunch`.
 - Estrés instalado del área Aprendizaje: doce transiciones, árbol de accesibilidad operativo,
   87 elementos accesibles con Juegos temporalmente colapsado y restaurado al final, y CPU de la
   app en reposo (0,4 % en la comprobación posterior). El gate localiza la sección aunque
@@ -329,7 +331,7 @@ la sesión lógica `backend + Steam App ID`, no cada PID:
 - Rollback nativo inmediatamente anterior al empaquetado final:
   `backups/native-packaging/regression-native-before-1.7.0-26-20260728-204312.tar.gz`,
   SHA-256 `0743eda123bb4a529456ec85b23cd3e9faa8191575c4e1a9295993ee0510e728`.
-- Popover instalado con Regression activo y biblioteca compartida:
+- Popover histórico instalado con Regression activo y biblioteca entonces compartida:
   `backups/native-audit-20260728/popover-session-v12-1.7.0-26.png`, SHA-256
   `c1fd0d24d6c672878178d66eb77114e098458a5da6c95fcfaab8da5258a74c02`.
 - Aprendizaje instalado con nombres reales, `Base íntegra · esquema v12`, 22 procesos y

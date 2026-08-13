@@ -55,35 +55,46 @@ prepare_unreal_bootstrap_routes()
     fi
 }
 
+prepare_internal_apple_gptk_authority()
+{
+    local installer="$ROOT/Contents/SharedSupport/bin/install-apple-gptk-component"
+
+    # No se confía en una marca heredada ni en que los directorios del perfil
+    # existan: solo el verificador versionado puede acreditar recibo, hashes y
+    # firma de la generación 3.0 blindada.
+    unset REGRESSION_INTERNAL_GPTK_3_0_VERIFIED
+    [[ -x "$installer" ]] || return 0
+    if "$installer" --component 3.0 --verify-only >/dev/null 2>&1; then
+        export REGRESSION_INTERNAL_GPTK_3_0_VERIFIED=1
+    fi
+}
+
 prepare_external_apple_gptk_routes()
 {
     local installer="$ROOT/Contents/SharedSupport/bin/install-apple-gptk-component"
     local component="$APP_SUPPORT/Components/AppleGPTK/4.0b2"
-    local common_root tq2_shipping borderlands_shipping count=0
+    local count=0
 
-    common_root="$(dirname "$STEAM")/steamapps/common"
-    tq2_shipping="$common_root/Titan Quest II/TQ2/Binaries/Win64/TQ2-Win64-Shipping.exe"
-    borderlands_shipping="$common_root/Borderlands 4/OakGame/Binaries/Win64/Borderlands4.exe"
     [[ -x "$installer" ]] || return 0
-    [[ -f "$tq2_shipping" || -f "$borderlands_shipping" ]] || return 0
 
     # Si el componente está dañado pero el DMG oficial permanece en caché, la
-    # reparación es automática y transaccional. Si Apple aún exige descargarlo,
-    # Steam sigue disponible y el botón de Regression mostrará la instrucción.
+    # reparación es automática y transaccional, pero solo después de una
+    # confirmación humana registrada para esa versión, DMG y licencia. Si Apple
+    # aún exige descargarlo, Steam sigue disponible y Regression guía el alta.
     if ! "$installer" --verify-only >/dev/null 2>&1; then
-        "$installer" >/dev/null 2>&1 || return 0
+        "$installer" --repair-from-cache >/dev/null 2>&1 || return 0
     fi
 
-    if [[ -f "$tq2_shipping" ]]; then
-        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_EXECUTABLE=TQ2-Win64-Shipping.exe"
-        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_WINE_ROOT=$component/wine"
-        count=$((count + 1))
-    fi
-    if [[ -f "$borderlands_shipping" ]]; then
-        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_EXECUTABLE=Borderlands4.exe"
-        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_WINE_ROOT=$component/wine"
-        count=$((count + 1))
-    fi
+    # Las rutas se publican para toda la sesión de Steam. Así un juego
+    # instalado después de abrir la tienda recibe el perfil exacto al pulsar
+    # «Jugar», sin tener que reiniciar Steam. El loader vuelve a validar el
+    # basename compilado y nunca acepta nombres o rutas desde la base local.
+    export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_EXECUTABLE=TQ2-Win64-Shipping.exe"
+    export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_WINE_ROOT=$component/wine"
+    count=$((count + 1))
+    export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_EXECUTABLE=Borderlands4.exe"
+    export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_WINE_ROOT=$component/wine"
+    count=$((count + 1))
     export REGRESSION_EXTERNAL_D3DMETAL_ROUTE_COUNT="$count"
 }
 
@@ -101,12 +112,31 @@ prepare_compiled_game_state_repairs()
 {
     local controller="$ROOT/Contents/SharedSupport/bin/regressionctl"
     local repair_log="$APP_SUPPORT/Logs/Launcher/compiled-state-repair.log"
+    local repair_state
 
-    [[ -x "$controller" ]] || return 0
+    if [[ ! -x "$controller" ]]; then
+        printf 'Regression: falta el controlador que acredita la reparación tipada; Steam no se abrirá.\n' >&2
+        return 1
+    fi
     mkdir -p "$(dirname "$repair_log")"
     if ! "$controller" prepare-launch-state >"$repair_log" 2>&1; then
-        printf 'Regression: no se pudo completar la reparación tipada del estado de lanzamiento; se conserva Steam.\n' >&2
+        printf 'Regression: la reparación tipada dejó un estado no verificable; Steam no se abrirá.\n' >&2
+        return 1
     fi
+
+    repair_state="$(/usr/bin/grep -E '^REGRESSION_REPAIR_STATE=' "$repair_log" | /usr/bin/tail -n 1 || true)"
+    case "$repair_state" in
+        'REGRESSION_REPAIR_STATE=no-op'|\
+        'REGRESSION_REPAIR_STATE=committed'|\
+        'REGRESSION_REPAIR_STATE=rolled-back'|\
+        'REGRESSION_REPAIR_STATE=unsafe mutation=no')
+            return 0
+            ;;
+        *)
+            printf 'Regression: falta un resultado transaccional seguro; Steam no se abrirá.\n' >&2
+            return 1
+            ;;
+    esac
 }
 
 prepare_process_dll_isolation_routes()
@@ -124,6 +154,7 @@ prepare_process_dll_isolation_routes()
 # bootstrap. El router sustituye la imagen estándar de Unreal por el Shipping
 # exacto; los títulos D3D12 validados añaden D3DMetal solo al proceso permitido.
 prepare_unreal_bootstrap_routes
+prepare_internal_apple_gptk_authority
 prepare_external_apple_gptk_routes
 prepare_windows_media_component
 prepare_compiled_game_state_repairs

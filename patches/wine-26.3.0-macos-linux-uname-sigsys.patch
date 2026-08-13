@@ -19,14 +19,25 @@ diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
  /* Enable the optional LGPL Windows Media codec component only for Steam games
   * whose own content tree contains ASF/WMA/WMV assets.  The scan is deliberately
   * bounded, read-only and does not follow symlinks.  This keeps the extra
-@@ -2902,6 +2914,7 @@ static void start_main_thread(void)
+@@ -2894,17 +2905,18 @@ static void start_main_thread(void)
+         void *cxcompatdb = NULL;
+         char *name = NULL;
+ 
+         asprintf( &name, "%s/cxcompatdb.so", ntdll_dir );
+         if (name)
+         {
+             cxcompatdb = dlopen( name, RTLD_LOCAL | RTLD_LAZY );
+             if (!cxcompatdb)
+                 WARN( "error loading cxcompatdb.so: %s\n", dlerror() );
+             free(name);
+         }
      }
  
      regression_set_process_dll_isolation();
 +    regression_set_process_abi_compatibility();
      regression_set_windows_media_compatibility();
      regression_set_graphics_backend();
- 
+     server_init_process_done();
 diff --git a/dlls/ntdll/unix/signal_x86_64.c b/dlls/ntdll/unix/signal_x86_64.c
 --- a/dlls/ntdll/unix/signal_x86_64.c
 +++ b/dlls/ntdll/unix/signal_x86_64.c
@@ -84,13 +95,12 @@ diff --git a/dlls/ntdll/unix/signal_x86_64.c b/dlls/ntdll/unix/signal_x86_64.c
  
      frame->rip = RIP_sig(ucontext) + 0xb;
      frame->rcx = RIP_sig(ucontext);
-@@ -3019,8 +3059,11 @@ void signal_init_process(void)
+@@ -3041,7 +3081,10 @@ void signal_init_process(void)
         handlers but sysctl[byname] is not signal-safe. */
      {
 +        const char *linux_uname_profile = getenv( "REGRESSION_LINUX_UNAME_SYSCALL" );
          int ret = 0;
          size_t size = sizeof(ret);
- 
 +        regression_linux_uname_enabled = linux_uname_profile &&
 +            !strcmp( linux_uname_profile, "borderlands-4-linux-uname@1" );
          if (sysctlbyname( "sysctl.proc_translated", &ret, &size, NULL, 0 ) == -1)

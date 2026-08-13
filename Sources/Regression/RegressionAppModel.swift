@@ -1,8 +1,10 @@
 import AppKit
+import CryptoKit
 import Observation
 import OSLog
 import RegressionCore
 import SwiftUI
+import UniformTypeIdentifiers
 import UserNotifications
 
 enum AppOperation: Equatable {
@@ -24,6 +26,10 @@ enum AppOperation: Equatable {
 struct UserFacingFailure: Equatable {
     enum Recovery: Equatable {
         case refresh
+        case repairRegression
+        case prepareAppleGPTK
+        case reviewProtectedAppleGPTK
+        case reinstallRegression
     }
 
     let title: String
@@ -31,16 +37,88 @@ struct UserFacingFailure: Equatable {
     let recovery: Recovery
 }
 
+enum AppleGPTKLicenseReviewSource: Equatable {
+    case diskImage(descriptor: AppleGPTKInspectionDescriptor, sourceURL: URL)
+    case protectedExisting(descriptor: AppleGPTKExistingComponentInspectionDescriptor)
+
+    var version: String {
+        switch self {
+        case .diskImage(let descriptor, _): descriptor.version
+        case .protectedExisting(let descriptor): descriptor.version
+        }
+    }
+
+    var confirmationValue: String {
+        switch self {
+        case .diskImage: AppleGPTKAuthorizationToken.confirmationValue
+        case .protectedExisting: AppleGPTKExistingComponentAuthorizationToken.confirmationValue
+        }
+    }
+
+    var sourceDescription: String {
+        switch self {
+        case .diskImage(_, let sourceURL):
+            "Documento exacto extraído del DMG verificado · \(sourceURL.lastPathComponent)"
+        case .protectedExisting:
+            "Documento exacto del componente protegido que ya custodia Regression"
+        }
+    }
+
+    var isProtectedExisting: Bool {
+        if case .protectedExisting = self { return true }
+        return false
+    }
+}
+
+struct AppleGPTKLicenseReview: Identifiable, Equatable {
+    let id: UUID
+    let source: AppleGPTKLicenseReviewSource
+    let inspectionDirectoryURL: URL
+    let licenseRTFData: Data
+}
+
+enum ProtectedAppleGPTKAuthorizationState: Equatable {
+    case checking
+    case ready
+    case requiresAuthorization
+    case authorizing
+    case unavailable(String)
+    case failed(String)
+
+    var isBusy: Bool {
+        switch self {
+        case .checking, .authorizing: true
+        case .ready, .requiresAuthorization, .unavailable, .failed: false
+        }
+    }
+}
+
+/// Shim inerte para fixtures visuales heredados. La UI y el ciclo de vida no exponen ni
+/// sincronizan ningún catálogo de terceros.
 enum PublicCatalogOperation: Equatable {
     case disabled
-    case idle
-    case syncing(current: Int, total: Int, gameName: String)
-    case upToDate(Date?)
-    case completedWithIssues(Int)
+}
 
-    var isSyncing: Bool {
-        if case .syncing = self { return true }
-        return false
+private enum AppleGPTKNativeError: LocalizedError {
+    case installerMissing
+    case invalidStatus
+    case inspectionFailed(String)
+    case invalidInspection
+    case privateFileCreation
+
+    var errorDescription: String? {
+        switch self {
+        case .installerMissing:
+            "Falta el instalador protegido de Apple GPTK en esta instalación de Regression."
+        case .invalidStatus:
+            "El instalador de Apple GPTK devolvió un estado no reconocido."
+        case .inspectionFailed(let detail):
+            detail
+        case .invalidInspection:
+            "La inspección no produjo un descriptor y una licencia válidos."
+        case .privateFileCreation:
+            "No se pudo crear el token privado de autorización."
+        }
     }
 }
 
@@ -60,17 +138,29 @@ final class RegressionAppModel {
     var activeRuntimeCandidateCount = 0
     var activeResearchCaseCount = 0
     var activeResearchExperimentCount = 0
-    var externalCatalogEntries: [String: ExternalCompatibilityEntry] = [:]
-    var compatibilityComparisons: [CompatibilityComparison] = []
     var databaseHealth: CompatibilityDatabaseHealth?
-    var publicCatalogOperation: PublicCatalogOperation = .idle
-    var publicCatalogEnabled: Bool
+    var publicCatalogOperation: PublicCatalogOperation = .disabled
+    var publicCatalogEnabled = false
     var sharedLibraryAssessment: SharedLibraryAssessment?
     /// Error de biblioteca propagado desde una operación que la modificaba. No se infiere de
     /// texto de UI: evita presentar una biblioteca como lista tras un fallo de custodia/enlace.
     var libraryFailureDetail: String?
     var windowsMediaHealth: ComponentHealthReport?
     var windowsMediaHealthIsRefreshing = false
+    var steamRuntimePrerequisitesHealth: ComponentHealthReport?
+    var steamRuntimePrerequisitesHealthIsRefreshing = false
+    var protectedAppleGPTKHealth: ComponentHealthReport?
+    var protectedAppleGPTKAuthorizationState: ProtectedAppleGPTKAuthorizationState = .checking
+    var appleGPTKOnboarding = AppleGPTKOnboarding(
+        inputs: .init(
+            platformSupport: .supported,
+            componentHealth: .missing,
+            dmgSelection: .notDownloaded,
+            licenseConfirmation: .notReviewed,
+            operation: .verifying
+        )
+    )
+    var appleGPTKLicenseReview: AppleGPTKLicenseReview?
     /// Resultado de una inspección explícita de la biblioteca heredada. Esta evaluación nunca
     /// prepara ni ejecuta una transferencia; solo hace visible si sería segura en el futuro.
     var physicalLibraryCustodyAssessment: PhysicalLibraryCustodyAssessment?
@@ -94,7 +184,6 @@ final class RegressionAppModel {
     @ObservationIgnored private let repository: CompatibilityRepository
     @ObservationIgnored private let telemetry: TelemetryCoordinator
     @ObservationIgnored private let preflight: GameTestPreflight
-    @ObservationIgnored private let externalCatalog: ExternalCatalogSynchronizer
     @ObservationIgnored private let sharedLibrary: SharedSteamLibraryManager
     @ObservationIgnored private let libraryScanner = SteamLibraryScanner()
     @ObservationIgnored private let configurationCollector = ConfigurationSnapshotCollector()
@@ -106,15 +195,18 @@ final class RegressionAppModel {
         category: "lifecycle"
     )
     @ObservationIgnored private var monitoringTask: Task<Void, Never>?
-    @ObservationIgnored private var externalCatalogTask: Task<Void, Never>?
     @ObservationIgnored private var regressionUpdateTask: Task<Void, Never>?
     @ObservationIgnored private var automaticRegressionUpdateTask: Task<Void, Never>?
     @ObservationIgnored private var physicalLibraryCustodyAssessmentTask: Task<Void, Never>?
     @ObservationIgnored private var physicalLibraryCustodyProgressTask: Task<Void, Never>?
     @ObservationIgnored private var physicalLibraryCustodyAssessmentID: UUID?
+    @ObservationIgnored private var appleGPTKStatusRefreshInFlight = false
+    @ObservationIgnored private var protectedAppleGPTKStatusRefreshInFlight = false
+    @ObservationIgnored private var appleGPTKCriticalTask: Task<Void, Never>?
+    @ObservationIgnored private var appleGPTKCriticalOperationID: UUID?
+    @ObservationIgnored private var shutdownWasRequested = false
     @ObservationIgnored private var physicalLibraryCustodyValidationLease:
         PhysicalLibraryCustodyValidationLease?
-    @ObservationIgnored private var externalCatalogSyncID: UUID?
     @ObservationIgnored private var didBootstrap = false
     @ObservationIgnored private var periodicRefreshCount = 0
     @ObservationIgnored private let regressionUpdateCheckCycle = 10_800
@@ -141,13 +233,6 @@ final class RegressionAppModel {
         automaticRegressionUpdatesEnabled = defaults.bool(
             forKey: "automaticRegressionUpdatesEnabled"
         )
-        if defaults.object(forKey: "publicCatalogEnabled") == nil {
-            defaults.set(true, forKey: "publicCatalogEnabled")
-        }
-        let isPublicCatalogEnabled = defaults.bool(forKey: "publicCatalogEnabled")
-        publicCatalogEnabled = isPublicCatalogEnabled
-        publicCatalogOperation = isPublicCatalogEnabled ? .idle : .disabled
-
         let applicationSupport = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/Regression", isDirectory: true)
         applicationSupportURL = applicationSupport
@@ -170,7 +255,11 @@ final class RegressionAppModel {
             custodyInterlock: custodyManager
         )
         repository = CompatibilityRepository(
-            databaseURL: applicationSupport.appendingPathComponent("Compatibility/compatibility.sqlite")
+            databaseURL: applicationSupport.appendingPathComponent("Compatibility/compatibility.sqlite"),
+            legacyCompiledRepairBottleURL: applicationSupport.appendingPathComponent(
+                "Bottles/Steam",
+                isDirectory: true
+            )
         )
         telemetry = TelemetryCoordinator(
             repository: repository,
@@ -181,7 +270,6 @@ final class RegressionAppModel {
             runner: processRunner,
             applicationSupportURL: applicationSupport
         )
-        externalCatalog = ExternalCatalogSynchronizer(repository: repository)
     }
 
     var statusTitle: String {
@@ -189,14 +277,15 @@ final class RegressionAppModel {
         case .discovering: "Preparando Regression"
         case .ready: "Listo"
         case let .preparing(label): label
-        case let .running(backend): "Steam activo con \(backend.displayName)"
-        case let .switching(backend): "Cambiando a \(backend.displayName)"
+        case let .running(backend):
+            backend == .regression ? "Steam de Regression activo" : "Otro Steam está abierto"
+        case .switching: "Preparando Steam de Regression"
         case .error: failure?.title ?? "Necesita atención"
         }
     }
 
     var primaryActionTitle: String {
-        runningState.activeBackend == nil ? "Abrir Steam" : "Mostrar Steam"
+        runningState.activeBackend == .regression ? "Mostrar Steam" : "Abrir Steam"
     }
 
     var selectedInstallationDetail: String {
@@ -207,7 +296,7 @@ final class RegressionAppModel {
     func learnedSummary(for game: SteamGame) -> String? {
         if let certification = certificationsByAppID[game.appID]?.first
             ?? VerifiedGameCatalog.certification(for: game.appID) {
-            return "Verificado perfecto: \(certification.backend.displayName)"
+            return certification.backend == .regression ? "Verificado perfecto: Regression" : nil
         }
 
         let candidates = profilesByAppID[game.appID] ?? []
@@ -217,52 +306,14 @@ final class RegressionAppModel {
             selectedBackend: selectedBackend
         ) {
             if verified.perfectRuns > 0 {
-                return "Verificado perfecto: \(verified.backend.displayName)"
+                return verified.backend == .regression ? "Verificado perfecto: Regression" : nil
             }
-            return verified.backend == selectedBackend
-                ? "Funciona con incidencias: \(verified.backend.displayName)"
-                : "Mejor perfil observado: \(verified.backend.displayName)"
+            return verified.backend == .regression
+                ? "Funciona con incidencias: Regression"
+                : nil
         }
         let failures = candidates.reduce(0) { $0 + $1.failedRuns }
         return failures > 0 ? "\(failures) prueba(s) con incidencias" : "Pendiente de verificación visual"
-    }
-
-    func externalSummary(for game: SteamGame) -> String? {
-        guard publicCatalogEnabled else { return nil }
-        guard let entry = externalCatalogEntries[game.appID] else {
-            return publicCatalogOperation.isSyncing ? "CodeWeavers: consulta pendiente" : nil
-        }
-        if let record = entry.record {
-            let rating = record.macOSRating.value.map { "\($0)/5" } ?? "sin valoración Mac"
-            return "CodeWeavers: \(rating)"
-        }
-        switch entry.status {
-        case .noMatch: return "CodeWeavers: sin coincidencia exacta"
-        case .failed, .unavailable: return "CodeWeavers: consulta no disponible"
-        case .pending: return "CodeWeavers: consulta pendiente"
-        case .linked: return nil
-        }
-    }
-
-    func externalURL(for game: SteamGame) -> URL? {
-        externalCatalogEntries[game.appID]?.record?.canonicalURL
-    }
-
-    var publicCatalogStatusText: String {
-        switch publicCatalogOperation {
-        case .disabled:
-            "Comparación pública desactivada"
-        case .idle:
-            "Preparado para comparar la biblioteca instalada"
-        case let .syncing(current, total, gameName):
-            "Comparando \(current) de \(total): \(gameName)"
-        case let .upToDate(date):
-            date.map {
-                "Actualizado \($0.formatted(date: .abbreviated, time: .shortened))"
-            } ?? "Datos públicos al día"
-        case let .completedWithIssues(count):
-            "Comparación terminada con \(count) consulta(s) pendiente(s)"
-        }
     }
 
     var regressionUpdateNeedsManualRetry: Bool {
@@ -283,6 +334,12 @@ final class RegressionAppModel {
             if reconciled > 0 {
                 logger.notice("Se cerraron \(reconciled) observaciones interrumpidas")
             }
+            let reconciledRepairs = try await repository.reconcileInterruptedRepairAttempts()
+            if !reconciledRepairs.isEmpty {
+                logger.notice(
+                    "Se reconciliaron \(reconciledRepairs.count) reparaciones interrumpidas"
+                )
+            }
         } catch {
             present(error)
         }
@@ -293,7 +350,7 @@ final class RegressionAppModel {
         scheduleRegressionReleaseCheck()
         await refreshDiscovery()
         LifecycleDiagnostics.write("Detección completada")
-        logger.info("Detección terminada; CrossOver disponible: \(self.installations?.crossOver != nil)")
+        logger.info("Detección terminada; fuente heredada disponible: \(self.installations?.crossOver != nil)")
         await beginTelemetryMonitoring()
         await refreshRuntimeState()
         let custodyInterlock = await sharedLibrary.currentPhysicalLibraryCustodyInterlock()
@@ -311,12 +368,11 @@ final class RegressionAppModel {
         } else if libraryIndependenceState == .rollingBack, let installations {
             await continuePhysicalLibraryCustodyRollback(installations: installations)
         }
-        logger.info("Estado de procesos: CrossOver=\(self.runningState.crossOverIsRunning), Regression=\(self.runningState.regressionIsRunning)")
+        logger.info("Estado de procesos: externo=\(self.runningState.crossOverIsRunning), Regression=\(self.runningState.regressionIsRunning)")
         await refreshStoredData(includeHealth: true)
-        await refreshWindowsMediaHealth()
+        await refreshComponentHealth()
+        await refreshAppleGPTKStatus()
         await refreshTestReadiness()
-        schedulePublicCatalogSync()
-
         monitoringTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(2))
@@ -330,8 +386,12 @@ final class RegressionAppModel {
             logger.error("Conflicto: ambos backends están activos")
             present(RegressionCoreError.backendConflict)
         } else if let active = runningState.activeBackend {
-            operation = .running(active)
-            statusDetail = "Se ha adoptado la instancia de Steam que ya estaba abierta."
+            if active == .regression {
+                operation = .running(.regression)
+                statusDetail = "Se ha adoptado la instancia de Steam de Regression ya abierta."
+            } else {
+                presentExternalSteamConflict()
+            }
         } else if libraryIndependenceState.blocksNormalOperations {
             operation = .ready
             statusDetail = switch libraryIndependenceState {
@@ -406,9 +466,9 @@ final class RegressionAppModel {
             await continuePhysicalLibraryCustodyRollback(installations: installations)
         }
         await refreshStoredData(includeHealth: true)
-        await refreshWindowsMediaHealth()
+        await refreshComponentHealth()
+        await refreshAppleGPTKStatus()
         await refreshTestReadiness()
-        schedulePublicCatalogSync()
         if failure == nil {
             operation = runningState.activeBackend.map(AppOperation.running) ?? .ready
             statusDetail = switch libraryIndependenceState {
@@ -447,24 +507,12 @@ final class RegressionAppModel {
         windowsMediaHealthIsRefreshing = true
         defer { windowsMediaHealthIsRefreshing = false }
 
-        let bundleURL = Bundle.main.bundleURL.standardizedFileURL
-        let applicationVersion = Bundle.main.object(
-            forInfoDictionaryKey: "CFBundleShortVersionString"
-        ) as? String ?? "desconocida"
-        let buildIdentifier = Bundle.main.object(
-            forInfoDictionaryKey: "CFBundleVersion"
-        ) as? String ?? "desconocida"
-        let isTrustedPublicInstallation = bundleURL.path == "/Applications/Regression.app"
-            && applicationVersion == TrustedComponentCatalog.supportedApplicationVersion
-            && buildIdentifier == TrustedComponentCatalog.supportedBuildIdentifier
-        let variant: ComponentArtifactVariant = isTrustedPublicInstallation
-            ? .publicInstalled
-            : .development
+        let context = trustedComponentContext()
         let descriptor = TrustedComponentCatalog.windowsMediaDescriptor(
-            applicationVersion: applicationVersion,
-            buildIdentifier: buildIdentifier,
-            variant: variant,
-            applicationBundleURL: bundleURL,
+            applicationVersion: context.applicationVersion,
+            buildIdentifier: context.buildIdentifier,
+            variant: context.variant,
+            applicationBundleURL: context.bundleURL,
             applicationSupportURL: applicationSupportURL
         )
         windowsMediaHealth = await Task.detached(priority: .utility) {
@@ -472,8 +520,796 @@ final class RegressionAppModel {
         }.value
     }
 
+    /// Comprueba fuera del actor principal los componentes sellados que la interfaz presenta.
+    /// Los descriptores proceden del bundle descubierto y del catálogo compilado; ningún dato
+    /// persistido puede elegir rutas, variantes ni hashes de confianza.
+    func refreshComponentHealth() async {
+        guard !windowsMediaHealthIsRefreshing,
+              !steamRuntimePrerequisitesHealthIsRefreshing else { return }
+        windowsMediaHealthIsRefreshing = true
+        steamRuntimePrerequisitesHealthIsRefreshing = true
+        defer {
+            windowsMediaHealthIsRefreshing = false
+            steamRuntimePrerequisitesHealthIsRefreshing = false
+        }
+
+        let context = trustedComponentContext()
+        let mediaDescriptor = TrustedComponentCatalog.windowsMediaDescriptor(
+            applicationVersion: context.applicationVersion,
+            buildIdentifier: context.buildIdentifier,
+            variant: context.variant,
+            applicationBundleURL: context.bundleURL,
+            applicationSupportURL: applicationSupportURL
+        )
+        let runtimeDescriptor = TrustedComponentCatalog.steamRuntimePrerequisitesDescriptor(
+            applicationVersion: context.applicationVersion,
+            buildIdentifier: context.buildIdentifier,
+            variant: context.variant,
+            wineRootURL: context.bundleURL.appendingPathComponent(
+                "Contents/SharedSupport/wine-root",
+                isDirectory: true
+            )
+        )
+        let protectedAppleGPTKRoot = applicationSupportURL
+            .appendingPathComponent("Components/AppleGPTK/3.0", isDirectory: true)
+
+        let reports = await Task.detached(priority: .utility) {
+            (
+                media: ComponentHealthService.evaluate(mediaDescriptor),
+                runtime: ComponentHealthService.evaluate(runtimeDescriptor),
+                protectedAppleGPTK: AppleGPTKComponentCatalog.protectedProfilesHealth(
+                    rootURL: protectedAppleGPTKRoot
+                )
+            )
+        }.value
+        windowsMediaHealth = reports.media
+        steamRuntimePrerequisitesHealth = reports.runtime
+        protectedAppleGPTKHealth = reports.protectedAppleGPTK
+        await refreshProtectedAppleGPTKAuthorizationStatus()
+    }
+
+    var steamRuntimeBlocksLaunch: Bool {
+        guard let report = steamRuntimePrerequisitesHealth else { return true }
+        return report.status != .ready
+    }
+
+    func repairWindowsMediaComponent() async {
+        guard let report = windowsMediaHealth else { return }
+        switch report.recovery {
+        case .createExternalLink, .restoreExternalLinkAfterBackup:
+            break
+        case .none, .reinstallTrustedArtifact, .provideUserSource,
+             .installSupportedApplicationBuild:
+            openOfficialRegressionRelease()
+            return
+        }
+        guard runningState.activeBackend == nil else {
+            presentComponentFailure(
+                title: "Cierra Steam antes de reparar Windows Media",
+                message: "Regression no cambiará el enlace multimedia mientras Steam o un juego estén activos.",
+                recovery: .refresh
+            )
+            return
+        }
+        guard let installation = installations?.regression else { return }
+        let installerURL = installation.applicationURL.appendingPathComponent(
+            "Contents/SharedSupport/bin/install-windows-media-component",
+            isDirectory: false
+        )
+        guard FileManager.default.isExecutableFile(atPath: installerURL.path) else {
+            presentComponentFailure(
+                title: "No se pudo reparar Windows Media",
+                message: "Falta el reparador firmado de esta instalación.",
+                recovery: .repairRegression
+            )
+            return
+        }
+
+        operation = .preparing("Reparando Windows Media")
+        statusDetail = "Regression está restaurando el enlace local con backup y verificación final."
+        let result: ProcessResult
+        do {
+            result = try await processRunner.run(executableURL: installerURL)
+        } catch {
+            presentComponentFailure(
+                title: "No se pudo reparar Windows Media",
+                message: error.localizedDescription,
+                recovery: .refresh
+            )
+            return
+        }
+        guard result.exitCode == 0 else {
+            let detail = [result.standardError, result.standardOutput]
+                .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                .map { PrivacySanitizer.redactedLogExcerpt($0) }
+                ?? "El reparador terminó con código \(result.exitCode)."
+            presentComponentFailure(
+                title: "No se pudo reparar Windows Media",
+                message: detail,
+                recovery: .refresh
+            )
+            return
+        }
+        await refreshWindowsMediaHealth()
+        operation = runningState.activeBackend.map(AppOperation.running) ?? .ready
+        statusDetail = "Windows Media se reparó y verificó correctamente."
+    }
+
+    func openOfficialRegressionRelease() {
+        guard let url = URL(string: "https://github.com/SwonDev/regression/releases/latest") else {
+            return
+        }
+        NSWorkspace.shared.open(url)
+    }
+
+    var appleGPTKState: AppleGPTKOnboardingState {
+        appleGPTKOnboarding.state
+    }
+
+    var appleGPTKIsBusy: Bool {
+        switch appleGPTKState {
+        case .verifying, .installing: true
+        case .ready, .requiresDownload, .requiresSelection, .requiresLicense,
+             .unsupported, .failed: false
+        }
+    }
+
+    var appleGPTKLicenseAuthorizationIsBusy: Bool {
+        appleGPTKIsBusy || protectedAppleGPTKAuthorizationState.isBusy
+    }
+
+    func refreshProtectedAppleGPTKAuthorizationStatus() async {
+        guard !protectedAppleGPTKStatusRefreshInFlight,
+              protectedAppleGPTKAuthorizationState != .authorizing else { return }
+        guard protectedAppleGPTKHealth?.status == .ready else {
+            protectedAppleGPTKAuthorizationState = .unavailable(
+                "El payload exacto de Apple GPTK 3.0 no está disponible o no supera su catálogo protegido."
+            )
+            return
+        }
+
+        protectedAppleGPTKStatusRefreshInFlight = true
+        protectedAppleGPTKAuthorizationState = .checking
+        defer { protectedAppleGPTKStatusRefreshInFlight = false }
+
+        do {
+            let installerURL = try appleGPTKInstallerURL()
+            let result = try await processRunner.run(
+                executableURL: installerURL,
+                arguments: ["--component", "3.0", "--verify-only"],
+                environment: nil
+            )
+            protectedAppleGPTKAuthorizationState = result.exitCode == 0
+                ? .ready
+                : .requiresAuthorization
+        } catch {
+            protectedAppleGPTKAuthorizationState = .failed(error.localizedDescription)
+        }
+    }
+
+    /// Verifica el componente con el instalador incluido. `ProcessRunner` es un actor propio,
+    /// por lo que `hdiutil`, hashes y firmas nunca bloquean el actor principal de la interfaz.
+    func refreshAppleGPTKStatus() async {
+        if let appleGPTKCriticalTask {
+            await appleGPTKCriticalTask.value
+            return
+        }
+        let task = startAppleGPTKCriticalOperation { [weak self] in
+            await self?.performAppleGPTKStatusRefresh()
+        }
+        await task?.value
+    }
+
+    private func performAppleGPTKStatusRefresh() async {
+        guard !appleGPTKStatusRefreshInFlight,
+              appleGPTKOnboarding.inputs.operation != .installing else { return }
+        appleGPTKStatusRefreshInFlight = true
+        defer { appleGPTKStatusRefreshInFlight = false }
+        updateAppleGPTK(operation: .verifying)
+        do {
+            let installerURL = try appleGPTKInstallerURL()
+            let result = try await processRunner.run(
+                executableURL: installerURL,
+                arguments: ["--status"],
+                environment: nil
+            )
+            guard result.exitCode == 0,
+                  let status = AppleGPTKInstallerStatus(output: result.standardOutput) else {
+                throw AppleGPTKNativeError.invalidStatus
+            }
+            switch status {
+            case .ready:
+                appleGPTKOnboarding = AppleGPTKOnboarding(
+                    inputs: .init(
+                        platformSupport: .supported,
+                        componentHealth: .ready,
+                        dmgSelection: .notDownloaded,
+                        licenseConfirmation: .notReviewed,
+                        operation: .idle
+                    )
+                )
+            case .requiresDownload:
+                // Una autorización anterior permite reparar sin repetir selección ni licencia.
+                // Si no existe caché/recibo válido, el instalador falla cerrado y se presenta el
+                // onboarding oficial normal sin convertir esa ausencia esperada en un error.
+                let repair = if runningState.activeBackend == nil {
+                    try await processRunner.run(
+                        executableURL: installerURL,
+                        arguments: ["--repair-from-cache"],
+                        environment: nil
+                    )
+                } else {
+                    ProcessResult(
+                        exitCode: 1,
+                        standardOutput: "",
+                        standardError: "Steam está activo"
+                    )
+                }
+                if repair.exitCode == 0 {
+                    let verification = try await processRunner.run(
+                        executableURL: installerURL,
+                        arguments: ["--status"],
+                        environment: nil
+                    )
+                    guard verification.exitCode == 0,
+                          AppleGPTKInstallerStatus(output: verification.standardOutput) == .ready
+                    else { throw AppleGPTKNativeError.invalidStatus }
+                    appleGPTKOnboarding = AppleGPTKOnboarding(
+                        inputs: .init(
+                            platformSupport: .supported,
+                            componentHealth: .ready,
+                            dmgSelection: .notDownloaded,
+                            licenseConfirmation: .notReviewed,
+                            operation: .idle
+                        )
+                    )
+                } else {
+                    appleGPTKOnboarding = AppleGPTKOnboarding(
+                        inputs: .init(
+                            platformSupport: .supported,
+                            componentHealth: .missing,
+                            dmgSelection: .notDownloaded,
+                            licenseConfirmation: .notReviewed,
+                            operation: .idle
+                        )
+                    )
+                }
+            case .unsupported(let reason):
+                appleGPTKOnboarding = AppleGPTKOnboarding(
+                    inputs: .init(
+                        platformSupport: .unsupported(reason: reason),
+                        componentHealth: .missing,
+                        dmgSelection: .notDownloaded,
+                        licenseConfirmation: .notReviewed,
+                        operation: .idle
+                    )
+                )
+            }
+        } catch {
+            failAppleGPTK(error.localizedDescription)
+        }
+    }
+
+    func openOfficialAppleGPTKDownload() {
+        let url = AppleGPTKOnboarding.officialDownloadURL
+        guard url.host == "developer.apple.com", NSWorkspace.shared.open(url) else {
+            failAppleGPTK("No se pudo abrir la página oficial de Apple Developer.")
+            return
+        }
+        appleGPTKOnboarding = AppleGPTKOnboarding(
+            inputs: .init(
+                platformSupport: .supported,
+                componentHealth: .missing,
+                dmgSelection: .availableForSelection,
+                licenseConfirmation: .notReviewed,
+                operation: .idle
+            )
+        )
+    }
+
+    func beginSelectAndInspectAppleGPTKDMG() {
+        startAppleGPTKCriticalOperation { [weak self] in
+            await self?.selectAndInspectAppleGPTKDMG()
+        }
+    }
+
+    private func selectAndInspectAppleGPTKDMG() async {
+        guard !operation.isBusy, !appleGPTKIsBusy, runningState.activeBackend == nil else {
+            failAppleGPTK(
+                "Cierra Steam y espera a que termine la operación actual antes de inspeccionar Apple GPTK."
+            )
+            return
+        }
+
+        let panel = NSOpenPanel()
+        panel.title = "Seleccionar el DMG oficial de Apple GPTK 4.0b2"
+        panel.message = "Regression verificará el hash, el payload y las firmas antes de mostrar la licencia."
+        panel.prompt = "Inspeccionar"
+        panel.allowedContentTypes = [.diskImage]
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let sourceURL = panel.url else { return }
+
+        await inspectAppleGPTKDMG(at: sourceURL)
+    }
+
+    func beginInspectExistingProtectedAppleGPTK() {
+        startAppleGPTKCriticalOperation { [weak self] in
+            await self?.inspectExistingProtectedAppleGPTK()
+        }
+    }
+
+    private func inspectExistingProtectedAppleGPTK() async {
+        guard !operation.isBusy,
+              !protectedAppleGPTKAuthorizationState.isBusy,
+              runningState.activeBackend == nil else {
+            presentComponentFailure(
+                title: "Apple GPTK 3.0 no se puede inspeccionar todavía",
+                message: "Cierra Steam y espera a que termine la operación actual.",
+                recovery: .reviewProtectedAppleGPTK
+            )
+            return
+        }
+
+        let inspectionDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "regression-gptk3-inspection-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        do {
+            try createPrivateInspectionDirectory(at: inspectionDirectory)
+            protectedAppleGPTKAuthorizationState = .checking
+            operation = .preparing("Verificando Apple GPTK 3.0")
+            statusDetail = "Comprobando el componente protegido y su licencia sin copiar ni modificar el payload."
+
+            let installerURL = try appleGPTKInstallerURL()
+            let result = try await processRunner.run(
+                executableURL: installerURL,
+                arguments: [
+                    "--component", "3.0",
+                    "--inspect-existing",
+                    "--output-dir", inspectionDirectory.path,
+                ],
+                environment: nil
+            )
+            guard result.exitCode == 0 else {
+                throw AppleGPTKNativeError.inspectionFailed(processFailureDetail(result))
+            }
+
+            let descriptorURL = inspectionDirectory.appendingPathComponent(
+                "apple-gptk-existing-inspection.json",
+                isDirectory: false
+            )
+            let licenseURL = inspectionDirectory.appendingPathComponent(
+                "License.rtf",
+                isDirectory: false
+            )
+            let descriptor = try JSONDecoder().decode(
+                AppleGPTKExistingComponentInspectionDescriptor.self,
+                from: Data(contentsOf: descriptorURL)
+            )
+            let licenseData = try Data(contentsOf: licenseURL, options: .mappedIfSafe)
+            let displayedLicenseSHA256 = SHA256.hash(data: licenseData)
+                .map { String(format: "%02x", $0) }
+                .joined()
+            let expectedComponentPath = applicationSupportURL
+                .appendingPathComponent("Components/AppleGPTK/3.0", isDirectory: true)
+                .resolvingSymlinksInPath()
+                .standardizedFileURL.path
+            let inspectedComponentPath = URL(
+                fileURLWithPath: descriptor.sourceComponent,
+                isDirectory: true
+            )
+            .resolvingSymlinksInPath()
+            .standardizedFileURL.path
+            guard descriptor.schema == 1,
+                  descriptor.version == AppleGPTKComponentCatalog.protectedProfiles.version,
+                  descriptor.sourceKind
+                    == AppleGPTKExistingComponentInspectionDescriptor.sourceKind,
+                  descriptor.catalogID == AppleGPTKComponentCatalog.protectedProfilesComponentID,
+                  descriptor.payloadFingerprint
+                    == AppleGPTKComponentCatalog.protectedProfilesPayloadFingerprint,
+                  descriptor.licenseSHA256.wholeMatch(of: /^[0-9a-f]{64}$/) != nil,
+                  descriptor.sourceComponent.hasPrefix("/"),
+                  inspectedComponentPath == expectedComponentPath,
+                  displayedLicenseSHA256 == descriptor.licenseSHA256,
+                  !licenseData.isEmpty,
+                  licenseData.count <= 10 * 1_024 * 1_024 else {
+                throw AppleGPTKNativeError.invalidInspection
+            }
+
+            appleGPTKLicenseReview = AppleGPTKLicenseReview(
+                id: UUID(),
+                source: .protectedExisting(descriptor: descriptor),
+                inspectionDirectoryURL: inspectionDirectory,
+                licenseRTFData: licenseData
+            )
+            failure = nil
+            operation = .ready
+            protectedAppleGPTKAuthorizationState = .requiresAuthorization
+            statusDetail = "Apple GPTK 3.0 está verificado. Revisa su licencia exacta antes de autorizarlo."
+        } catch {
+            try? FileManager.default.removeItem(at: inspectionDirectory)
+            protectedAppleGPTKAuthorizationState = .failed(error.localizedDescription)
+            presentComponentFailure(
+                title: "No se pudo inspeccionar Apple GPTK 3.0",
+                message: error.localizedDescription,
+                recovery: .reviewProtectedAppleGPTK
+            )
+        }
+    }
+
+    func presentAppleGPTKLicenseReview() {
+        guard let review = appleGPTKLicenseReview else { return }
+        appleGPTKLicenseReview = review
+    }
+
+    func cancelAppleGPTKLicenseReview() {
+        if let review = appleGPTKLicenseReview {
+            try? FileManager.default.removeItem(at: review.inspectionDirectoryURL)
+        }
+        let cancelledProtectedReview = appleGPTKLicenseReview?.source.isProtectedExisting == true
+        appleGPTKLicenseReview = nil
+        if cancelledProtectedReview {
+            protectedAppleGPTKAuthorizationState = .requiresAuthorization
+            operation = .ready
+            statusDetail = "Apple GPTK 3.0 sigue pendiente de autorización; no se modificó el componente."
+            return
+        }
+        appleGPTKOnboarding = AppleGPTKOnboarding(
+            inputs: .init(
+                platformSupport: .supported,
+                componentHealth: .missing,
+                dmgSelection: .availableForSelection,
+                licenseConfirmation: .notReviewed,
+                operation: .idle
+            )
+        )
+    }
+
+    func beginAppleGPTKAuthorization(
+        _ review: AppleGPTKLicenseReview,
+        explicitConfirmation: String
+    ) {
+        startAppleGPTKCriticalOperation { [weak self] in
+            await self?.authorizeAndInstallAppleGPTK(
+                review,
+                explicitConfirmation: explicitConfirmation
+            )
+        }
+    }
+
+    private func authorizeAndInstallAppleGPTK(
+        _ review: AppleGPTKLicenseReview,
+        explicitConfirmation: String
+    ) async {
+        guard appleGPTKLicenseReview?.id == review.id,
+              explicitConfirmation == review.source.confirmationValue,
+              runningState.activeBackend == nil,
+              !operation.isBusy else {
+            failAppleGPTK("La autorización ya no corresponde a la inspección activa.")
+            return
+        }
+
+        switch review.source {
+        case .protectedExisting(let descriptor):
+            await authorizeExistingProtectedAppleGPTK(review, descriptor: descriptor)
+        case .diskImage(let descriptor, let sourceURL):
+            await authorizeAppleGPTKDMG(
+                review,
+                descriptor: descriptor,
+                sourceURL: sourceURL
+            )
+        }
+    }
+
+    private func authorizeAppleGPTKDMG(
+        _ review: AppleGPTKLicenseReview,
+        descriptor: AppleGPTKInspectionDescriptor,
+        sourceURL: URL
+    ) async {
+
+        appleGPTKOnboarding = AppleGPTKOnboarding(
+            inputs: .init(
+                platformSupport: .supported,
+                componentHealth: .missing,
+                dmgSelection: .selected(sourceURL),
+                licenseConfirmation: .confirmed,
+                operation: .installing
+            )
+        )
+        operation = .preparing("Instalando Apple GPTK")
+        statusDetail = "Volviendo a verificar el DMG antes de instalar el componente de forma transaccional."
+
+        let authorizationURL = review.inspectionDirectoryURL
+            .appendingPathComponent("apple-gptk-authorization.json", isDirectory: false)
+        defer {
+            try? FileManager.default.removeItem(at: authorizationURL)
+        }
+
+        do {
+            let token = AppleGPTKAuthorizationToken(
+                authorizing: descriptor,
+                at: Date(),
+                nonce: UUID().uuidString.replacingOccurrences(of: "-", with: "")
+            )
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            try writePrivateFile(encoder.encode(token), to: authorizationURL)
+
+            let installerURL = try appleGPTKInstallerURL()
+            let result = try await processRunner.run(
+                executableURL: installerURL,
+                arguments: [
+                    "--install-authorized",
+                    "--source-dmg", sourceURL.path,
+                    "--authorization-file", authorizationURL.path,
+                ],
+                environment: nil
+            )
+            guard result.exitCode == 0 else {
+                throw AppleGPTKNativeError.inspectionFailed(processFailureDetail(result))
+            }
+
+            appleGPTKLicenseReview = nil
+            try? FileManager.default.removeItem(at: review.inspectionDirectoryURL)
+            operation = .ready
+            statusDetail = "Apple GPTK 4.0b2 se instaló y verificó correctamente."
+            updateAppleGPTK(operation: .idle)
+            await performAppleGPTKStatusRefresh()
+        } catch {
+            appleGPTKLicenseReview = nil
+            try? FileManager.default.removeItem(at: review.inspectionDirectoryURL)
+            operation = .ready
+            failAppleGPTK(error.localizedDescription)
+        }
+    }
+
+    private func authorizeExistingProtectedAppleGPTK(
+        _ review: AppleGPTKLicenseReview,
+        descriptor: AppleGPTKExistingComponentInspectionDescriptor
+    ) async {
+        protectedAppleGPTKAuthorizationState = .authorizing
+        operation = .preparing("Autorizando Apple GPTK 3.0")
+        statusDetail = "Volviendo a verificar el componente exacto antes de registrar la aceptación local."
+
+        let authorizationURL = review.inspectionDirectoryURL.appendingPathComponent(
+            "apple-gptk-existing-authorization.json",
+            isDirectory: false
+        )
+        defer {
+            try? FileManager.default.removeItem(at: authorizationURL)
+        }
+
+        do {
+            let token = AppleGPTKExistingComponentAuthorizationToken(
+                authorizing: descriptor,
+                at: Date(),
+                nonce: UUID().uuidString.replacingOccurrences(of: "-", with: "")
+            )
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            try writePrivateFile(encoder.encode(token), to: authorizationURL)
+
+            let installerURL = try appleGPTKInstallerURL()
+            let result = try await processRunner.run(
+                executableURL: installerURL,
+                arguments: [
+                    "--component", "3.0",
+                    "--authorize-existing",
+                    "--authorization-file", authorizationURL.path,
+                ],
+                environment: nil
+            )
+            guard result.exitCode == 0 else {
+                throw AppleGPTKNativeError.inspectionFailed(processFailureDetail(result))
+            }
+
+            let verification = try await processRunner.run(
+                executableURL: installerURL,
+                arguments: ["--component", "3.0", "--verify-only"],
+                environment: nil
+            )
+            guard verification.exitCode == 0 else {
+                throw AppleGPTKNativeError.inspectionFailed(processFailureDetail(verification))
+            }
+
+            appleGPTKLicenseReview = nil
+            try? FileManager.default.removeItem(at: review.inspectionDirectoryURL)
+            failure = nil
+            operation = .ready
+            protectedAppleGPTKAuthorizationState = .ready
+            statusDetail = "Apple GPTK 3.0 se autorizó y verificó sin copiar ni modificar su payload."
+        } catch {
+            appleGPTKLicenseReview = nil
+            try? FileManager.default.removeItem(at: review.inspectionDirectoryURL)
+            protectedAppleGPTKAuthorizationState = .failed(error.localizedDescription)
+            presentComponentFailure(
+                title: "No se pudo autorizar Apple GPTK 3.0",
+                message: error.localizedDescription,
+                recovery: .reviewProtectedAppleGPTK
+            )
+        }
+    }
+
+    private func inspectAppleGPTKDMG(at sourceURL: URL) async {
+        let inspectionDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-gptk-inspection-\(UUID().uuidString)", isDirectory: true)
+        do {
+            try createPrivateInspectionDirectory(at: inspectionDirectory)
+            updateAppleGPTK(
+                selection: .selected(sourceURL),
+                confirmation: .notReviewed,
+                operation: .verifying
+            )
+            operation = .preparing("Verificando Apple GPTK")
+            statusDetail = "Comprobando el DMG oficial, su payload y sus firmas sin instalar nada."
+
+            let installerURL = try appleGPTKInstallerURL()
+            let result = try await processRunner.run(
+                executableURL: installerURL,
+                arguments: [
+                    "--inspect",
+                    "--source-dmg", sourceURL.path,
+                    "--output-dir", inspectionDirectory.path,
+                ],
+                environment: nil
+            )
+            guard result.exitCode == 0 else {
+                throw AppleGPTKNativeError.inspectionFailed(processFailureDetail(result))
+            }
+
+            let descriptorURL = inspectionDirectory
+                .appendingPathComponent("apple-gptk-inspection.json", isDirectory: false)
+            let licenseURL = inspectionDirectory
+                .appendingPathComponent("License.rtf", isDirectory: false)
+            let descriptor = try JSONDecoder().decode(
+                AppleGPTKInspectionDescriptor.self,
+                from: Data(contentsOf: descriptorURL)
+            )
+            let licenseData = try Data(contentsOf: licenseURL, options: .mappedIfSafe)
+            let displayedLicenseSHA256 = SHA256.hash(data: licenseData)
+                .map { String(format: "%02x", $0) }
+                .joined()
+            let canonicalSource = sourceURL.resolvingSymlinksInPath().standardizedFileURL.path
+            guard descriptor.schema == 1,
+                  descriptor.version == "4.0b2",
+                  descriptor.sourceDMG == canonicalSource,
+                  descriptor.dmgSHA256.wholeMatch(of: /^[0-9a-f]{64}$/) != nil,
+                  descriptor.licenseSHA256.wholeMatch(of: /^[0-9a-f]{64}$/) != nil,
+                  displayedLicenseSHA256 == descriptor.licenseSHA256,
+                  !licenseData.isEmpty,
+                  licenseData.count <= 10 * 1_024 * 1_024 else {
+                throw AppleGPTKNativeError.invalidInspection
+            }
+
+            appleGPTKLicenseReview = AppleGPTKLicenseReview(
+                id: UUID(),
+                source: .diskImage(
+                    descriptor: descriptor,
+                    sourceURL: URL(fileURLWithPath: descriptor.sourceDMG)
+                ),
+                inspectionDirectoryURL: inspectionDirectory,
+                licenseRTFData: licenseData
+            )
+            updateAppleGPTK(
+                selection: .selected(URL(fileURLWithPath: descriptor.sourceDMG)),
+                confirmation: .notReviewed,
+                operation: .idle
+            )
+            operation = .ready
+            statusDetail = "Apple GPTK 4.0b2 está verificado. Revisa la licencia exacta antes de instalar."
+        } catch {
+            try? FileManager.default.removeItem(at: inspectionDirectory)
+            operation = .ready
+            failAppleGPTK(error.localizedDescription)
+        }
+    }
+
+    private func appleGPTKInstallerURL() throws -> URL {
+        let installerURL = trustedComponentContext().bundleURL.appendingPathComponent(
+            "Contents/SharedSupport/bin/install-apple-gptk-component",
+            isDirectory: false
+        )
+        guard FileManager.default.isExecutableFile(atPath: installerURL.path) else {
+            throw AppleGPTKNativeError.installerMissing
+        }
+        return installerURL
+    }
+
+    private func createPrivateInspectionDirectory(at inspectionDirectory: URL) throws {
+        try FileManager.default.createDirectory(
+            at: inspectionDirectory,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: inspectionDirectory.path
+        )
+    }
+
+    @discardableResult
+    private func startAppleGPTKCriticalOperation(
+        _ work: @escaping @MainActor () async -> Void
+    ) -> Task<Void, Never>? {
+        guard appleGPTKCriticalTask == nil, !shutdownWasRequested else { return nil }
+        let operationID = UUID()
+        appleGPTKCriticalOperationID = operationID
+        let task = Task { @MainActor [weak self] in
+            await work()
+            guard self?.appleGPTKCriticalOperationID == operationID else { return }
+            self?.appleGPTKCriticalTask = nil
+            self?.appleGPTKCriticalOperationID = nil
+        }
+        appleGPTKCriticalTask = task
+        return task
+    }
+
+    private func updateAppleGPTK(
+        selection: AppleGPTKDMGSelection? = nil,
+        confirmation: AppleGPTKLicenseConfirmation? = nil,
+        operation: AppleGPTKOnboardingOperation
+    ) {
+        let current = appleGPTKOnboarding.inputs
+        appleGPTKOnboarding = AppleGPTKOnboarding(
+            inputs: .init(
+                platformSupport: current.platformSupport,
+                componentHealth: current.componentHealth,
+                dmgSelection: selection ?? current.dmgSelection,
+                licenseConfirmation: confirmation ?? current.licenseConfirmation,
+                operation: operation
+            )
+        )
+    }
+
+    private func failAppleGPTK(_ message: String) {
+        updateAppleGPTK(operation: .failed(message: message))
+    }
+
+    private func processFailureDetail(_ result: ProcessResult) -> String {
+        [result.standardError, result.standardOutput]
+            .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .map { PrivacySanitizer.redactedLogExcerpt($0) }
+            ?? "El instalador terminó con código \(result.exitCode)."
+    }
+
+    private func writePrivateFile(_ data: Data, to url: URL) throws {
+        guard !FileManager.default.fileExists(atPath: url.path),
+              FileManager.default.createFile(
+                atPath: url.path,
+                contents: nil,
+                attributes: [.posixPermissions: 0o600]
+              ) else {
+            throw AppleGPTKNativeError.privateFileCreation
+        }
+        let handle = try FileHandle(forWritingTo: url)
+        do {
+            try handle.write(contentsOf: data)
+            try handle.synchronize()
+            try handle.close()
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: url.path
+            )
+        } catch {
+            try? handle.close()
+            try? FileManager.default.removeItem(at: url)
+            throw error
+        }
+    }
+
     func startSteam() async {
         guard let installations else { return }
+        if runningState.activeBackend == .regression {
+            showSteam()
+            return
+        }
+        if runningState.activeBackend != nil {
+            presentExternalSteamConflict()
+            return
+        }
+        guard await ensureSteamRuntimeReadyForLaunch() else { return }
         invalidatePhysicalLibraryCustodyAssessment(
             notice: "La evaluación se descartó porque Steam se está iniciando. Repítela cuando Steam esté cerrado."
         )
@@ -481,14 +1317,8 @@ final class RegressionAppModel {
         logger.info("startSteam con \(self.selectedBackend.rawValue)")
         failure = nil
         libraryFailureDetail = nil
-        if runningState.activeBackend != nil {
-            showSteam()
-            return
-        }
-        operation = .preparing("Iniciando Steam con \(selectedBackend.displayName)")
-        statusDetail = selectedBackend == .regression
-            ? "Regression está verificando el runtime y la botella antes de abrir Steam."
-            : "El motor de comparación puede actualizar su botella antes de abrir Steam."
+        operation = .preparing("Iniciando Steam de Regression")
+        statusDetail = "Regression está verificando el runtime y la botella antes de abrir Steam."
         do {
             let launch = try await coordinator.launchSteam(
                 backend: selectedBackend,
@@ -510,10 +1340,14 @@ final class RegressionAppModel {
 
     func stopSteam() async {
         guard let installations, let activeBackend = runningState.activeBackend else { return }
+        guard activeBackend == .regression else {
+            presentExternalSteamConflict()
+            return
+        }
 
         let alert = NSAlert()
         alert.messageText = "¿Cerrar Steam?"
-        alert.informativeText = "Regression solicitará un cierre normal de Steam con \(activeBackend.displayName). Los juegos que sigan abiertos también deben cerrarse primero."
+        alert.informativeText = "Regression solicitará un cierre normal de Steam. Los juegos que sigan abiertos también deben cerrarse primero."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Cerrar Steam")
         alert.addButton(withTitle: "Cancelar")
@@ -542,6 +1376,8 @@ final class RegressionAppModel {
 
     func launchGame(_ game: SteamGame) async {
         guard let installations else { return }
+        guard await ensureSteamRuntimeReadyForLaunch() else { return }
+        guard await ensureAppleGPTKReadyForLaunch(appID: game.appID) else { return }
         let validationLease = libraryIndependenceState == .validating
             ? physicalLibraryCustodyValidationLease
             : nil
@@ -556,14 +1392,9 @@ final class RegressionAppModel {
         statusDetail = "Registrando la configuración de compatibilidad antes del lanzamiento…"
         var registeredContext: RunContext?
         do {
-            if let active = runningState.activeBackend, active != selectedBackend {
-                let steamLaunch = try await coordinator.switchBackend(
-                    from: active,
-                    to: selectedBackend,
-                    installations: installations,
-                    custodyValidationLease: validationLease
-                )
-                try await confirmSteamLaunch(steamLaunch)
+            if let active = runningState.activeBackend, active != .regression {
+                presentExternalSteamConflict()
+                return
             }
 
             let metadata = try backendMetadata(
@@ -575,18 +1406,13 @@ final class RegressionAppModel {
                 backend: selectedBackend,
                 appID: game.appID
             )
-            var configuration = await configurationCollector.snapshot(
+            let configuration = await configurationCollector.snapshot(
                 bottleURL: metadata.bottleURL,
                 backend: selectedBackend,
                 providerVersion: metadata.providerVersion,
                 game: game,
-                steamRootURL: selectedBackend == .crossOver
-                    ? installations.crossOver?.steamRootURL
-                    : installations.regression.steamRootURL
+                steamRootURL: installations.regression.steamRootURL
             )
-            configuration.merge(
-                configurationOverrides(installations: installations, backend: selectedBackend)
-            ) { _, override in override }
 
             // Se ejecuta después de recopilar la configuración para que el diagnóstico refleje
             // el instante más cercano posible a la solicitud real de Steam.
@@ -725,6 +1551,7 @@ final class RegressionAppModel {
 
     func beginPhysicalLibraryCustodyValidation() async {
         guard let installations else { return }
+        guard await ensureSteamRuntimeReadyForLaunch() else { return }
         failure = nil
         libraryFailureDetail = nil
         await refreshRuntimeState()
@@ -774,23 +1601,23 @@ final class RegressionAppModel {
         failure = nil
         libraryFailureDetail = nil
         let alert = NSAlert()
-        alert.messageText = "¿Regression funciona correctamente?"
+        alert.messageText = "¿Ya verificaste una ejecución perfecta?"
         alert.informativeText =
-            "Confirma solo después de comprobar visualmente la tienda de Steam, la biblioteca "
-            + "instalada y gameplay real de un juego protegido. Si algo falla, Regression "
-            + "restaurará la ubicación anterior."
+            "Finaliza solo después de cerrar un juego ejecutado con Regression y marcar esa "
+            + "ejecución como Verificado perfecto: render, entrada, opciones y gameplay. "
+            + "Regression comprobará el registro exacto antes de aceptar la custodia."
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "Validación superada")
+        alert.addButton(withTitle: "Finalizar con ejecución perfecta")
         alert.addButton(withTitle: "Restaurar biblioteca")
         alert.addButton(withTitle: "Seguir comprobando")
         let response = alert.runModal()
         guard response != .alertThirdButtonReturn else { return }
-        let validationPassed = response == .alertFirstButtonReturn
+        let shouldFinalize = response == .alertFirstButtonReturn
 
         operation = .preparing(
-            validationPassed ? "Finalizando la independencia" : "Restaurando la biblioteca"
+            shouldFinalize ? "Verificando la ejecución perfecta" : "Restaurando la biblioteca"
         )
-        libraryIndependenceState = validationPassed ? .verifying : .rollingBack
+        libraryIndependenceState = shouldFinalize ? .verifying : .rollingBack
         statusDetail = "Cerrando Steam antes de confirmar la topología física…"
         do {
             if runningState.regressionIsRunning {
@@ -804,27 +1631,84 @@ final class RegressionAppModel {
             let identity = PhysicalLibraryCustodyIdentity(
                 legacySteamAppsURL: inheritedSteamAppsURL(for: installations)
             )
-            let assessment = try await sharedLibrary.finalizePhysicalCustody(
-                regression: installations.regression,
-                legacyIdentity: identity,
-                validationLease: lease,
-                validationPassed: validationPassed,
-                runningState: runningState
-            )
+            let assessment: PhysicalLibraryCustodyAssessment
+            if shouldFinalize {
+                statusDetail =
+                    "Buscando una ejecución perfecta, finalizada y posterior al traslado…"
+                let request = try await physicalLibraryCustodyValidationRequest()
+                assessment = try await sharedLibrary.finalizePhysicalCustodyValidated(
+                    regression: installations.regression,
+                    legacyIdentity: identity,
+                    request: request,
+                    repository: repository,
+                    runningState: runningState
+                )
+            } else {
+                assessment = try await sharedLibrary.rollbackPhysicalCustody(
+                    regression: installations.regression,
+                    legacyIdentity: identity,
+                    runningState: runningState
+                )
+            }
             physicalLibraryCustodyValidationLease = nil
             physicalLibraryCustodyAssessment = assessment
             applyPhysicalLibraryCustodyStatus(assessment.status)
             operation = .ready
-            statusDetail = validationPassed
+            statusDetail = shouldFinalize
                 ? "Regression es independiente y conserva la única instalación de los juegos."
                 : "La biblioteca anterior se restauró sin duplicar los juegos."
             await refreshGames()
         } catch {
             libraryIndependenceState = .validating
-            statusDetail =
-                "No se pudo finalizar la validación: \(error.localizedDescription)"
-            present(error)
+            if shouldFinalize, case .invalidEvidence = error as? RegressionCoreError {
+                presentComponentFailure(
+                    title: "Falta una ejecución perfecta",
+                    message:
+                        "La biblioteca no se finalizó. Ejecuta un juego con Regression, "
+                        + "comprueba render, entrada, opciones y gameplay, ciérralo y márcalo "
+                        + "como Verificado perfecto antes de volver a confirmar.",
+                    technicalDetail: error.localizedDescription,
+                    recovery: .refresh
+                )
+            } else {
+                statusDetail =
+                    "No se pudo finalizar la validación: \(error.localizedDescription)"
+                present(error)
+            }
         }
+    }
+
+    /// El modelo solo selecciona la identidad de un candidato perfecto. RegressionCore recarga
+    /// esa ejecución exacta desde SQLite y valida bajo el lock de custodia todos sus hechos,
+    /// incluida la frontera temporal durable, antes de finalizar el traslado.
+    private func physicalLibraryCustodyValidationRequest() async throws
+        -> PhysicalLibraryCustodyValidationRequest
+    {
+        try await repository.prepare()
+        let candidates = try await repository.recentRuns(limit: 1_000)
+        for run in candidates where run.backend == .regression {
+            guard run.endedAt != nil,
+                  run.result == .succeeded,
+                  run.processID != nil,
+                  let verification = run.verification,
+                  verification.runID == run.id,
+                  verification.verdict == .perfect,
+                  verification.rendering == .passed,
+                  verification.inputPrecision == .passed,
+                  verification.graphicsSettings == .passed,
+                  verification.gameplay == .passed,
+                  verification.source == .user || verification.source == .visualInspection else {
+                continue
+            }
+            return PhysicalLibraryCustodyValidationRequest(
+                appID: run.appID,
+                runID: run.id
+            )
+        }
+        throw RegressionCoreError.invalidEvidence(
+            "No existe una ejecución perfecta de Regression posterior al inicio de esta "
+                + "validación de custodia"
+        )
     }
 
     func rollbackPhysicalLibraryCustody() async {
@@ -1029,7 +1913,7 @@ final class RegressionAppModel {
             }
             let alert = NSAlert()
             alert.messageText = "¿Confirmar que \(run.gameName) funciona perfectamente?"
-            alert.informativeText = "Esto crea un blindado persistente para esta ejecución exacta de \(run.backend.displayName). Confirma solo después de comprobar visualmente render, precisión de entrada, opciones gráficas y gameplay. El blindado garantiza funcionamiento reproducible, no que sea todavía la opción de mayor rendimiento."
+            alert.informativeText = "Esto crea un blindado persistente para esta ejecución exacta de Regression. Confirma solo después de comprobar visualmente render, precisión de entrada, opciones gráficas y gameplay. El blindado garantiza funcionamiento reproducible, no que sea todavía la opción de mayor rendimiento."
             alert.alertStyle = .informational
             alert.addButton(withTitle: "Guardar como perfecto")
             alert.addButton(withTitle: "Cancelar")
@@ -1067,7 +1951,7 @@ final class RegressionAppModel {
             try await repository.verifyRun(verification)
             await refreshStoredData(includeHealth: true)
             statusDetail = verdict == .perfect
-                ? "\(run.gameName) quedó blindado de forma persistente con \(run.backend.displayName)."
+                ? "\(run.gameName) quedó blindado de forma persistente con Regression."
                 : "La verificación de \(run.gameName) quedó guardada localmente."
         } catch {
             present(error)
@@ -1079,28 +1963,10 @@ final class RegressionAppModel {
         UserDefaults.standard.set(enabled, forKey: "autoLaunchEnabled")
     }
 
-    func togglePublicCatalog(_ enabled: Bool) {
-        publicCatalogEnabled = enabled
-        UserDefaults.standard.set(enabled, forKey: "publicCatalogEnabled")
-        if enabled {
-            publicCatalogOperation = .idle
-            schedulePublicCatalogSync()
-        } else {
-            externalCatalogTask?.cancel()
-            externalCatalogTask = nil
-            externalCatalogSyncID = nil
-            publicCatalogOperation = .disabled
-        }
-    }
-
-    func refreshPublicCatalog() {
-        guard publicCatalogEnabled, externalCatalogTask == nil else { return }
-        schedulePublicCatalogSync(force: true)
-    }
-
     func shutdown() async {
         guard !shutdownIsComplete else { return }
-        logger.notice("Cancelando tareas de monitorización y catálogo")
+        shutdownWasRequested = true
+        logger.notice("Cancelando tareas de monitorización")
         cancelPhysicalLibraryCustodyAssessment()
         while physicalLibraryCustodyProgressTask != nil {
             statusDetail =
@@ -1111,15 +1977,21 @@ final class RegressionAppModel {
         monitoringTask = nil
         monitoring?.cancel()
 
-        let catalog = externalCatalogTask
-        externalCatalogTask = nil
-        externalCatalogSyncID = nil
-        catalog?.cancel()
-
         regressionUpdateTask?.cancel()
         regressionUpdateTask = nil
         automaticRegressionUpdateTask?.cancel()
         automaticRegressionUpdateTask = nil
+
+        // Las inspecciones y autorizaciones de Apple GPTK invocan procesos que protegen su
+        // propia transacción con lock y rollback. `ProcessRunner` no abandona el hijo al
+        // cancelar una Task; por eso el modelo conserva la tarea y espera su único punto seguro
+        // antes de permitir que AppKit cierre. Así ni 3.0 ni 4.0b2 pueden seguir mutando tras el
+        // cierre de la app, y una hoja SwiftUI nunca es dueña de la operación crítica.
+        if let appleGPTKCriticalTask {
+            statusDetail = "Terminando el punto seguro de Apple GPTK antes de cerrar Regression…"
+            await appleGPTKCriticalTask.value
+            self.appleGPTKCriticalTask = nil
+        }
 
         // No esperar indefinidamente a tareas de red ya canceladas. Las operaciones SQLite
         // pendientes se serializan en el actor del repositorio antes del cierre; al terminar
@@ -1137,10 +2009,6 @@ final class RegressionAppModel {
             )
         }
         shutdownIsComplete = true
-    }
-
-    func openPublicCatalog() {
-        NSWorkspace.shared.open(CodeWeaversCompatibilityProvider.codeWeaversSource.baseURL)
     }
 
     func refreshRegressionReleaseStatus() {
@@ -1226,13 +2094,64 @@ final class RegressionAppModel {
         }
     }
 
-    func openExternalCompatibility(for game: SteamGame) {
-        if let url = externalURL(for: game) {
-            NSWorkspace.shared.open(url)
-        } else {
-            NSWorkspace.shared.open(
-                CodeWeaversCompatibilityProvider.publicSearchURL(for: game.name)
-                    ?? CodeWeaversCompatibilityProvider.codeWeaversSource.baseURL
+    /// Reinstala incluso la release vigente a través del mismo canal oficial, digest y rollback
+    /// del actualizador. Conserva la botella, la biblioteca y el GPTK autorizado.
+    func repairRegressionInstallation() async {
+        guard isCanonicalApplicationInstallation else {
+            openOfficialRegressionRelease()
+            return
+        }
+        guard !libraryIndependenceState.blocksNormalOperations,
+              !operation.isBusy,
+              runningState.activeBackend == nil else {
+            presentComponentFailure(
+                title: "Regression no se puede reparar todavía",
+                message: "Cierra Steam y termina cualquier operación crítica antes de reparar.",
+                recovery: .refresh
+            )
+            return
+        }
+        operation = .preparing("Preparando la reparación")
+        statusDetail = "Buscando el instalador oficial verificado de esta release…"
+        do {
+            let installedVersion = trustedComponentContext().applicationVersion
+            let release = try await regressionReleaseService.latestRelease(
+                clientVersion: installedVersion
+            )
+            regressionReleaseStatus = .available(
+                installedVersion: installedVersion,
+                release: release
+            )
+            operation = .ready
+            let decision = await RegressionManualRepairPolicy.runIfAuthorized(
+                installedVersion: installedVersion,
+                releaseVersion: release.version
+            ) { [weak self] in
+                await self?.installAvailableRegressionUpdate()
+            }
+            switch decision {
+            case .repairNow:
+                break
+            case .newerUpdateAvailable:
+                statusDetail =
+                    "Hay una versión posterior disponible. Confirma Actualizar para instalarla."
+            case .rejectDowngrade:
+                let message =
+                    "El canal estable ofrece una versión anterior a la instalada; la reparación se bloqueó para evitar un downgrade."
+                regressionReleaseStatus = .failed(message: message)
+                presentComponentFailure(
+                    title: "Regression no se puede reparar con una versión anterior",
+                    message: message,
+                    recovery: .refresh
+                )
+            }
+        } catch {
+            operation = .ready
+            regressionReleaseStatus = .failed(message: error.localizedDescription)
+            presentComponentFailure(
+                title: "No se pudo reparar Regression",
+                message: error.localizedDescription,
+                recovery: .refresh
             )
         }
     }
@@ -1247,7 +2166,7 @@ final class RegressionAppModel {
         let candidates = NSWorkspace.shared.runningApplications.filter { application in
             let name = application.localizedName?.lowercased() ?? ""
             let path = application.executableURL?.path.lowercased() ?? ""
-            return name.contains("steam") && (path.contains("crossover") || path.contains("regression"))
+            return name.contains("steam") && path.contains("regression")
         }
         .sorted { left, right in
             let leftScore = steamActivationScore(left)
@@ -1265,7 +2184,68 @@ final class RegressionAppModel {
     func recover(_ recovery: UserFacingFailure.Recovery) async {
         switch recovery {
         case .refresh: await refreshAll()
+        case .repairRegression: await repairRegressionInstallation()
+        case .prepareAppleGPTK:
+            switch appleGPTKState {
+            case .requiresDownload:
+                openOfficialAppleGPTKDownload()
+            case .requiresSelection, .failed:
+                beginSelectAndInspectAppleGPTKDMG()
+            case .requiresLicense:
+                presentAppleGPTKLicenseReview()
+            case .ready, .verifying, .installing, .unsupported:
+                await refreshAppleGPTKStatus()
+            }
+        case .reviewProtectedAppleGPTK:
+            beginInspectExistingProtectedAppleGPTK()
+        case .reinstallRegression: openOfficialRegressionRelease()
         }
+    }
+
+    private func ensureAppleGPTKReadyForLaunch(appID: String) async -> Bool {
+        guard let requiredVersion = GameRuntimeProfileCatalog.requiredAppleGPTKVersion(
+            for: appID,
+            backend: selectedBackend
+        ) else { return true }
+
+        if requiredVersion == .version3 {
+            if protectedAppleGPTKHealth == nil {
+                await refreshComponentHealth()
+            }
+            guard protectedAppleGPTKHealth?.status == .ready else {
+                presentComponentFailure(
+                    title: "Este juego necesita Apple GPTK 3.0",
+                    message: "Regression no inició el juego porque falta su generación D3DMetal exacta. Apple GPTK 4.0b2 no es intercambiable con el perfil blindado.",
+                    technicalDetail: "El payload protegido 3.0 no supera su catálogo compilado de archivos y enlaces.",
+                    recovery: .reviewProtectedAppleGPTK
+                )
+                return false
+            }
+
+            await refreshProtectedAppleGPTKAuthorizationStatus()
+            guard protectedAppleGPTKAuthorizationState == .ready else {
+                presentComponentFailure(
+                    title: "Apple GPTK 3.0 necesita autorización",
+                    message: "Los bytes coinciden, pero Regression no ejecutará este componente de Apple sin un recibo local verificable de licencia.",
+                    technicalDetail: "Revisa la licencia exacta del componente protegido antes de autorizarlo.",
+                    recovery: .reviewProtectedAppleGPTK
+                )
+                return false
+            }
+            return true
+        }
+
+        if appleGPTKState == .ready { return true }
+        await refreshAppleGPTKStatus()
+        guard appleGPTKState == .ready else {
+            presentComponentFailure(
+                title: "Este juego necesita Apple GPTK",
+                message: "Regression no inició el juego porque su perfil D3DMetal aún no está preparado. La app te guiará por la descarga oficial y la licencia de Apple.",
+                recovery: .prepareAppleGPTK
+            )
+            return false
+        }
+        return true
     }
 
     private func confirmSteamLaunch(_ launch: BackendLaunch) async throws {
@@ -1295,7 +2275,6 @@ final class RegressionAppModel {
             let previousAppIDs = Set(games.map(\.appID))
             await refreshGames()
             if Set(games.map(\.appID)) != previousAppIDs {
-                schedulePublicCatalogSync()
             }
         }
         if telemetryChanged || periodicRefreshCount.isMultiple(of: 15) {
@@ -1311,7 +2290,11 @@ final class RegressionAppModel {
         if runningState.hasConflict {
             present(RegressionCoreError.backendConflict)
         } else if let active = runningState.activeBackend {
-            if !operation.isBusy { operation = .running(active) }
+            if active == .regression {
+                if !operation.isBusy { operation = .running(.regression) }
+            } else if !operation.isBusy {
+                presentExternalSteamConflict()
+            }
         } else if case .running = operation {
             operation = .ready
             statusDetail = "Steam se ha cerrado. Regression permanece disponible en la barra de menús."
@@ -1340,10 +2323,79 @@ final class RegressionAppModel {
         }
         do {
             try await repository.reconcileDiscoveredGames(games)
+            await refreshGameTechnologyEvidence(
+                games: games,
+                steamRootURL: snapshot.regression.steamRootURL
+            )
         } catch {
             logger.error(
                 "No se pudieron reconciliar los nombres públicos: \(error.localizedDescription, privacy: .public)"
             )
+        }
+    }
+
+    /// Inventaría solo marcadores conocidos dentro de cada instalación y persiste requisitos
+    /// declarativos. Un hallazgo nunca ejecuta el redistribuible incluido por un juego.
+    private func refreshGameTechnologyEvidence(
+        games: [SteamGame],
+        steamRootURL: URL
+    ) async {
+        let commonURL = steamRootURL
+            .appendingPathComponent("steamapps/common", isDirectory: true)
+            .standardizedFileURL
+        let discovered = await Task.detached(priority: .utility) {
+            games.map { game -> (String, Date, Result<[GameRuntimeRequirement], Error>) in
+                let attemptedAt = Date()
+                do {
+                    let directory = game.installDirectory
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !directory.isEmpty,
+                          directory != ".", directory != "..",
+                          !directory.contains("/"), !directory.contains("\\"),
+                          !directory.unicodeScalars.contains(where: { $0.value == 0 }) else {
+                        throw RegressionCoreError.invalidEvidence(
+                            "el directorio de instalación del juego no es seguro"
+                        )
+                    }
+                    let gameURL = commonURL.appendingPathComponent(
+                        directory,
+                        isDirectory: true
+                    )
+                    let report = try GameTechnologyEvidenceScanner.scan(gameRootURL: gameURL)
+                    return (
+                        game.appID,
+                        attemptedAt,
+                        .success(try report.requirements(
+                            forAppID: game.appID,
+                            observedAt: attemptedAt
+                        ))
+                    )
+                } catch {
+                    return (game.appID, attemptedAt, .failure(error))
+                }
+            }
+        }.value
+        for (appID, attemptedAt, result) in discovered {
+            do {
+                switch result {
+                case .success(let requirements):
+                    try await repository.recordSuccessfulGameTechnologyScan(
+                        appID: appID,
+                        requirements: requirements,
+                        scannedAt: attemptedAt
+                    )
+                case .failure(let error):
+                    try await repository.recordFailedGameTechnologyScan(
+                        appID: appID,
+                        error: error.localizedDescription,
+                        attemptedAt: attemptedAt
+                    )
+                }
+            } catch {
+                logger.error(
+                    "No se pudo reconciliar la evidencia automática de \(appID, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                )
+            }
         }
     }
 
@@ -1416,25 +2468,23 @@ final class RegressionAppModel {
             )
             let refreshedActiveResearchExperimentCount = try await repository
                 .researchExperimentCount(activeOnly: true)
-            let refreshedExternalEntries = try await repository.externalEntries(
-                sourceID: CodeWeaversCompatibilityProvider.codeWeaversSource.id
-            )
-            let refreshedComparisons = try await repository.compatibilityComparisons()
             let refreshedHealth = includeHealth ? try await repository.databaseHealth() : nil
-            recentRuns = refreshedRuns
-            profiles = refreshedProfiles
+            recentRuns = refreshedRuns.filter { $0.backend == .regression }
+            profiles = refreshedProfiles.filter { $0.backend == .regression }
             engineProfiles = refreshedEngines
-            certifications = refreshedCertifications
+            certifications = refreshedCertifications.filter { $0.backend == .regression }
             runtimeTechnologies = refreshedTechnologies
             activeRuntimeCandidateCount = refreshedActiveCandidateCount
             activeResearchCaseCount = refreshedActiveResearchCaseCount
             activeResearchExperimentCount = refreshedActiveResearchExperimentCount
-            profilesByAppID = Dictionary(grouping: refreshedProfiles, by: \.appID)
-            certificationsByAppID = Dictionary(grouping: refreshedCertifications, by: \.appID)
-            externalCatalogEntries = Dictionary(
-                uniqueKeysWithValues: refreshedExternalEntries.map { ($0.appID, $0) }
+            profilesByAppID = Dictionary(
+                grouping: refreshedProfiles.filter { $0.backend == .regression },
+                by: \.appID
             )
-            compatibilityComparisons = refreshedComparisons
+            certificationsByAppID = Dictionary(
+                grouping: refreshedCertifications.filter { $0.backend == .regression },
+                by: \.appID
+            )
             if let refreshedHealth { databaseHealth = refreshedHealth }
         } catch {
             // Una lectura transitoria no debe borrar en pantalla el último estado válido.
@@ -1442,75 +2492,6 @@ final class RegressionAppModel {
                 "No se pudieron actualizar los datos locales: \(error.localizedDescription, privacy: .public)"
             )
         }
-    }
-
-    private func schedulePublicCatalogSync(force: Bool = false) {
-        guard publicCatalogEnabled, externalCatalogTask == nil, !games.isEmpty else {
-            if !publicCatalogEnabled { publicCatalogOperation = .disabled }
-            return
-        }
-        let gamesToSync = games
-        let syncID = UUID()
-        externalCatalogSyncID = syncID
-        externalCatalogTask = Task { [weak self] in
-            guard let self else { return }
-            await self.runPublicCatalogSync(games: gamesToSync, force: force, syncID: syncID)
-        }
-    }
-
-    private func runPublicCatalogSync(games: [SteamGame], force: Bool, syncID: UUID) async {
-        var failures = 0
-        var lastSuccess: Date?
-        for (offset, game) in games.enumerated() {
-            guard !Task.isCancelled else { break }
-            publicCatalogOperation = .syncing(
-                current: offset + 1,
-                total: games.count,
-                gameName: game.name
-            )
-            switch await externalCatalog.refresh(game: game, force: force) {
-            case .freshCache:
-                break
-            case .updated:
-                lastSuccess = Date()
-            case .noMatch:
-                break
-            case .failed:
-                // Si la fuente no responde, insistir con el resto de la biblioteca solo
-                // alargaría la espera y consumiría peticiones sin aportar información.
-                failures += games.count - offset
-                finishPublicCatalogSync(
-                    syncID: syncID,
-                    failures: failures,
-                    lastSuccess: lastSuccess
-                )
-                return
-            case .cancelled:
-                finishPublicCatalogSync(syncID: syncID, failures: failures, lastSuccess: lastSuccess)
-                return
-            }
-            await refreshStoredData()
-        }
-        finishPublicCatalogSync(syncID: syncID, failures: failures, lastSuccess: lastSuccess)
-    }
-
-    private func finishPublicCatalogSync(
-        syncID: UUID,
-        failures: Int,
-        lastSuccess: Date?
-    ) {
-        // Una tarea cancelada no puede borrar ni reemplazar el estado de una
-        // sincronización nueva que el usuario haya iniciado inmediatamente después.
-        guard externalCatalogSyncID == syncID else { return }
-        externalCatalogTask = nil
-        externalCatalogSyncID = nil
-        guard publicCatalogEnabled else {
-            publicCatalogOperation = .disabled
-            return
-        }
-        publicCatalogOperation = failures > 0
-            ? .completedWithIssues(failures)
-            : .upToDate(lastSuccess)
     }
 
     private func refreshSharedLibraryAssessment() async {
@@ -1682,19 +2663,16 @@ final class RegressionAppModel {
         installations: InstallationSnapshot,
         backend: BackendKind
     ) throws -> (bottleURL: URL, bottleName: String, providerVersion: String) {
-        switch backend {
-        case .crossOver:
-            guard let crossOver = installations.crossOver else {
-                throw RegressionCoreError.crossOverNotInstalled
-            }
-            return (crossOver.bottleURL, crossOver.bottleName, crossOver.version)
-        case .regression:
-            return (
-                installations.regression.bottleURL,
-                "Steam",
-                Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
+        guard backend == .regression else {
+            throw RegressionCoreError.launchFailed(
+                "Regression solo permite iniciar juegos con su motor propio"
             )
         }
+        return (
+            installations.regression.bottleURL,
+            "Steam",
+            Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
+        )
     }
 
     private func gameLaunchCommand(
@@ -1705,31 +2683,16 @@ final class RegressionAppModel {
         guard let normalizedAppID = SteamAppID.normalized(appID) else {
             throw RegressionCoreError.launchFailed("El Steam App ID no es válido")
         }
-        let arguments = ["-applaunch", normalizedAppID]
-        switch backend {
-        case .crossOver:
-            guard let crossOver = installations.crossOver else {
-                throw RegressionCoreError.crossOverNotInstalled
-            }
-            return BackendCommandFactory.crossOver(
-                installation: crossOver,
-                steamArguments: arguments
-            )
-        case .regression:
-            return BackendCommandFactory.regression(
-                installation: installations.regression,
-                steamArguments: arguments
+        guard backend == .regression else {
+            throw RegressionCoreError.launchFailed(
+                "Regression solo permite iniciar juegos con su motor propio"
             )
         }
-    }
-
-    private func configurationOverrides(
-        installations: InstallationSnapshot,
-        backend: BackendKind
-    ) -> [String: String] {
-        guard backend == .crossOver,
-              let value = installations.crossOver?.defaultGraphicsBackend else { return [:] }
-        return ["graphics.crossover.default_probe": value]
+        let arguments = ["-applaunch", normalizedAppID]
+        return BackendCommandFactory.regression(
+            installation: installations.regression,
+            steamArguments: arguments
+        )
     }
 
     private func steamActivationScore(_ application: NSRunningApplication) -> Int {
@@ -1739,11 +2702,7 @@ final class RegressionAppModel {
         if name == "steam" || name == "steam.exe" { score += 100 }
         if !name.contains("webhelper") && !name.contains("service") { score += 20 }
         if application.activationPolicy == .regular { score += 10 }
-        switch runningState.activeBackend {
-        case .crossOver where path.contains("crossover"): score += 5
-        case .regression where path.contains("regression"): score += 5
-        default: break
-        }
+        if runningState.activeBackend == .regression, path.contains("regression") { score += 5 }
         return score
     }
 
@@ -1764,6 +2723,75 @@ final class RegressionAppModel {
 
     private func presentLaunchError(_ error: Error) {
         present(error)
+    }
+
+    private struct TrustedComponentContext {
+        let applicationVersion: String
+        let buildIdentifier: String
+        let variant: ComponentArtifactVariant
+        let bundleURL: URL
+    }
+
+    private func trustedComponentContext() -> TrustedComponentContext {
+        let bundleURL = (installations?.regression.applicationURL ?? Bundle.main.bundleURL)
+            .standardizedFileURL
+        let applicationBundle = Bundle(url: bundleURL) ?? Bundle.main
+        let applicationVersion = applicationBundle.object(
+            forInfoDictionaryKey: "CFBundleShortVersionString"
+        ) as? String ?? "desconocida"
+        let buildIdentifier = applicationBundle.object(
+            forInfoDictionaryKey: "CFBundleVersion"
+        ) as? String ?? "desconocida"
+        let isTrustedPublicInstallation = bundleURL.path == "/Applications/Regression.app"
+            && applicationVersion == TrustedComponentCatalog.supportedApplicationVersion
+            && buildIdentifier == TrustedComponentCatalog.supportedBuildIdentifier
+        return TrustedComponentContext(
+            applicationVersion: applicationVersion,
+            buildIdentifier: buildIdentifier,
+            variant: isTrustedPublicInstallation ? .publicInstalled : .development,
+            bundleURL: bundleURL
+        )
+    }
+
+    private func ensureSteamRuntimeReadyForLaunch() async -> Bool {
+        if steamRuntimePrerequisitesHealth == nil {
+            await refreshComponentHealth()
+        }
+        guard let report = steamRuntimePrerequisitesHealth,
+              report.status == .ready else {
+            let status = steamRuntimePrerequisitesHealth?.status.rawValue ?? "sin comprobar"
+            let issue = steamRuntimePrerequisitesHealth?.issue.map(String.init(describing:))
+                ?? "No existe un informe verificable."
+            presentComponentFailure(
+                title: "El runtime de juegos necesita atención",
+                message: "VC++/UCRT no supera la verificación de esta release. Steam y los juegos no se iniciaron.",
+                technicalDetail: "Estado: \(status). Diagnóstico: \(issue)",
+                recovery: .repairRegression
+            )
+            return false
+        }
+        return true
+    }
+
+    private func presentComponentFailure(
+        title: String,
+        message: String,
+        technicalDetail: String? = nil,
+        recovery: UserFacingFailure.Recovery
+    ) {
+        failure = UserFacingFailure(title: title, message: message, recovery: recovery)
+        operation = .error
+        statusDetail = technicalDetail ?? message
+    }
+
+    private func presentExternalSteamConflict() {
+        failure = UserFacingFailure(
+            title: "Otro Steam de Windows está abierto",
+            message: "Ciérralo desde la aplicación que lo inició antes de abrir el Steam propio de Regression.",
+            recovery: .refresh
+        )
+        operation = .error
+        statusDetail = "Regression no controlará ni cerrará clientes de Steam externos."
     }
 
     private func present(_ error: Error) {

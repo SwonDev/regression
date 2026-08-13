@@ -3,6 +3,49 @@ import Foundation
 import XCTest
 
 final class GameTestPreflightTests: XCTestCase {
+    func testCrossOverPreflightFailsClosedEvenWhenItsInstallationLooksReady() async throws {
+        let fixture = try PreflightFixture()
+        defer { fixture.cleanup() }
+        let crossOverRoot = fixture.root.appendingPathComponent("CrossOver", isDirectory: true)
+        let crossOver = CrossOverInstallation(
+            applicationURL: fixture.root.appendingPathComponent("CrossOver.app", isDirectory: true),
+            version: "26.3",
+            build: "39832",
+            bottleName: "Steam",
+            bottleURL: crossOverRoot,
+            steamExecutableURL: crossOverRoot.appendingPathComponent("Steam.exe"),
+            wineCLIURL: crossOverRoot.appendingPathComponent("wine"),
+            bottleCLIURL: crossOverRoot.appendingPathComponent("cxbottle"),
+            feedURL: nil,
+            health: .ready,
+            healthDetail: "La instalación externa parece lista"
+        )
+        let installations = InstallationSnapshot(
+            crossOver: crossOver,
+            regression: fixture.installations.regression
+        )
+
+        let report = await GameTestPreflight(
+            runner: PreflightProcessRunner(output: ""),
+            applicationSupportURL: fixture.applicationSupportURL
+        ).evaluate(
+            backend: .crossOver,
+            installations: installations,
+            runningState: RunningBackendState(),
+            databaseHealth: healthyDatabase(),
+            sharedLibraryAssessment: nil
+        )
+
+        let availability = try XCTUnwrap(
+            report.checks.first { $0.checkID == .backendAvailability }
+        )
+        XCTAssertEqual(availability.status, .blocked)
+        XCTAssertEqual(availability.title, "Backend no operativo")
+        XCTAssertFalse(availability.detail.contains(crossOver.bottleName))
+        XCTAssertTrue(availability.recoveryAction?.contains("Regression") == true)
+        XCTAssertEqual(report.status, .blocked)
+    }
+
     func testIndependentCustodyIsReadyWithoutCrossOver() async throws {
         let fixture = try PreflightFixture()
         defer { fixture.cleanup() }

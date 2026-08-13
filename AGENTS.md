@@ -1,6 +1,6 @@
 # AGENTS.md — Reglas del proyecto Regression
 
-Lee `README.md` primero (arquitectura, build, estado, método de investigación de CrossOver).
+Lee `README.md` primero (arquitectura, build, estado y método de investigación FOSS de Regression).
 Este archivo es la fuente de verdad de reglas y protocolo (Codex lo lee nativamente).
 `CLAUDE.md` es su espejo adaptado para Claude Code — si difieren, manda este.
 
@@ -11,8 +11,8 @@ macOS. Regression es el único backend operativo, usa su propio runtime, su prop
 única carpeta física `steamapps`, ubicada dentro de esa botella. La app vive en la barra de menús,
 no en el Dock, y no requiere instalar, abrir, actualizar ni licenciar CrossOver.
 
-CrossOver se conserva exclusivamente como referencia histórica de investigación y como procedencia
-de observaciones antiguas. No es un selector, una ruta de ejecución ni un propietario alternativo
+Las menciones a CrossOver se conservan exclusivamente como historia y procedencia de observaciones
+antiguas. No es un selector, una ruta de ejecución, una fuente de red ni un propietario alternativo
 de juegos. La migración de custodia mueve la carpeta física sin copiar sus aproximadamente 110 GB,
 deja ausente el antiguo `steamapps` de CrossOver y no mantiene enlaces compartidos. La base local de
 aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
@@ -25,17 +25,15 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
    no es un arreglo: se revierte al instante y se repiensa. No se negocia ni "de momento".
    Lo que decide es la matriz de validación (ver Protocolo), no las intenciones. Si al
    validar algo que antes funcionaba falla → revertir primero, preguntar después.
-2. **CrossOver es una referencia de investigación, nunca una dependencia.** Si en
-   CrossOver funciona y en Regression no, la respuesta está en su stack: versiones exactas
-   de cada componente, convenciones de build (prefix horneado en la app), wiring de DLLs
-   (qué va en system32, qué va en lib, qué es builtin y qué es native), configuración de
-   botella y crossties. Se estudia y se replica ESO antes de inventar nada. La paridad se
-   consigue igualando, no improvisando. Ir juego por juego sin este método está prohibido.
+2. **El baseline de Regression y las fuentes FOSS mandan.** Si un juego falla, se compara contra
+   el último perfil propio blindado y las versiones exactas, convenciones de build, wiring de DLLs,
+   configuración y fuentes oficiales del runtime. No se consulta ni ejecuta otro producto para
+   diagnosticar. La paridad se demuestra dentro de Regression, no se presupone.
 3. **Autonomía operativa estricta.** CrossOver no se invoca desde la aplicación ni desde el CLI,
    no comparte botella, biblioteca o credenciales y no puede ser necesario para lanzar o reparar.
-   No se copian DLLs, dylibs ni binarios propietarios desde CrossOver. Sus observaciones históricas
-   se trasladan al motor propio únicamente mediante fuentes públicas o reimplementación legal,
-   nunca copiando `cxcompatdb` ni forks privados.
+   No se copian DLLs, dylibs ni binarios propietarios. Las observaciones históricas solo explican
+   expedientes antiguos; cualquier implementación actual procede de fuentes FOSS oficiales o de
+   recursos Apple localmente autorizados.
 4. **Legalidad limpia.** Solo fuentes open-source oficiales (Wine/DXMT/DXVK/MoltenVK LGPL,
    Apache, zlib…). Nada de descompilar ni extraer código de binarios propietarios (GUI de
    CrossOver, sistema de licencias, forks privados de DXMT/SPIRV-Cross). Los binarios de
@@ -45,10 +43,10 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
 5. **I+D sin techo, promoción aislada y con evidencia.** Los PIN protegen el motor estable;
    no son un límite para investigar un juego que aún falle. En un perfil experimental aislado
    se puede usar Rosetta, otra versión —también más reciente— de Wine, otro toolchain o cualquier
-   dependencia abierta necesaria. CrossOver sigue siendo la referencia primaria para elegir y
-   medir cada cambio. El candidato solo se blinda cuando funcionan render, entrada, opciones
+   dependencia abierta necesaria. El baseline propio y la evidencia reproducible sirven para elegir
+   y medir cada cambio. El candidato solo se blinda cuando funcionan render, entrada, opciones
    persistentes y gameplay, y nunca puede modificar otro perfil verificado ni introducir una
-   dependencia de CrossOver en el motor propio. Un cambio global exige además su matriz completa.
+   dependencia propietaria en el motor propio. Un cambio global exige además su matriz completa.
 
 ### Reglas técnicas duras (errores que YA se han cometido y NO se repiten)
 
@@ -101,18 +99,17 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
     Un exit code 0 jamás crea este estado por sí solo. La confirmación modal del veredicto
     perfecto es una salvaguarda deliberada y no se elimina. Tampoco puede certificarse un run que
     siga en `preparing` o no tenga PID: cualquier marca heredada así se anula, no se promociona.
-15. **Una referencia pública nunca es una certificación local.** CodeWeavers aporta contexto
-    externo mediante páginas públicas y metadatos normalizados. No se copia su base propietaria,
-    no se aplica configuración y un 5/5 jamás crea `Verificado perfecto`. Mantener fuente, caché,
-    cadencia y vínculo separados por App ID; ver `docs/compatibility-platform.md`.
+15. **Los datos externos heredados no tienen autoridad.** Las filas `external_*` antiguas se
+    conservan solo para interpretar historia; no se sincronizan, no se muestran como recomendación
+    y nunca seleccionan motor, reparación, lanzamiento o certificación. Ver
+    `docs/compatibility-platform.md`.
 16. **No atribuir un Steam Wine solo por el texto de `ps`.** Tras desacoplarse, macOS suele
     mostrar únicamente `C:\...\Steam.exe`, sin ruta del runtime ni padre útil. El inspector debe
     excluir `steamwebhelper.exe` y resolver el backend mediante los ficheros abiertos del cliente
     real (`lsof`). Un wineserver vivo por sí solo no demuestra que Steam esté activo.
-17. **La terminación nativa no espera indefinidamente a la red.** Cancelar monitorización y
-    catálogo, serializar reconciliación/cierre SQLite y responder entonces a AppKit. Esperar el
-    `.value` de una tarea URLSession cancelada dejó una instancia `LSUIElement` imposible de
-    relanzar; el cierre limpio instalado debe probarse después de tocar este flujo.
+17. **La terminación nativa serializa el estado local.** Cancelar monitorización, reconciliar y
+    cerrar SQLite antes de responder a AppKit. La aplicación no espera ni finaliza peticiones a
+    CodeWeavers. El cierre limpio instalado debe probarse después de tocar este flujo.
 18. **Perfecto funcional no significa rendimiento óptimo.** Un blindado conserva su ejecución,
     configuración y motor exactos aunque exista una versión más nueva. Las alternativas modernas
     entran como candidatos por juego: fuente y huella verificadas, aislamiento, rollback, matriz
@@ -140,9 +137,9 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
 22. **DD2 distingue resolución lógica de backing Retina.** El perfil estable usa 1512×945 en
     ventana sin bordes y presenta 3024×1890 físicos. No fijar 3024×1890 como resolución interna:
     esa variante desbordó la ventana, mostró el cursor de macOS y desplazó el click. El letterbox
-    16:9 de la receta estable también aparece en CrossOver y se conserva como incidencia conocida.
+    16:9 ya estaba documentado en comparaciones históricas y se conserva como incidencia conocida.
 23. **Todo I+D abre y mantiene un expediente reproducible.** Antes del primer cambio registrar
-    síntoma, referencia CrossOver e hipótesis falsables; cada experimento cambia una sola
+    síntoma, baseline Regression e hipótesis falsables; cada experimento cambia una sola
     dimensión, está aislado y tiene rollback. No se cierra por cansancio ni por número de
     intentos: solo con las puertas/evidencias de `docs/compatibility-research.md` y un run perfecto
     exacto de Regression, o se pausa por una dependencia externa concreta y reanudable. Los
@@ -159,12 +156,10 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
     perfil sin neutralizar el load-order global mezcló D3DMetal con la `dxgi` de DXMT y congeló
     Unreal en el logo. No mover este conjunto al registro ni al entorno global; ver
     `docs/games/dragonsword-awakening.md`.
-26. **Una limitación visual compartida con CrossOver no se atribuye al motor ni se maquilla como
-    perfecta.** Si ambos backends producen la misma superficie y el juego no ofrece el modo de
-    pantalla necesario, conservar el baseline funcional como `Funciona con incidencias`, con
-    captura y configuración A/B. No forzar resoluciones ni relaciones de aspecto en el estado
-    bueno: cualquier mejora entra como candidato aislado. Rotwood fija 1512×870 dentro de
-    1512×982 en ambos backends; ver `docs/games/rotwood.md`.
+26. **Una limitación visual reproducida en el baseline propio no se maquilla como perfecta.** Si el
+    juego no ofrece el modo de pantalla necesario, conservar `Funciona con incidencias`, captura y
+    configuración comparables. No forzar resoluciones en el estado bueno. Rotwood fija 1512×870
+    dentro de 1512×982; su expediente conserva comparaciones de terceros solo como historia.
 27. **Hell Clock está blindado sobre el baseline general, sin perfil especial.** El run
     `2F2DE49D-DE01-4A7F-B2D2-39195EA5D68B` pasó render, gameplay real, cursor Retina, pausa,
     opciones, persistencia, restauración y cierre. Su huella de motor es `033fd4eb…` y la de
@@ -325,7 +320,7 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
     todos los PID Windows del run hayan terminado, `GameSessionArtifactCleaner` puede enviar
     `TERM` únicamente a `gameoverlayui64.exe` o `steamerrorreporter*.exe` que coincidan a la vez
     con `-gameid`, un PID Windows finalizado y un `lsof` del runtime de Regression. Nunca termina
-    Steam, steamwebhelper, wineserver, otro juego ni el backend comparador. El preflight sigue
+    Steam, steamwebhelper, wineserver, otro juego ni otro runtime. El preflight sigue
     siendo de solo lectura.
 42. **Borderlands 4 combina D3D12 externo y una traducción ABI estricta.** El App ID `1285190`
     selecciona GPTK 4.0b2 únicamente para el basename `Borderlands4.exe`. Su helper Unix ejecuta
@@ -383,9 +378,9 @@ varias cosas a la vez o de tocar el estado bueno para "probar"**. Sigue este pro
   se rompe (o se arregla), no sabes cuál fue — y en este proyecto eso ya ha costado días.
 - **Nunca experimentes sobre el estado bueno.** Experimentos en copia de la botella o con dlls
   respaldadas. Solo se aplica al estado bueno tras validar.
-- **Método de referencia: A/B contra CrossOver** (README §3-4). Antes de inventar una solución,
-  mira qué hace CrossOver 26.3.0 (fuentes en `sources-26.3.0/`, botella real, crossties) y
-  replica eso. La paridad se consigue igualando el stack exacto, no improvisando por juego.
+- **Método de referencia: baseline/candidato dentro de Regression** (README §3-4). Contrasta el
+  runtime protegido con fuentes FOSS oficiales y cambia una sola dimensión en un perfil aislado.
+  Ningún experimento requiere instalar, abrir, consultar o inspeccionar CrossOver.
 
 ### 3. Después de cambiar algo: matriz de validación
 
@@ -461,9 +456,9 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
 - **Arquitectura operativa actual**: app nativa `LSUIElement` en barra de menús, Regression como
   único backend, una botella propia y una sola biblioteca física de juegos dentro de ella. La
   transferencia desde la ubicación heredada usa un WAL durable, renombres exclusivos, validación
-  funcional y rollback antes de finalizar; no copia juegos ni deja enlaces en CrossOver. El lanzador propio está en
+  funcional y rollback antes de finalizar; no copia juegos ni deja enlaces heredados. El lanzador propio está en
   `Regression.app/Contents/MacOS/regression-engine`.
-- **Aprendizaje local**: SQLite v12 normalizada en
+- **Aprendizaje local**: SQLite v14 normalizada en
   `~/Library/Application Support/Regression/Compatibility/compatibility.sqlite`; registra
   sistema, comandos saneados, componentes, backend gráfico, configuración de juego y deltas.
   La identidad de motor excluye `gameconfig.*`, de modo que una resolución distinta no crea un
@@ -483,14 +478,13 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   latencia explícitas para no falsificar una observación posterior como previa.
 - **Evolución tecnológica**: el inventario local registra baseline, última versión oficial
   revisada, licencia/distribución y política de Wine, GPTK/D3DMetal, DXMT, DXVK, MoltenVK,
-  vkd3d, Rosetta y CrossOver. Las tablas de candidatos, métricas, requisitos y recibos no aplican
+  vkd3d y Rosetta. Las tablas de candidatos, métricas, requisitos y recibos no aplican
   cambios. Un trigger bloquea promociones sin perfil por juego, fuente/huella, aislamiento,
   rollback, matriz y comparación equivalente contra el baseline con mejora medible. Apple limita
   Rosetta general después de macOS 27, por
   lo que arm64/WoW64 es una línea prioritaria paralela, nunca una sustitución a ciegas.
-- **Referencia pública**: CodeWeavers Compatibility Database se consulta opcionalmente con sesión
-  efímera, coincidencia exacta, caché, ETag y cadencia persistente. Solo se almacenan metadatos
-  públicos normalizados y su comparación nunca modifica el veredicto local.
+- **Referencias externas retiradas**: las filas históricas se conservan para auditoría, pero la app
+  y el CLI no consultan CodeWeavers, no sincronizan su catálogo y no exponen un backend comparador.
 - OK total con el wine de prefijo propio: **Steam completo, Moonlighter 2 (Unity IL2CPP),
   Palworld (personaje), Grim Dawn, Romestead**, DXVK D3D9. Estado blindado intacto.
 - **PIN: Grim Dawn = D3DMetal completo y aislado por ejecutable.** El perfil anterior mezclaba
@@ -508,7 +502,7 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   proceso, 1512×945 lógicos en ventana sin bordes y backing físico de 3024×1890. El run
   `257CEEDB-8EE7-4D4E-AF6B-589741406C1F` fue confirmado por el usuario con render, rendimiento,
   click, gameplay y opciones estables. Queda como `Funciona con incidencias`, no como perfecto,
-  porque conserva letterbox 16:9; CrossOver presenta la misma franja. No promover 3024×1890
+  porque conserva letterbox 16:9; la comparación histórica registró la misma franja. No promover 3024×1890
   internos: esa variante desborda y desplaza el click. Perfil, instalador y rollback están
   protegidos; ver `docs/games/dragons-dogma-2.md`.
 - **DragonSword : Awakening (perfil perfecto promocionado)**: el run
@@ -521,7 +515,7 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
 - **Rotwood (baseline funcional con incidencia visual)**: el run
   `E9316F8E-A6C3-4DE2-A075-6884A923AE4D` completó gameplay, entrada, pausa, opciones y cierre con
   guardado. El usuario confirmó funcionamiento excelente. Las bandas negras superior e inferior
-  también aparecen en CrossOver 26.3 porque el juego fija una superficie 1512×870 dentro de la
+  también constan en la comparación histórica porque el juego fija una superficie 1512×870 dentro de la
   pantalla 1512×982. La base muestra `Funciona con incidencias`; no se creó un perfil innecesario
   ni una certificación perfecta. Evidencia y rollback:
   `docs/games/rotwood.md` y `backups/rotwood-baseline-20260729-111437/`.
@@ -531,8 +525,8 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   restauró el valor inicial y cerró limpiamente. La huella final de configuración coincidió con
   la inicial. La app instalada mostró `Verificado perfecto: Regression`; evidencia y rollback:
   `docs/games/hell-clock.md` y `backups/hell-clock-baseline-20260729-120152/`.
-- **Heroes of Hammerwatch II (OpenGL aislado perfecto)**: los baselines de Regression y
-  CrossOver fallaban de forma idéntica al crear BGFX OpenGL 3.2 (`0x2095`). El run
+- **Heroes of Hammerwatch II (OpenGL aislado perfecto)**: el expediente histórico registra que
+  los antiguos baselines fallaban de forma idéntica al crear BGFX OpenGL 3.2 (`0x2095`). El run
   `F8E4EA27-2E6B-439C-AC93-BD927035B5B5` activó el hook público CX 26.3 solo dentro de
   `HWR2.exe`, alcanzó menú y gameplay real, mantuvo entrada y opciones y cerró con `exit=0`.
   Steam siguió renderizando y Grim Dawn superó la matriz de foco y cambio de ventanas. Perfil,
@@ -550,7 +544,7 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   evidencia y rollback: `docs/games/secrets-of-grindea.md` y
   `backups/secrets-of-grindea-baseline-20260802-0544/`.
 - **Fields of Mistria (baseline perfecto con winemac parcheado)**: la pantalla verde del
-  arranque (compartida con CrossOver) era la CGL surface clavada al backing 1×1 de la ventana
+  arranque —registrada también en la comparación histórica— era la CGL surface clavada al backing 1×1 de la ventana
   inicial; el parche propio `wine-26.3.0-winemac-gl-surface-resync` re-sincroniza el tamaño en
   el swap. El run `BAAC2B06-3CAD-467A-B1F1-834B76B794AD` cerró con exit=0 y el usuario registró
   el veredicto perfecto desde la app. Catálogo revisión `2026-08-08.1`; expediente y rollback:
@@ -564,7 +558,7 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   con ambos procesos en código `0`, fue confirmado perfecto por el usuario y fijó la huella
   `fb45e5ed…`. Perfil y componente permanecen aislados; expediente
   `docs/games/titan-quest-2.md` y rollback `backups/titan-quest-2-*`.
-- **FANTASY LIFE i (I+D EAC, no certificado)**: el host macOS estable y CrossOver fallan con
+- **FANTASY LIFE i (I+D EAC, no certificado)**: el expediente histórico registró fallos del host macOS y del antiguo comparador con
   código `206` al mapear el módulo Linux. En la VM Linux ARM aislada, Proton 11 x86-64 oficial
   sobre el candidato FEX FS/GS v3 superó el `210` tras autenticar manualmente el cliente oficial:
   EAC descargó el módulo, obtuvo HTTP `200`, inició el mapeo Wine 11 y devolvió `208 Cannot run
@@ -587,7 +581,7 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   Expediente y rollback:
   `docs/games/fantasy-life-i.md` y
   `/var/lib/regression-fli-arm-lab/official-valve/compatdata-fli-x86-fex-fsselector-v1-from-arm-prereqs-before-eac-launch.tar.zst`.
-- **PIN: DXMT = v0.72 + parche cross-process** (versión exacta de CrossOver). `main` rompe los
+- **PIN: DXMT = v0.72 + parche cross-process** (versión fijada desde fuentes FOSS). `main` rompe los
   skeletal meshes de Palworld — NO actualizar sin probar Palworld.
 - **PIN: wine compilado con `--prefix` apuntando a la app** (Regression.app/Contents/SharedSupport/wine-root).
   Con el prefix por defecto (/usr/local) los juegos Unity morían al iniciar y CEF tenía crashes.
@@ -595,7 +589,7 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   wine-root por la de wine rompe la carga de la dxgi de DXMT en system32 (los juegos D3D11
   mueren al instante). D3D12 necesita la dxgi de wine → conflicto documentado en README §8.
 - **Cube World**: el usuario confirmó render, encuadre, interacción y gameplay perfectos en el
-  motor propio blindado; ese dato figura como mejor perfil conocido. En la botella CrossOver
+  motor propio blindado; ese dato figura como mejor perfil conocido. El expediente histórico conserva que en la antigua botella comparadora
   reinstalada, las pruebas actuales base/DXVK/D3DMetal muestran pantalla negra y
   "Could not initialize Direct3D"; no confundirlas con el éxito histórico de Regression.
 - **FFT**: funcionamiento perfecto confirmado por el usuario en el motor propio tras aceptar el

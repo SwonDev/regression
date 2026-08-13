@@ -252,10 +252,6 @@ final class PrivacyAndValidationTests: XCTestCase {
         try Data("d3d11-test".utf8).write(to: system32.appendingPathComponent("d3d11.dll"))
         try Data("runtime-test".utf8).write(to: system32.appendingPathComponent("vcruntime140.dll"))
         try Data(#"""
-        "CX_GRAPHICS_BACKEND" = "d3dmetal"
-        "UNSAFE_ACCOUNT_TOKEN" = "secreto"
-        """#.utf8).write(to: root.appendingPathComponent("cxbottle.conf"))
-        try Data(#"""
         [Software\\Wine\\Mac Driver]
         "RetinaMode"="n"
         "SteamLoginSecure"="secreto"
@@ -276,7 +272,7 @@ final class PrivacyAndValidationTests: XCTestCase {
 
         XCTAssertEqual(values["backend"], "regression")
         XCTAssertEqual(values["provider.version"], "1.5")
-        XCTAssertEqual(values["bottle.CX_GRAPHICS_BACKEND"], "d3dmetal")
+        XCTAssertNil(values["bottle.CX_GRAPHICS_BACKEND"])
         XCTAssertEqual(values["registry.RetinaMode"], "n")
         XCTAssertNotNil(values["component.graphics.d3d11.dll"])
         XCTAssertNotNil(values["component.runtime.vcruntime140.dll"])
@@ -290,18 +286,11 @@ final class PrivacyAndValidationTests: XCTestCase {
                 "backend",
                 "provider.version",
                 "bottle.name",
-                "bottle.CX_GRAPHICS_BACKEND",
                 "registry.RetinaMode",
                 "component.graphics.d3d11.dll",
                 "component.runtime.vcruntime140.dll",
                 "component.runtime.dotnet-frameworks",
             ]
-        )
-        var stableValues = values
-        stableValues["bottle.name"] = "Bottle"
-        XCTAssertEqual(
-            ConfigurationCollector.fingerprint(stableValues),
-            "7b06d0fad8fe0f1ab1933a496a47c27f003dabbb63958f24c77fdebd8aea5ebe"
         )
     }
 

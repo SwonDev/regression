@@ -32,8 +32,14 @@ case "$MODE" in
         [[ -d "$APP" && ! -L "$APP" ]] \
             || fail "la release pública debe ser un bundle físico"
         ;;
+    --release-1.11.0)
+        EXPECTED_VERSION="1.11.0"
+        EXPECTED_BUILD="37"
+        [[ -d "$APP" && ! -L "$APP" ]] \
+            || fail "la release pública debe ser un bundle físico"
+        ;;
     *)
-        fail "uso: $0 --baseline-1.10.0 | --release-1.10.1"
+        fail "uso: $0 --baseline-1.10.0 | --release-1.10.1 | --release-1.11.0"
         ;;
 esac
 codesign --verify --deep --strict "$APP"
@@ -50,10 +56,17 @@ fi
 [[ "$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")" == "$EXPECTED_BUILD" ]] \
     || fail "build público no soportado"
 
-verify_hash ccd590e7e5d395757add0b561bf9fa76d54deb56c491706e28004259c0df913e \
-    "$APP/Contents/MacOS/regression-engine"
-verify_hash 25a02aedaf914ee997cabd82c538d1b139b55d342d9c9c27c149a443ab406b2b \
-    "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+if [[ "$MODE" == "--release-1.11.0" ]]; then
+    verify_hash 0aa2c39d5476d8b5767d9a1979af5ecaf96f36648cbe15d376a761aad06e7ca4 \
+        "$APP/Contents/MacOS/regression-engine"
+    verify_hash 8fb847f4f71ae120609c963fc588d3ea77b0887f173858c2d462e424a2d8fd8e \
+        "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+else
+    verify_hash ccd590e7e5d395757add0b561bf9fa76d54deb56c491706e28004259c0df913e \
+        "$APP/Contents/MacOS/regression-engine"
+    verify_hash 25a02aedaf914ee997cabd82c538d1b139b55d342d9c9c27c149a443ab406b2b \
+        "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+fi
 verify_hash da8ba98d99d157f981ef3a2472dc9d74c9ce4673ef126bdd61851b9dd21dedb3 \
     "$APP/Contents/SharedSupport/components/windows-media/1/manifest.sha256"
 (

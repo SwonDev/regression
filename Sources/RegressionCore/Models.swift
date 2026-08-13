@@ -13,19 +13,21 @@ public enum BackendKind: String, Codable, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// Una instalación nueva siempre arranca con el motor propio. Las preferencias explícitas
-    /// ya guardadas se respetan para no romper los laboratorios de comparación existentes.
+    /// Las preferencias antiguas se conservan en almacenamiento, pero ya no conceden autoridad
+    /// operativa: Regression es el único motor seleccionable.
     public static func launchSelection(storedRawValue: String?) -> BackendKind {
-        storedRawValue.flatMap(BackendKind.init(rawValue:)) ?? .regression
+        _ = storedRawValue
+        return .regression
     }
 
-    /// Una preferencia de laboratorio nunca convierte el comparador opcional en requisito.
-    /// Si ya no está disponible, la app vuelve al motor propio en vez de fallar al arrancar.
+    /// La disponibilidad histórica de CrossOver no altera la selección de producto.
     public static func availableSelection(
         preferred: BackendKind,
         crossOverAvailable: Bool
     ) -> BackendKind {
-        preferred == .crossOver && !crossOverAvailable ? .regression : preferred
+        _ = preferred
+        _ = crossOverAvailable
+        return .regression
     }
 }
 
@@ -363,6 +365,7 @@ public struct VerificationEvidence: Codable, Equatable, Sendable {
 }
 
 public enum VerificationSource: String, Codable, Sendable {
+    case automatic
     case user
     case visualInspection
     case imported
@@ -719,6 +722,9 @@ public struct CompatibilityDatabaseHealth: Codable, Equatable, Sendable {
     public let optimizationAssessmentCount: Int
     public let runtimeRequirementCount: Int
     public let repairReceiptCount: Int
+    /// Opcionales solo para poder decodificar exportaciones anteriores a SQLite v13.
+    public var repairAttemptCount: Int? = nil
+    public var legacyRepairActivationCount: Int? = nil
     public let researchCaseCount: Int
     public let researchHypothesisCount: Int
     public let researchExperimentCount: Int

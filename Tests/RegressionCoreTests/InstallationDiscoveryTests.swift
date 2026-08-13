@@ -3,12 +3,11 @@ import Foundation
 import XCTest
 
 final class InstallationDiscoveryTests: XCTestCase {
-    func testDiscoveryUsesValidHighestCrossOverAndSteamBottleWithoutExecutingWine() async throws {
+    func testDiscoveryIgnoresCrossOverApplicationsBottlesAndExecutables() async throws {
         let fixture = try DiscoveryFixture()
         defer { fixture.remove() }
-        let older = try fixture.createCrossOver(named: "CrossOver 25.app", version: "25.1")
-        _ = older
-        let current = try fixture.createCrossOver(named: "CrossOver.app", version: "26.3")
+        _ = try fixture.createCrossOver(named: "CrossOver 25.app", version: "25.1")
+        _ = try fixture.createCrossOver(named: "CrossOver.app", version: "26.3")
         try fixture.createSteamBottle()
         let regressionApp = try fixture.createRegressionApp()
         let runner = StubDiscoveryRunner(result: ProcessResult(
@@ -24,17 +23,11 @@ final class InstallationDiscoveryTests: XCTestCase {
 
         let snapshot = await discovery.discover(regressionApplicationURL: regressionApp)
 
-        XCTAssertEqual(
-            snapshot.crossOver?.applicationURL.resolvingSymlinksInPath(),
-            current.resolvingSymlinksInPath()
-        )
-        XCTAssertEqual(snapshot.crossOver?.version, "26.3")
-        XCTAssertEqual(snapshot.crossOver?.bottleName, "Steam")
-        XCTAssertEqual(snapshot.crossOver?.health, .ready)
-        XCTAssertEqual(snapshot.crossOver?.defaultGraphicsBackend, "d3dmetal")
+        XCTAssertNil(snapshot.crossOver)
+        XCTAssertNil(snapshot.crossOverIssue)
         XCTAssertEqual(snapshot.regression.health, .ready)
         let invocationCount = await runner.invocationCount()
-        XCTAssertEqual(invocationCount, 1)
+        XCTAssertEqual(invocationCount, 0)
     }
 
     func testDiscoveryExplainsMissingCrossOverAndKeepsRegressionHealth() async throws {
@@ -50,7 +43,7 @@ final class InstallationDiscoveryTests: XCTestCase {
         let snapshot = await discovery.discover(regressionApplicationURL: regressionApp)
 
         XCTAssertNil(snapshot.crossOver)
-        XCTAssertEqual(snapshot.crossOverIssue?.code, .crossOverNotInstalled)
+        XCTAssertNil(snapshot.crossOverIssue)
         XCTAssertEqual(snapshot.regression.health, .missing)
     }
 }

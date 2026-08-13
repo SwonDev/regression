@@ -3,12 +3,14 @@
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${REGRESSION_RELEASE_VERSION:-1.10.1}"
-BUILD_NUMBER="${REGRESSION_RELEASE_BUILD_NUMBER:-36}"
+VERSION="${REGRESSION_RELEASE_VERSION:-1.11.0}"
+BUILD_NUMBER="${REGRESSION_RELEASE_BUILD_NUMBER:-37}"
 APP="$ROOT/Regression.app"
 APP_NAME="Regression.app"
 OUTPUT_DIR="${REGRESSION_RELEASE_OUTPUT_DIR:-$ROOT/build/release-$VERSION}"
-ASSET_NAME="Regression-${VERSION}-macos-arm64.tar.zst"
+ASSET_NAME="Regression-${VERSION}-macos-arm64.tar.gz"
+INSTALLER_SOURCE="$ROOT/Scripts/install_regression.sh"
+COMPONENT_HEALTH_SOURCE="$ROOT/Sources/RegressionCore/ComponentHealth.swift"
 SOURCE_HAN_VERSION="2.005R"
 SOURCE_HAN_ASSET="01_SourceHanSans.ttc.zip"
 SOURCE_HAN_SHA256="a024cf1759494847cd47aae4379bcb3dc530017c709f3f503ee0ed918dd92952"
@@ -20,6 +22,49 @@ WORK_DIR=""
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 step() { printf '\n== %s ==\n' "$*"; }
+
+installer_contract_value() {
+    local key="$1" installer="$2" lines line value
+    lines="$(grep -E "^${key}=\"[^\"]+\"$" "$installer" || true)"
+    [[ -n "$lines" && "$(printf '%s\n' "$lines" | wc -l | tr -d ' ')" == "1" ]] \
+        || fail "El instalador debe declarar exactamente una vez ${key}."
+    line="$lines"
+    value="${line#*=\"}"
+    value="${value%\"}"
+    printf '%s\n' "$value"
+}
+
+verify_installer_release_contract() {
+    local installer="$1" installer_version installer_build
+    [[ -f "$installer" && ! -L "$installer" ]] \
+        || fail "El instalador de la release debe ser un fichero físico: $installer"
+    bash -n "$installer"
+    installer_version="$(installer_contract_value VERSION "$installer")"
+    installer_build="$(installer_contract_value BUILD_NUMBER "$installer")"
+    [[ "$installer_version" == "$VERSION" ]] \
+        || fail "El instalador declara $installer_version, pero el asset es $VERSION."
+    [[ "$installer_build" == "$BUILD_NUMBER" ]] \
+        || fail "El instalador declara build $installer_build, pero el asset es $BUILD_NUMBER."
+}
+
+verify_windows_media_catalog_pin() {
+    local manifest="$1" catalog_line configured_hash actual_hash
+    [[ -f "$manifest" && ! -L "$manifest" ]] \
+        || fail "El manifiesto público de Windows Media debe ser un fichero físico."
+    catalog_line="$(grep -E \
+        '^[[:space:]]*private static let windowsMediaPublicManifestSHA256: String\? = (nil|"[0-9a-f]{64}")$' \
+        "$COMPONENT_HEALTH_SOURCE" || true)"
+    [[ -n "$catalog_line" && "$(printf '%s\n' "$catalog_line" | wc -l | tr -d ' ')" == "1" ]] \
+        || fail "ComponentHealth.swift no declara un único PIN público auditable."
+    actual_hash="$(shasum -a 256 "$manifest" | awk '{print $1}')"
+    if [[ "$catalog_line" == *"= nil" ]]; then
+        fail "PIN público pendiente: mide $actual_hash para Windows Media, compílalo en ComponentHealth.swift y reconstruye la app."
+    fi
+    configured_hash="${catalog_line##*= \"}"
+    configured_hash="${configured_hash%\"}"
+    [[ "$configured_hash" == "$actual_hash" ]] \
+        || fail "El PIN público de Windows Media ($configured_hash) no coincide con el candidato real ($actual_hash)."
+}
 
 cleanup_path() {
     local target="$1"
@@ -42,18 +87,45 @@ download() {
         --output "$2" "$1"
 }
 
+if [[ "${REGRESSION_RELEASE_MANIFEST_PIN_ONLY:-0}" == "1" ]]; then
+    INSTALLER_SOURCE="${REGRESSION_RELEASE_INSTALLER_SOURCE:-$INSTALLER_SOURCE}"
+    COMPONENT_HEALTH_SOURCE="${REGRESSION_RELEASE_COMPONENT_HEALTH_SOURCE:-$COMPONENT_HEALTH_SOURCE}"
+    verify_installer_release_contract "$INSTALLER_SOURCE"
+    [[ -n "${REGRESSION_RELEASE_WINDOWS_MEDIA_MANIFEST:-}" ]] \
+        || fail "REGRESSION_RELEASE_WINDOWS_MEDIA_MANIFEST es obligatorio."
+    verify_windows_media_catalog_pin "$REGRESSION_RELEASE_WINDOWS_MEDIA_MANIFEST"
+    printf 'PIN público de Windows Media verificado para Regression %s (%s).\n' \
+        "$VERSION" "$BUILD_NUMBER"
+    exit 0
+fi
+if [[ "${REGRESSION_RELEASE_CONTRACT_ONLY:-0}" == "1" ]]; then
+    INSTALLER_SOURCE="${REGRESSION_RELEASE_INSTALLER_SOURCE:-$INSTALLER_SOURCE}"
+    verify_installer_release_contract "$INSTALLER_SOURCE"
+    printf 'Contrato de release verificado: Regression %s (%s).\n' "$VERSION" "$BUILD_NUMBER"
+    exit 0
+fi
+verify_installer_release_contract "$INSTALLER_SOURCE"
+
 [[ -d "$APP/Contents/SharedSupport/wine-root" ]] || fail "Falta el runtime canónico."
 [[ "$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")" == "$VERSION" ]] \
     || fail "Regression.app no está empaquetada como versión $VERSION."
 [[ "$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")" == "$BUILD_NUMBER" ]] \
     || fail "Regression.app no está empaquetada como build $BUILD_NUMBER."
 
-BOTTLE="$HOME/Library/Application Support/Regression/Bottles/Steam"
-if [[ -d "$BOTTLE" ]]; then
-    "$ROOT/build/verify-protected-state.sh" --include-bottle
-else
-    "$ROOT/build/verify-protected-state.sh"
-fi
+INPUT_STATE="${REGRESSION_RELEASE_INPUT_STATE:-development}"
+case "$INPUT_STATE" in
+    development)
+        REGRESSION_APP_PATH="$APP" \
+            "$ROOT/build/verify-protected-state.sh" --release-1.11-development-candidate
+        ;;
+    public-1.11)
+        REGRESSION_APP_PATH="$APP" \
+            "$ROOT/build/verify-public-installed-state.sh" --release-1.11.0
+        ;;
+    *)
+        fail "REGRESSION_RELEASE_INPUT_STATE debe ser development o public-1.11."
+        ;;
+esac
 
 step "Preparando un bundle público aislado"
 WORK_DIR="$(mktemp -d /private/tmp/regression-release.XXXXXX)"
@@ -63,6 +135,23 @@ mkdir -m 700 "$STAGE"
 ditto "$APP" "$STAGE/Regression.app"
 PUBLIC_APP="$STAGE/Regression.app"
 WINE_ROOT="$PUBLIC_APP/Contents/SharedSupport/wine-root"
+
+if [[ "$INPUT_STATE" == "public-1.11" ]]; then
+    swift build -c release -Xswiftc -warnings-as-errors --product Regression
+    swift build -c release -Xswiftc -warnings-as-errors --product regressionctl
+    CURRENT_BIN_DIR="$(swift build -c release --show-bin-path)"
+    install -m 755 "$CURRENT_BIN_DIR/Regression" "$PUBLIC_APP/Contents/MacOS/Regression"
+    install -m 755 "$CURRENT_BIN_DIR/regressionctl" \
+        "$PUBLIC_APP/Contents/SharedSupport/bin/regressionctl"
+    install -m 755 "$ROOT/Scripts/regression-engine.sh" \
+        "$PUBLIC_APP/Contents/MacOS/regression-engine"
+    install -m 755 "$ROOT/Scripts/install_apple_gptk_component.sh" \
+        "$PUBLIC_APP/Contents/SharedSupport/bin/install-apple-gptk-component"
+    install -m 755 "$ROOT/Scripts/install_windows_media_component.sh" \
+        "$PUBLIC_APP/Contents/SharedSupport/bin/install-windows-media-component"
+    "$ROOT/build/verify-current-release-input.sh" \
+        "$INPUT_STATE" "$PUBLIC_APP" "$CURRENT_BIN_DIR" "$ROOT"
+fi
 
 # Wine incorpora el prefijo de instalación en sus binarios de arranque. La app canónica de
 # desarrollo apunta al checkout, mientras que el asset público vive siempre en /Applications.
@@ -105,7 +194,9 @@ mkdir -p "$WINE_ROOT/lib/apple_gptk/external" \
 
 # Los symlinks de perfiles cuyo destino era GPTK se recrean por el instalador tras detectarlo.
 while IFS= read -r -d '' link; do
-    [[ -e "$link" ]] || unlink "$link"
+    if [[ "$(readlink "$link")" == *apple_gptk* || ! -e "$link" ]]; then
+        unlink "$link"
+    fi
 done < <(find "$WINE_ROOT/lib/profiles" -type l -print0)
 
 # Un usuario final no necesita headers, librerías estáticas, manuales ni toolchain de Wine.
@@ -114,6 +205,11 @@ cleanup_path "$WINE_ROOT/share/man"
 for tool in function_grep.pl widl winebuild winecpp winedump wineg++ winegcc winemaker wmc wrc; do
     cleanup_path "$WINE_ROOT/bin/$tool"
 done
+# El bundle de desarrollo conserva respaldos de laboratorio para rollback local. El asset
+# público se construye en staging y no debe redistribuirlos ni duplicar módulos del runtime.
+while IFS= read -r -d '' laboratory_copy; do
+    cleanup_path "$laboratory_copy"
+done < <(find "$WINE_ROOT" -type f \( -name '*.bak*' -o -name '*.before-*' \) -print0)
 while IFS= read -r -d '' development_file; do
     unlink "$development_file"
 done < <(find "$WINE_ROOT/lib" -type f \( -name '*.a' -o -name '*.la' \) -print0)
@@ -190,16 +286,24 @@ codesign --force --sign - "$BRIDGE_APP"
 # API del runtime sin rutas al Mac de build y añade el mando virtual alimentado por el demonio.
 SDL_LIBRARY="$WINE_ROOT/lib/wine/x86_64-unix/libSDL2-2.0.0.dylib"
 [[ -f "$SDL_LIBRARY" ]] || fail "El runtime no contiene la SDL requerida por Switch2Bridge."
-if strings -a "$SDL_LIBRARY" | grep -q 'Switch2Bridge'; then
+if grep -a -Fq 'Switch2Bridge' "$SDL_LIBRARY"; then
     SDL_REAL_SOURCE="$(otool -L "$SDL_LIBRARY" | tail -n +2 \
         | sed -E 's/^[[:space:]]*(.*) \(compatibility version.*/\1/' \
-        | grep '/Switch2Bridge/libSDL2-real-' | head -1)"
+        | grep '/Switch2Bridge/libSDL2-real-' | head -1 || true)"
+    if [[ -z "$SDL_REAL_SOURCE" ]] &&
+       otool -L "$SDL_LIBRARY" | grep -Fq '@loader_path/libSDL2-real.dylib'; then
+        SDL_REAL_SOURCE="$(dirname "$SDL_LIBRARY")/libSDL2-real.dylib"
+    fi
 else
     SDL_REAL_SOURCE="$SDL_LIBRARY"
 fi
 [[ -f "$SDL_REAL_SOURCE" ]] || fail "No se encontró la SDL real que debe reexportarse."
 SDL_REAL_PORTABLE="$WINE_ROOT/lib/wine/x86_64-unix/libSDL2-real.dylib"
-cp -cL "$SDL_REAL_SOURCE" "$SDL_REAL_PORTABLE"
+SDL_REAL_SOURCE_CANONICAL="$(cd "$(dirname "$SDL_REAL_SOURCE")" && pwd -P)/$(basename "$SDL_REAL_SOURCE")"
+SDL_REAL_PORTABLE_CANONICAL="$(cd "$(dirname "$SDL_REAL_PORTABLE")" && pwd -P)/$(basename "$SDL_REAL_PORTABLE")"
+if [[ "$SDL_REAL_SOURCE_CANONICAL" != "$SDL_REAL_PORTABLE_CANONICAL" ]]; then
+    cp -cL "$SDL_REAL_SOURCE" "$SDL_REAL_PORTABLE"
+fi
 install_name_tool -id '@loader_path/libSDL2-real.dylib' "$SDL_REAL_PORTABLE"
 clang -dynamiclib -arch x86_64 -O2 -headerpad_max_install_names \
     -install_name libSDL2-2.0.0.dylib \
@@ -313,6 +417,9 @@ sanitize_literal "$HOME" "/Users/regression"
 # install_name_tool, strip y el saneado invalidan firmas previas. Las librerías de
 # SharedSupport no son código anidado estándar para codesign --deep, de modo que se firman
 # explícitamente antes de sellar sus manifiestos y los bundles que las contienen.
+# El staging public-1.11 reinstala regression-engine desde la fuente y pierde su xattr de firma.
+# Sellarlo antes del Mach-O principal evita que codesign rechace ese subcomponente ejecutable.
+codesign --force --sign - "$PUBLIC_APP/Contents/MacOS/regression-engine" >/dev/null
 while IFS= read -r -d '' candidate; do
     file "$candidate" | grep -q 'Mach-O' || continue
     codesign --force --sign - "$candidate" >/dev/null
@@ -330,6 +437,7 @@ if [[ -d "$WINDOWS_MEDIA_PUBLIC" ]]; then
         mv "$manifest_candidate" manifest.sha256
         shasum -a 256 -c manifest.sha256
     )
+    verify_windows_media_catalog_pin "$WINDOWS_MEDIA_PUBLIC/manifest.sha256"
 fi
 
 # Sella primero cualquier app anidada y finalmente Regression. La firma pública es ad hoc y no
@@ -356,7 +464,8 @@ if rg -a -l '/Users/adrianpereradelgado|aperdel\.esi@gmail\.com' "$PUBLIC_APP" >
     rg -a -l '/Users/adrianpereradelgado|aperdel\.esi@gmail\.com' "$PUBLIC_APP" | head -20 >&2
     fail "El bundle público todavía contiene identidad local."
 fi
-if find "$WINE_ROOT/lib/apple_gptk" -type f | grep -q .; then
+FIRST_GPTK_FILE="$(find "$WINE_ROOT/lib/apple_gptk" -type f -print -quit)"
+if [[ -n "$FIRST_GPTK_FILE" ]]; then
     fail "El bundle público contiene binarios del GPTK."
 fi
 while IFS= read -r -d '' candidate; do
@@ -371,9 +480,11 @@ step "Creando el asset y su manifiesto"
 mkdir -p "$OUTPUT_DIR"
 OUTPUT="$OUTPUT_DIR/$ASSET_NAME"
 CHECKSUM="$OUTPUT.sha256"
+INSTALLER="$OUTPUT_DIR/install_regression.sh"
 cleanup_path "$OUTPUT"
 cleanup_path "$CHECKSUM"
-COPYFILE_DISABLE=1 tar --xattrs --no-mac-metadata -C "$STAGE" -caf "$OUTPUT" "$APP_NAME"
+cleanup_path "$INSTALLER"
+COPYFILE_DISABLE=1 tar --xattrs --no-mac-metadata -C "$STAGE" -czf "$OUTPUT" "$APP_NAME"
 SHA256="$(shasum -a 256 "$OUTPUT" | awk '{print $1}')"
 printf '%s  %s\n' "$SHA256" "$ASSET_NAME" > "$CHECKSUM"
 
@@ -382,7 +493,14 @@ tar -tf "$OUTPUT" | awk 'index($0, "../") || substr($0, 1, 1) == "/" { bad=1 } E
 [[ "$(shasum -a 256 "$OUTPUT" | awk '{print $1}')" == "$SHA256" ]] \
     || fail "El asset no supera su verificación final."
 
-"$ROOT/build/verify-release-asset.sh" "$OUTPUT" "$CHECKSUM" "$VERSION"
+"$ROOT/build/verify-release-asset.sh" "$OUTPUT" "$CHECKSUM" "$VERSION" "$BUILD_NUMBER"
 
-printf 'Asset: %s\nSHA-256: %s\nTamaño: %s\n' \
-    "$OUTPUT" "$SHA256" "$(du -h "$OUTPUT" | cut -f1)"
+INSTALLER_TEMP="$WORK_DIR/install_regression.sh"
+install -m 755 "$INSTALLER_SOURCE" "$INSTALLER_TEMP"
+cmp -s "$INSTALLER_SOURCE" "$INSTALLER_TEMP" \
+    || fail "La copia del instalador no coincide byte a byte con la fuente versionada."
+verify_installer_release_contract "$INSTALLER_TEMP"
+mv "$INSTALLER_TEMP" "$INSTALLER"
+
+printf 'Asset: %s\nSHA-256: %s\nInstalador: %s\nTamaño: %s\n' \
+    "$OUTPUT" "$SHA256" "$INSTALLER" "$(du -h "$OUTPUT" | cut -f1)"

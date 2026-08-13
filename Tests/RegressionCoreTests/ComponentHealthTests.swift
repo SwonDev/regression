@@ -10,8 +10,8 @@ final class ComponentHealthTests: XCTestCase {
     let roots = ProductionDescriptorRoots()
 
     let descriptor = TrustedComponentCatalog.windowsMediaDescriptor(
-      applicationVersion: "1.10.1",
-      buildIdentifier: "36",
+      applicationVersion: "1.11.0",
+      buildIdentifier: "37",
       variant: .development,
       applicationBundleURL: roots.bundle,
       applicationSupportURL: roots.applicationSupport
@@ -20,7 +20,7 @@ final class ComponentHealthTests: XCTestCase {
     XCTAssertEqual(descriptor.identity.componentID, "windows-media-gstreamer")
     XCTAssertEqual(descriptor.identity.componentVersion, "1")
     XCTAssertEqual(descriptor.identity.variant, .development)
-    XCTAssertEqual(descriptor.identity.buildIdentifier, "36")
+    XCTAssertEqual(descriptor.identity.buildIdentifier, "37")
     XCTAssertEqual(
       descriptor.payloadRootURL,
       roots.bundle.appendingPathComponent(
@@ -43,12 +43,12 @@ final class ComponentHealthTests: XCTestCase {
     )
   }
 
-  func testProductionWindowsMediaPublicDescriptorUsesReleaseManifestAndExpectedExternalLink() {
+  func testProductionWindowsMediaPublicDescriptorUsesMeasuredReleaseManifest() {
     let roots = ProductionDescriptorRoots()
 
     let descriptor = TrustedComponentCatalog.windowsMediaDescriptor(
-      applicationVersion: "1.10.1",
-      buildIdentifier: "36",
+      applicationVersion: "1.11.0",
+      buildIdentifier: "37",
       variant: .publicInstalled,
       applicationBundleURL: roots.bundle,
       applicationSupportURL: roots.applicationSupport
@@ -71,8 +71,8 @@ final class ComponentHealthTests: XCTestCase {
     let roots = ProductionDescriptorRoots()
 
     let descriptor = TrustedComponentCatalog.windowsMediaDescriptor(
-      applicationVersion: "1.10.1",
-      buildIdentifier: "36",
+      applicationVersion: "1.11.0",
+      buildIdentifier: "37",
       variant: .development,
       applicationBundleURL: roots.bundle,
       applicationSupportURL: roots.applicationSupport
@@ -81,15 +81,15 @@ final class ComponentHealthTests: XCTestCase {
     XCTAssertEqual(descriptor.identity.variant, .development)
     XCTAssertNotEqual(
       descriptor.expectedManifestSHA256,
-      "da8ba98d99d157f981ef3a2472dc9d74c9ce4673ef126bdd61851b9dd21dedb3"
+      String(repeating: "0", count: 64)
     )
   }
 
   func testProductionWindowsMediaUnsupportedBuildIsRejectedBeforeFilesystemInspection() {
     let roots = ProductionDescriptorRoots()
     let descriptor = TrustedComponentCatalog.windowsMediaDescriptor(
-      applicationVersion: "1.10.1",
-      buildIdentifier: "37",
+      applicationVersion: "1.11.0",
+      buildIdentifier: "36",
       variant: .publicInstalled,
       applicationBundleURL: roots.bundle,
       applicationSupportURL: roots.applicationSupport
@@ -101,15 +101,15 @@ final class ComponentHealthTests: XCTestCase {
     XCTAssertEqual(report.recovery, .installSupportedApplicationBuild)
     XCTAssertEqual(
       report.issue,
-      .unsupportedVariant("Regression 1.10.1 (37)")
+      .unsupportedVariant("Regression 1.11.0 (36)")
     )
   }
 
   func testProductionWindowsMediaUnsupportedApplicationVersionIsRejected() {
     let roots = ProductionDescriptorRoots()
     let descriptor = TrustedComponentCatalog.windowsMediaDescriptor(
-      applicationVersion: "1.11.0",
-      buildIdentifier: "36",
+      applicationVersion: "1.10.1",
+      buildIdentifier: "37",
       variant: .development,
       applicationBundleURL: roots.bundle,
       applicationSupportURL: roots.applicationSupport
@@ -144,8 +144,8 @@ final class ComponentHealthTests: XCTestCase {
   func testProductionWindowsMediaExplicitUnsupportedVariantRemainsUnsupported() {
     let roots = ProductionDescriptorRoots()
     let descriptor = TrustedComponentCatalog.windowsMediaDescriptor(
-      applicationVersion: "1.10.1",
-      buildIdentifier: "36",
+      applicationVersion: "1.11.0",
+      buildIdentifier: "37",
       variant: .unsupported("portable-v2"),
       applicationBundleURL: roots.bundle,
       applicationSupportURL: roots.applicationSupport
@@ -167,8 +167,8 @@ final class ComponentHealthTests: XCTestCase {
     let support = base.appendingPathComponent("support/../Regression", isDirectory: true)
 
     let descriptor = TrustedComponentCatalog.windowsMediaDescriptor(
-      applicationVersion: "1.10.1",
-      buildIdentifier: "36",
+      applicationVersion: "1.11.0",
+      buildIdentifier: "37",
       variant: .publicInstalled,
       applicationBundleURL: bundle,
       applicationSupportURL: support
@@ -190,11 +190,196 @@ final class ComponentHealthTests: XCTestCase {
     )
   }
 
+  func testSteamRuntimePrerequisitesCatalogPinsCompleteReleaseFileSet() {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "wine-root/../wine-root",
+      isDirectory: true
+    )
+
+    let descriptor = TrustedComponentCatalog.steamRuntimePrerequisitesDescriptor(
+      applicationVersion: "1.11.0",
+      buildIdentifier: "37",
+      variant: .publicInstalled,
+      wineRootURL: root
+    )
+
+    XCTAssertEqual(descriptor.identity.componentID, "steam-runtime-prerequisites")
+    XCTAssertEqual(descriptor.identity.componentVersion, "1")
+    XCTAssertEqual(descriptor.identity.variant, .publicInstalled)
+    XCTAssertEqual(descriptor.identity.buildIdentifier, "37")
+    XCTAssertEqual(descriptor.payloadRootURL, root.standardizedFileURL)
+    XCTAssertEqual(
+      descriptor.identity,
+      TrustedComponentCatalog.steamRuntimePrerequisitesDescriptor(
+        applicationVersion: "1.11.0",
+        buildIdentifier: "37",
+        variant: .publicInstalled,
+        wineRootURL: root
+      ).identity
+    )
+    XCTAssertEqual(
+      Dictionary(
+        uniqueKeysWithValues: descriptor.files.map { ($0.relativePath, $0.expectedSHA256) }
+      ),
+      [
+        "lib/wine/x86_64-windows/vcruntime140.dll":
+          "f03a7c92ed8cda87fc0bf72a5af29962d26ca981b546b3ce0550fb57ca3ee7ff",
+        "lib/wine/x86_64-windows/msvcp140.dll":
+          "2a53d2db7e7b760d2b1d7ecd46b05653e11850363a10b097303d3491aaa4e94a",
+        "lib/wine/x86_64-windows/ucrtbase.dll":
+          "019e4bebf86cc4642fff63bc371223280ddfb0306ff379b04fe3f4dc2311ad22",
+        "lib/wine/x86_64-windows/vcruntime140_1.dll":
+          "69e58956261ae1081a6429c3813b143689f29849ffb693eb4fee399f335e4608",
+        "lib/wine/i386-windows/vcruntime140.dll":
+          "02037225c495c37747ae4cde08de6ff31119b850997799fa27237ca61bed7b35",
+        "lib/wine/i386-windows/msvcp140.dll":
+          "2727caf41f37eec4141c891e42365e261cc909b01d0ae568b12b9bf2fdcffa85",
+        "lib/wine/i386-windows/ucrtbase.dll":
+          "935fbefeb5462924e628df486ebfdad49b70a91154c9a8a57d9aa221fc91c119",
+      ]
+    )
+  }
+
+  func testSteamRuntimePrerequisitesCorrectFileSetIsReadyAndReadOnly() throws {
+    let fixture = try SteamRuntimePrerequisitesFixture()
+    defer { fixture.remove() }
+    try fixture.writeApprovedFiles()
+    let unrelatedFIFO = fixture.root.appendingPathComponent("unrelated-runtime.pipe")
+    XCTAssertEqual(Darwin.mkfifo(unrelatedFIFO.path, 0o600), 0)
+    let before = try fixture.snapshot()
+
+    let started = Date()
+    let report = ComponentHealthService.evaluate(fixture.descriptor())
+
+    XCTAssertLessThan(Date().timeIntervalSince(started), 1)
+    XCTAssertEqual(report.status, .ready)
+    XCTAssertEqual(report.recovery, .none)
+    XCTAssertNil(report.issue)
+    XCTAssertEqual(try fixture.snapshot(), before)
+  }
+
+  func testSteamRuntimePrerequisitesMissingFileRecommendsOnlyTrustedReinstall() throws {
+    let fixture = try SteamRuntimePrerequisitesFixture()
+    defer { fixture.remove() }
+    try fixture.writeApprovedFiles(omitting: "lib/wine/i386-windows/ucrtbase.dll")
+
+    let report = ComponentHealthService.evaluate(fixture.descriptor())
+
+    XCTAssertEqual(report.status, .missing)
+    XCTAssertEqual(report.recovery, .reinstallTrustedArtifact)
+    XCTAssertEqual(
+      report.issue,
+      .payloadEntryMissing("lib/wine/i386-windows/ucrtbase.dll")
+    )
+  }
+
+  func testSteamRuntimePrerequisitesDriftedFileIsRejected() throws {
+    let fixture = try SteamRuntimePrerequisitesFixture()
+    defer { fixture.remove() }
+    try fixture.writeApprovedFiles()
+    try Data("changed".utf8).write(
+      to: fixture.root.appendingPathComponent("lib/wine/x86_64-windows/msvcp140.dll")
+    )
+
+    let report = ComponentHealthService.evaluate(fixture.descriptor())
+
+    XCTAssertEqual(report.status, .drifted)
+    XCTAssertEqual(report.recovery, .reinstallTrustedArtifact)
+    XCTAssertEqual(
+      report.issue,
+      .payloadDigestMismatch("lib/wine/x86_64-windows/msvcp140.dll")
+    )
+  }
+
+  func testSteamRuntimePrerequisitesSymlinkIsRejectedWithoutReadingTarget() throws {
+    let fixture = try SteamRuntimePrerequisitesFixture()
+    defer { fixture.remove() }
+    try fixture.writeApprovedFiles(omitting: "lib/wine/x86_64-windows/vcruntime140.dll")
+    let outside = fixture.container.appendingPathComponent("outside.dll")
+    let approved = fixture.contents["lib/wine/x86_64-windows/vcruntime140.dll"]!
+    try approved.write(to: outside)
+    let link = fixture.root.appendingPathComponent(
+      "lib/wine/x86_64-windows/vcruntime140.dll"
+    )
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+
+    let report = ComponentHealthService.evaluate(fixture.descriptor())
+
+    XCTAssertEqual(report.status, .drifted)
+    XCTAssertEqual(
+      report.issue,
+      .payloadEntryIsSymbolicLink("lib/wine/x86_64-windows/vcruntime140.dll")
+    )
+    XCTAssertEqual(try Data(contentsOf: outside), approved)
+  }
+
+  func testSteamRuntimePrerequisitesFIFOAndOversizedFileAreRejectedWithoutBlocking() throws {
+    let fifoFixture = try SteamRuntimePrerequisitesFixture()
+    defer { fifoFixture.remove() }
+    let fifoPath = "lib/wine/x86_64-windows/vcruntime140_1.dll"
+    try fifoFixture.writeApprovedFiles(omitting: fifoPath)
+    let fifo = fifoFixture.root.appendingPathComponent(fifoPath)
+    XCTAssertEqual(Darwin.mkfifo(fifo.path, 0o600), 0)
+
+    let started = Date()
+    let fifoReport = ComponentHealthService.evaluate(fifoFixture.descriptor())
+
+    XCTAssertLessThan(Date().timeIntervalSince(started), 1)
+    XCTAssertEqual(fifoReport.status, .drifted)
+    XCTAssertEqual(fifoReport.issue, .payloadEntryIsNotRegularFile(fifoPath))
+
+    let largeFixture = try SteamRuntimePrerequisitesFixture()
+    defer { largeFixture.remove() }
+    try largeFixture.writeApprovedFiles()
+    let largeReport = ComponentHealthService.evaluate(
+      largeFixture.descriptor(maximumFileBytes: 2)
+    )
+
+    XCTAssertEqual(largeReport.status, .drifted)
+    XCTAssertEqual(
+      largeReport.issue,
+      .payloadEntryExceedsLimit("lib/wine/x86_64-windows/vcruntime140.dll")
+    )
+  }
+
+  func testSteamRuntimePrerequisitesUnsupportedBuildIsRejectedBeforeFilesystemInspection() {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "absent-runtime-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    let descriptor = TrustedComponentCatalog.steamRuntimePrerequisitesDescriptor(
+      applicationVersion: "1.10.1",
+      buildIdentifier: "37",
+      variant: .publicInstalled,
+      wineRootURL: root
+    )
+
+    let report = ComponentHealthService.evaluate(descriptor)
+
+    XCTAssertEqual(report.status, .unsupportedVariant)
+    XCTAssertEqual(report.recovery, .installSupportedApplicationBuild)
+    XCTAssertEqual(report.issue, .unsupportedVariant("Regression 1.10.1 (37)"))
+  }
+
+  func testSteamRuntimePrerequisitesRootSymlinkIsRejected() throws {
+    let fixture = try SteamRuntimePrerequisitesFixture()
+    defer { fixture.remove() }
+    try fixture.writeApprovedFiles()
+    let actualRoot = fixture.container.appendingPathComponent("actual-wine-root", isDirectory: true)
+    try FileManager.default.moveItem(at: fixture.root, to: actualRoot)
+    try FileManager.default.createSymbolicLink(at: fixture.root, withDestinationURL: actualRoot)
+
+    let report = ComponentHealthService.evaluate(fixture.descriptor())
+
+    XCTAssertEqual(report.status, .drifted)
+    XCTAssertEqual(report.issue, .payloadIsNotARegularDirectory)
+  }
+
   func testProductionWindowsMediaMissingPayloadOnlyRecommendsTrustedReinstall() {
     let roots = ProductionDescriptorRoots()
     let descriptor = TrustedComponentCatalog.windowsMediaDescriptor(
-      applicationVersion: "1.10.1",
-      buildIdentifier: "36",
+      applicationVersion: "1.11.0",
+      buildIdentifier: "37",
       variant: .development,
       applicationBundleURL: roots.bundle,
       applicationSupportURL: roots.applicationSupport
@@ -610,6 +795,86 @@ private final class ComponentHealthFixture {
   }
 
   static func sha256(_ data: Data) -> String {
+    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+  }
+}
+
+private final class SteamRuntimePrerequisitesFixture {
+  private static let orderedPaths = [
+    "lib/wine/x86_64-windows/vcruntime140.dll",
+    "lib/wine/x86_64-windows/msvcp140.dll",
+    "lib/wine/x86_64-windows/ucrtbase.dll",
+    "lib/wine/x86_64-windows/vcruntime140_1.dll",
+    "lib/wine/i386-windows/vcruntime140.dll",
+    "lib/wine/i386-windows/msvcp140.dll",
+    "lib/wine/i386-windows/ucrtbase.dll",
+  ]
+
+  let container: URL
+  let root: URL
+  let contents: [String: Data] = [
+    "lib/wine/x86_64-windows/vcruntime140.dll": Data("x64-vcruntime".utf8),
+    "lib/wine/x86_64-windows/msvcp140.dll": Data("x64-msvcp".utf8),
+    "lib/wine/x86_64-windows/ucrtbase.dll": Data("x64-ucrt".utf8),
+    "lib/wine/x86_64-windows/vcruntime140_1.dll": Data("x64-vcruntime-1".utf8),
+    "lib/wine/i386-windows/vcruntime140.dll": Data("x86-vcruntime".utf8),
+    "lib/wine/i386-windows/msvcp140.dll": Data("x86-msvcp".utf8),
+    "lib/wine/i386-windows/ucrtbase.dll": Data("x86-ucrt".utf8),
+  ]
+
+  init() throws {
+    container = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "regression-steam-runtime-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    root = container.appendingPathComponent("wine-root", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+  }
+
+  func descriptor(maximumFileBytes: Int64 = 1_024) -> TrustedComponentFileSetDescriptor {
+    TrustedComponentFileSetDescriptor(
+      identity: ComponentIdentity(
+        componentID: "steam-runtime-prerequisites-test",
+        componentVersion: "1",
+        variant: .development,
+        buildIdentifier: "36"
+      ),
+      payloadRootURL: root,
+      files: Self.orderedPaths.map { path in
+        TrustedComponentFile(
+          relativePath: path,
+          expectedSHA256: Self.sha256(contents[path]!)
+        )
+      },
+      maximumFileBytes: maximumFileBytes,
+      maximumPayloadBytes: 8_192
+    )
+  }
+
+  func writeApprovedFiles(omitting omittedPath: String? = nil) throws {
+    for (path, data) in contents where path != omittedPath {
+      let url = root.appendingPathComponent(path)
+      try FileManager.default.createDirectory(
+        at: url.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+      )
+      try data.write(to: url)
+    }
+  }
+
+  func snapshot() throws -> [String: Data] {
+    try Dictionary(
+      uniqueKeysWithValues: contents.keys.sorted().map { path in
+        (path, try Data(contentsOf: root.appendingPathComponent(path)))
+      }
+    )
+  }
+
+  func remove() {
+    try? FileManager.default.removeItem(at: container)
+  }
+
+  private static func sha256(_ data: Data) -> String {
     SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
   }
 }
