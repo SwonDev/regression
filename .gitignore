@@ -30,3 +30,4 @@ __pycache__/
 build/*
 !build/*.sh
 !build/d3d12test.c
+!build/crossover-foss-26.3.0.contract

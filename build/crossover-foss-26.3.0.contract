@@ -1,0 +1,44 @@
+# Contrato reproducible de la publicación FOSS oficial de CrossOver 26.3.0.
+#
+# La URL es metadato de procedencia. El verificador nunca accede a la red: exige
+# que el operador le entregue explícitamente la ruta de un tar local.
+contract_version=1
+product=CrossOver
+release=26.3.0
+official_url=https://media.codeweavers.com/pub/crossover/source/crossover-sources-26.3.0.tar.gz
+archive_name=crossover-sources-26.3.0.tar.gz
+archive_sha256=ac99c8ca4b3848f3e81784135f023df266b61c2345726ea55a50b3e030dd6872
+archive_root=sources
+
+# Inventario de primer nivel publicado por CodeWeavers.
+component=android
+component=busybox
+component=cabextract
+component=dxvk
+component=freetype
+component=ghostscript
+component=glib
+component=gnutls
+component=gstreamer
+component=htmltextview
+component=makedep
+component=moltenvk
+component=po4a
+component=pyxdg
+component=vkd3d
+component=wine
+
+# version=<id>|<ruta relativa a sources/>|<texto literal requerido>
+version=wine|wine/VERSION|Wine version 11.0
+version=dxvk|dxvk/meson.build|version : 'v1.10.3'
+version=vkd3d|vkd3d/configure.ac|AC_INIT([vkd3d],[1.18])
+version=gstreamer|gstreamer/meson.build|version : '1.24.4'
+version=gnutls|gnutls/gnutls/configure.ac|AC_INIT([GnuTLS], [3.8.3]
+version=moltenvk|moltenvk/MoltenVK/MoltenVK.xcodeproj/project.pbxproj|CURRENT_PROJECT_VERSION = 1.2.10;
+
+# baseline=<ruta relativa a sources/>|<SHA-256 oficial>
+# Estos tres archivos son los puntos de comparación que Regression parchea
+# actualmente mediante su serie versionada bajo patches/.
+baseline=wine/dlls/ntdll/unix/loader.c|451eb34296572d19e072b7399f5e4d6b053a0e809ccb0dedfe18da7c523703b2
+baseline=wine/dlls/ntdll/unix/env.c|c04cf0cc290050bc71c6eaf44a70cb0696efa5038afe9227878543e54befb8d0
+baseline=wine/dlls/winemac.drv/opengl.c|91a56243f9e7c978bd340f438b7ed53d83b83190ff0a896ac5f36b2e8ba4fa2a

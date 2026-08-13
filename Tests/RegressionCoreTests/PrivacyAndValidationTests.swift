@@ -3,6 +3,121 @@ import Foundation
 import XCTest
 
 final class PrivacyAndValidationTests: XCTestCase {
+    func testDXMTModulesRequireTheirProtectedBuiltinPairWithoutNativeOverrides() throws {
+        for id in ["dxmt.d3d10core", "dxmt.d3d11", "dxmt.dxgi"] {
+            let module = try XCTUnwrap(RuntimeModuleCatalog.module(id: id))
+            XCTAssertEqual(module.binaryClass, .builtinWine)
+            XCTAssertEqual(module.expectedLocations, [.bottleSystem32, .wineRootWindows64])
+            XCTAssertEqual(
+                module.requiredPair,
+                RuntimeModuleRequiredPair(
+                    first: .bottleSystem32,
+                    second: .wineRootWindows64
+                )
+            )
+            XCTAssertEqual(module.overridePolicy, .forbidden)
+            XCTAssertEqual(module.scope, .global)
+            XCTAssertEqual(module.architecture, .x86_64)
+            XCTAssertEqual(module.variant, "0.72-regression-cross-process")
+            XCTAssertEqual(module.provenance.project, "DXMT")
+            XCTAssertEqual(module.provenance.license, "LGPL-2.1+")
+            XCTAssertEqual(module.provenance.sourceURL.host, "github.com")
+        }
+    }
+
+    func testDXVKD3D9IsTheOnlyProtectedNativePEWithNativeOverrideAllowed() throws {
+        let d3d9 = try XCTUnwrap(RuntimeModuleCatalog.module(id: "dxvk.d3d9"))
+
+        XCTAssertEqual(d3d9.fileName, "d3d9.dll")
+        XCTAssertEqual(d3d9.binaryClass, .nativePE)
+        XCTAssertEqual(d3d9.expectedLocations, [.bottleSystem32])
+        XCTAssertNil(d3d9.requiredPair)
+        XCTAssertEqual(d3d9.overridePolicy, .allowed)
+        XCTAssertEqual(d3d9.scope, .global)
+        XCTAssertEqual(d3d9.architecture, .x86_64)
+        XCTAssertEqual(d3d9.variant, "1.10.3")
+        XCTAssertEqual(d3d9.provenance.project, "DXVK")
+        XCTAssertEqual(d3d9.provenance.license, "Zlib")
+        XCTAssertEqual(
+            RuntimeModuleCatalog.protectedModules.filter { $0.binaryClass == .nativePE }.map(\.id),
+            ["dxvk.d3d9"]
+        )
+    }
+
+    func testGPTKModulesRemainLocalUserProvidedAndPerProcess() throws {
+        let modules = RuntimeModuleCatalog.protectedModules.filter { $0.id.hasPrefix("apple-gptk.") }
+
+        XCTAssertFalse(modules.isEmpty)
+        XCTAssertTrue(modules.allSatisfy { $0.binaryClass == .localUserProvided })
+        XCTAssertTrue(modules.allSatisfy { $0.scope == .perProcess })
+        XCTAssertTrue(modules.allSatisfy { $0.overridePolicy == .forbidden })
+        XCTAssertTrue(modules.allSatisfy { $0.architecture == .x86_64 })
+        XCTAssertTrue(modules.allSatisfy { $0.variant == "4.0b2" })
+        XCTAssertTrue(modules.allSatisfy { $0.provenance.project == "Apple Game Porting Toolkit" })
+        XCTAssertTrue(modules.allSatisfy { $0.provenance.license.contains("not redistributed") })
+        XCTAssertEqual(
+            RuntimeModuleCatalog.module(id: "apple-gptk.d3dmetal")?.expectedLocations,
+            [
+                .localUserComponent(
+                    relativePath: "AppleGPTK/4.0b2/external/D3DMetal.framework/Versions/A/D3DMetal"
+                )
+            ]
+        )
+    }
+
+    func testRuntimeModuleCatalogHasNoDuplicateIdentitiesOrSnapshotKeys() {
+        let identities = RuntimeModuleCatalog.protectedModules.map(\.id)
+        let snapshotKeys = RuntimeModuleCatalog.observedInventory.map(\.snapshotKey)
+
+        XCTAssertEqual(Set(identities).count, identities.count)
+        XCTAssertEqual(Set(snapshotKeys).count, snapshotKeys.count)
+        XCTAssertEqual(
+            Set(snapshotKeys),
+            [
+                "component.graphics.d3d9.dll",
+                "component.graphics.d3d10core.dll",
+                "component.graphics.d3d11.dll",
+                "component.graphics.d3d12.dll",
+                "component.graphics.d3d12core.dll",
+                "component.graphics.dxgi.dll",
+                "component.graphics.winevulkan.dll",
+                "component.graphics.vulkan-1.dll",
+                "component.runtime.ucrtbase.dll",
+                "component.runtime.vcruntime140.dll",
+                "component.runtime.vcruntime140_1.dll",
+                "component.runtime.msvcp140.dll",
+                "component.runtime.msvcp140_1.dll",
+                "component.runtime.msvcp140_2.dll",
+                "component.runtime.d3dcompiler_43.dll",
+                "component.runtime.d3dcompiler_47.dll",
+                "component.runtime.xinput1_3.dll",
+                "component.runtime.xinput1_4.dll",
+                "component.runtime.xaudio2_7.dll",
+                "component.runtime.openal32.dll",
+                "component.runtime.mf.dll",
+                "component.runtime.mfplat.dll",
+                "component.runtime.mscoree.dll",
+                "component.runtime.winegstreamer.dll",
+            ]
+        )
+    }
+
+    func testSnapshotInventoryDoesNotClaimRepairAuthorityForInstallationDependentModules() {
+        let installationDependentFiles = [
+            "vcruntime140.dll", "vcruntime140_1.dll",
+            "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll",
+            "d3dcompiler_43.dll", "d3dcompiler_47.dll",
+            "xinput1_3.dll", "xinput1_4.dll", "xaudio2_7.dll",
+            "openal32.dll", "ucrtbase.dll", "mf.dll", "mfplat.dll",
+            "mscoree.dll", "winegstreamer.dll",
+        ]
+
+        for fileName in installationDependentFiles {
+            XCTAssertTrue(RuntimeModuleCatalog.observedInventory.contains { $0.fileName == fileName })
+            XCTAssertFalse(RuntimeModuleCatalog.protectedModules.contains { $0.fileName == fileName })
+        }
+    }
+
     func testSteamAppIDRejectsMixedOrEmptyValues() {
         XCTAssertEqual(SteamAppID.normalized(" 219990 "), "219990")
         XCTAssertEqual(SteamAppID.normalized("000219990"), "219990")
@@ -168,6 +283,26 @@ final class PrivacyAndValidationTests: XCTestCase {
         XCTAssertEqual(values["component.runtime.dotnet-frameworks"], "v4.0.30319")
         XCTAssertFalse(values.keys.contains { $0.localizedCaseInsensitiveContains("token") })
         XCTAssertFalse(values.values.contains("secreto"))
+
+        XCTAssertEqual(
+            Set(values.keys),
+            [
+                "backend",
+                "provider.version",
+                "bottle.name",
+                "bottle.CX_GRAPHICS_BACKEND",
+                "registry.RetinaMode",
+                "component.graphics.d3d11.dll",
+                "component.runtime.vcruntime140.dll",
+                "component.runtime.dotnet-frameworks",
+            ]
+        )
+        var stableValues = values
+        stableValues["bottle.name"] = "Bottle"
+        XCTAssertEqual(
+            ConfigurationCollector.fingerprint(stableValues),
+            "7b06d0fad8fe0f1ab1933a496a47c27f003dabbb63958f24c77fdebd8aea5ebe"
+        )
     }
 
     func testPrivateAtomicWriteKeepsFilePrivateWithoutChangingExistingParent() throws {

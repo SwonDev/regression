@@ -68,6 +68,16 @@ final class RegressionAppModel {
     var publicCatalogOperation: PublicCatalogOperation = .idle
     var publicCatalogEnabled: Bool
     var sharedLibraryAssessment: SharedLibraryAssessment?
+    /// Error de biblioteca propagado desde una operación que la modificaba. No se infiere de
+    /// texto de UI: evita presentar una biblioteca como lista tras un fallo de custodia/enlace.
+    var libraryFailureDetail: String?
+    var windowsMediaHealth: ComponentHealthReport?
+    var windowsMediaHealthIsRefreshing = false
+    /// Resultado de una inspección explícita de la biblioteca heredada. Esta evaluación nunca
+    /// prepara ni ejecuta una transferencia; solo hace visible si sería segura en el futuro.
+    var physicalLibraryCustodyAssessment: PhysicalLibraryCustodyAssessment?
+    var physicalLibraryCustodyAssessmentIsRunning = false
+    var physicalLibraryCustodyAssessmentNotice: String?
     var testReadiness: GameTestPreflightReport?
     var readinessIsRefreshing = false
     var updateStatus: CrossOverUpdateStatus?
@@ -102,6 +112,8 @@ final class RegressionAppModel {
     @ObservationIgnored private var externalCatalogTask: Task<Void, Never>?
     @ObservationIgnored private var regressionUpdateTask: Task<Void, Never>?
     @ObservationIgnored private var automaticRegressionUpdateTask: Task<Void, Never>?
+    @ObservationIgnored private var physicalLibraryCustodyAssessmentTask: Task<Void, Never>?
+    @ObservationIgnored private var physicalLibraryCustodyAssessmentID: UUID?
     @ObservationIgnored private var externalCatalogSyncID: UUID?
     @ObservationIgnored private var didBootstrap = false
     @ObservationIgnored private var periodicRefreshCount = 0
@@ -293,6 +305,7 @@ final class RegressionAppModel {
         await refreshRuntimeState()
         logger.info("Estado de procesos: CrossOver=\(self.runningState.crossOverIsRunning), Regression=\(self.runningState.regressionIsRunning)")
         await refreshStoredData(includeHealth: true)
+        await refreshWindowsMediaHealth()
         await refreshTestReadiness()
         schedulePublicCatalogSync()
 
@@ -367,11 +380,13 @@ final class RegressionAppModel {
 
     func refreshAll() async {
         failure = nil
+        libraryFailureDetail = nil
         operation = .discovering
         statusDetail = "Actualizando instalaciones y estado…"
         await refreshDiscovery()
         await refreshRuntimeState()
         await refreshStoredData(includeHealth: true)
+        await refreshWindowsMediaHealth()
         await refreshTestReadiness()
         await refreshUpdateStatus()
         schedulePublicCatalogSync()
@@ -396,11 +411,48 @@ final class RegressionAppModel {
         }
     }
 
+    /// Comprueba el payload compilado de Windows Media sin invocar su instalador ni modificar
+    /// enlaces. La variante procede exclusivamente de la ubicación/versiones de esta app, nunca
+    /// de un manifiesto observado.
+    func refreshWindowsMediaHealth() async {
+        guard !windowsMediaHealthIsRefreshing else { return }
+        windowsMediaHealthIsRefreshing = true
+        defer { windowsMediaHealthIsRefreshing = false }
+
+        let bundleURL = Bundle.main.bundleURL.standardizedFileURL
+        let applicationVersion = Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleShortVersionString"
+        ) as? String ?? "desconocida"
+        let buildIdentifier = Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleVersion"
+        ) as? String ?? "desconocida"
+        let isTrustedPublicInstallation = bundleURL.path == "/Applications/Regression.app"
+            && applicationVersion == TrustedComponentCatalog.supportedApplicationVersion
+            && buildIdentifier == TrustedComponentCatalog.supportedBuildIdentifier
+        let variant: ComponentArtifactVariant = isTrustedPublicInstallation
+            ? .publicInstalled
+            : .development
+        let descriptor = TrustedComponentCatalog.windowsMediaDescriptor(
+            applicationVersion: applicationVersion,
+            buildIdentifier: buildIdentifier,
+            variant: variant,
+            applicationBundleURL: bundleURL,
+            applicationSupportURL: applicationSupportURL
+        )
+        windowsMediaHealth = await Task.detached(priority: .utility) {
+            ComponentHealthService.evaluate(descriptor)
+        }.value
+    }
+
     func startSteam() async {
         guard let installations else { return }
+        invalidatePhysicalLibraryCustodyAssessment(
+            notice: "La evaluación se descartó porque Steam se está iniciando. Repítela cuando Steam esté cerrado."
+        )
         LifecycleDiagnostics.write("startSteam invocado")
         logger.info("startSteam con \(self.selectedBackend.rawValue)")
         failure = nil
+        libraryFailureDetail = nil
         if runningState.activeBackend != nil {
             showSteam()
             return
@@ -440,6 +492,7 @@ final class RegressionAppModel {
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
         failure = nil
+        libraryFailureDetail = nil
         operation = .preparing("Cerrando Steam")
         statusDetail = "Esperando a que Steam termine de forma segura…"
         do {
@@ -458,7 +511,11 @@ final class RegressionAppModel {
 
     func selectBackend(_ backend: BackendKind) async {
         guard backend != selectedBackend, let installations else { return }
+        invalidatePhysicalLibraryCustodyAssessment(
+            notice: "La evaluación se descartó porque cambió el motor seleccionado."
+        )
         failure = nil
+        libraryFailureDetail = nil
         operation = .switching(backend)
         statusDetail = "Cerrando de forma segura el Steam actual antes de cambiar de motor…"
         let previous = selectedBackend
@@ -481,7 +538,11 @@ final class RegressionAppModel {
 
     func launchGame(_ game: SteamGame) async {
         guard let installations else { return }
+        invalidatePhysicalLibraryCustodyAssessment(
+            notice: "La evaluación se descartó porque se está iniciando un juego. Repítela con Steam cerrado."
+        )
         failure = nil
+        libraryFailureDetail = nil
         operation = .preparing("Iniciando \(game.name)")
         statusDetail = "Registrando la configuración de compatibilidad antes del lanzamiento…"
         var registeredContext: RunContext?
@@ -582,6 +643,8 @@ final class RegressionAppModel {
         alert.addButton(withTitle: "Cancelar")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
+        failure = nil
+        libraryFailureDetail = nil
         operation = .preparing("Unificando la biblioteca")
         statusDetail = "Creando una copia recuperable antes de enlazar steamapps…"
         do {
@@ -613,6 +676,112 @@ final class RegressionAppModel {
         } catch {
             present(error)
         }
+    }
+
+    /// Inspecciona una biblioteca Steam heredada sin modificarla. La ubicación se conserva como
+    /// identidad de ruta para que la evaluación siga siendo posible aunque el comparador ya no
+    /// esté instalado; el destino es propio de Regression y aún no se crea.
+    func assessPhysicalLibraryCustody() async {
+        guard let installations, physicalLibraryCustodyAssessmentTask == nil else { return }
+
+        await refreshRuntimeState()
+        guard runningState.activeBackend == nil else {
+            physicalLibraryCustodyAssessment = nil
+            physicalLibraryCustodyAssessmentNotice =
+                "Cierra Steam antes de evaluar la custodia de la biblioteca."
+            return
+        }
+
+        let legacySteamAppsURL = inheritedSteamAppsURL(for: installations)
+        let regressionOwnedSteamAppsURL = applicationSupportURL
+            .appendingPathComponent("Libraries/Steam/steamapps", isDirectory: true)
+        let assessmentID = UUID()
+        let manager = sharedLibrary
+        let regression = installations.regression
+        let currentRunningState = runningState
+
+        physicalLibraryCustodyAssessment = nil
+        physicalLibraryCustodyAssessmentNotice = nil
+        physicalLibraryCustodyAssessmentIsRunning = true
+        physicalLibraryCustodyAssessmentID = assessmentID
+        physicalLibraryCustodyAssessmentTask = Task { [weak self, manager] in
+            let assessment = await manager.assessPhysicalCustody(
+                regression: regression,
+                legacyIdentity: PhysicalLibraryCustodyIdentity(
+                    legacySteamAppsURL: legacySteamAppsURL
+                ),
+                regressionOwnedSteamAppsURL: regressionOwnedSteamAppsURL,
+                runningState: currentRunningState
+            )
+
+            guard !Task.isCancelled, let self,
+                  self.physicalLibraryCustodyAssessmentID == assessmentID
+            else { return }
+
+            let latestRunningState = await self.coordinator.runningState()
+            let currentLegacySteamAppsURL = self.installations.map(self.inheritedSteamAppsURL)
+            guard latestRunningState.activeBackend == nil,
+                  currentLegacySteamAppsURL?.standardizedFileURL == legacySteamAppsURL.standardizedFileURL
+            else {
+                self.physicalLibraryCustodyAssessment = nil
+                self.physicalLibraryCustodyAssessmentNotice =
+                    "La evaluación se descartó porque Steam o la ubicación de la biblioteca cambiaron."
+                self.physicalLibraryCustodyAssessmentIsRunning = false
+                self.physicalLibraryCustodyAssessmentTask = nil
+                self.physicalLibraryCustodyAssessmentID = nil
+                return
+            }
+
+            self.physicalLibraryCustodyAssessment = assessment
+            self.physicalLibraryCustodyAssessmentNotice = nil
+            self.physicalLibraryCustodyAssessmentIsRunning = false
+            self.physicalLibraryCustodyAssessmentTask = nil
+            self.physicalLibraryCustodyAssessmentID = nil
+        }
+    }
+
+    func cancelPhysicalLibraryCustodyAssessment() {
+        guard physicalLibraryCustodyAssessmentTask != nil
+                || physicalLibraryCustodyAssessment != nil
+        else { return }
+        invalidatePhysicalLibraryCustodyAssessment(notice: "Evaluación de custodia cancelada.")
+    }
+
+    private func invalidatePhysicalLibraryCustodyAssessment(notice: String) {
+        physicalLibraryCustodyAssessmentTask?.cancel()
+        physicalLibraryCustodyAssessmentTask = nil
+        physicalLibraryCustodyAssessmentID = nil
+        physicalLibraryCustodyAssessmentIsRunning = false
+        physicalLibraryCustodyAssessment = nil
+        physicalLibraryCustodyAssessmentNotice = notice
+    }
+
+    private func inheritedSteamAppsURL(for installations: InstallationSnapshot) -> URL {
+        let regressionSteamAppsURL = installations.regression.steamRootURL
+            .appendingPathComponent("steamapps", isDirectory: true)
+        if let destination = try? FileManager.default.destinationOfSymbolicLink(
+            atPath: regressionSteamAppsURL.path
+        ) {
+            if destination.hasPrefix("/") {
+                return URL(fileURLWithPath: destination, isDirectory: true)
+            }
+            return regressionSteamAppsURL.deletingLastPathComponent()
+                .appendingPathComponent(destination, isDirectory: true)
+        }
+        if let observedSource = sharedLibraryAssessment?.crossOverSteamAppsURL,
+           FileManager.default.fileExists(atPath: observedSource.path) {
+            return observedSource
+        }
+        if let crossOver = installations.crossOver {
+            return crossOver.steamRootURL.appendingPathComponent("steamapps", isDirectory: true)
+        }
+
+        // Último recurso para preservar una identidad heredada sin requerir la app comparadora.
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(
+                "Library/Application Support/CrossOver/Bottles/Steam/drive_c/Program Files (x86)/Steam/steamapps",
+                isDirectory: true
+            )
     }
 
     func exportCompatibilityData() async {
@@ -710,6 +879,7 @@ final class RegressionAppModel {
     func shutdown() async {
         guard !shutdownIsComplete else { return }
         logger.notice("Cancelando tareas de monitorización y catálogo")
+        cancelPhysicalLibraryCustodyAssessment()
         let monitoring = monitoringTask
         monitoringTask = nil
         monitoring?.cancel()
@@ -872,9 +1042,40 @@ final class RegressionAppModel {
     func recover(_ recovery: UserFacingFailure.Recovery) async {
         switch recovery {
         case .openCrossOver: openCrossOver()
-        case .chooseRegression: await selectBackend(.regression)
+        case .chooseRegression: await chooseRegressionWithoutLaunching()
         case .refresh: await refreshAll()
         }
+    }
+
+    /// Selecciona el motor propio como recuperación, pero conserva Steam cerrado. La acción de
+    /// recuperación nunca puede convertirse implícitamente en un lanzamiento.
+    private func chooseRegressionWithoutLaunching() async {
+        guard let installations, installations.regression.health == .ready else {
+            await refreshAll()
+            return
+        }
+
+        await refreshRuntimeState()
+        guard runningState.activeBackend == nil else {
+            failure = UserFacingFailure(
+                title: "Cierra Steam antes de cambiar de motor",
+                message: "No se inició ni se cerró ningún proceso.",
+                recovery: .refresh
+            )
+            libraryFailureDetail = nil
+            operation = .error
+            statusDetail = "Cierra la instancia activa de Steam y vuelve a intentarlo."
+            return
+        }
+
+        selectedBackend = .regression
+        UserDefaults.standard.set(BackendKind.regression.rawValue, forKey: "selectedBackend")
+        failure = nil
+        libraryFailureDetail = nil
+        operation = .ready
+        statusDetail = "Regression está seleccionado. Steam permanece cerrado."
+        await refreshGames()
+        await refreshTestReadiness()
     }
 
     private func confirmSteamLaunch(_ launch: BackendLaunch) async throws {
@@ -1429,6 +1630,7 @@ final class RegressionAppModel {
                 message: "Abre CrossOver para renovar o validar la licencia y vuelve a intentarlo.",
                 recovery: .openCrossOver
             )
+            libraryFailureDetail = nil
             operation = .error
         } else {
             present(error)
@@ -1448,6 +1650,11 @@ final class RegressionAppModel {
             message: error.localizedDescription,
             recovery: recovery
         )
+        if case let .unsafeLibraryState(detail)? = error as? RegressionCoreError {
+            libraryFailureDetail = detail
+        } else {
+            libraryFailureDetail = nil
+        }
         operation = .error
         statusDetail = error.localizedDescription
     }

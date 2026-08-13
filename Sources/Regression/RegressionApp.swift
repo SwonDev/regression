@@ -36,6 +36,14 @@ final class RegressionAppDelegate: NSObject, NSApplicationDelegate {
         LifecycleDiagnostics.write("RegressionAppDelegate.applicationDidFinishLaunching")
         NSApplication.shared.setActivationPolicy(.accessory)
 
+        #if DEBUG
+        RegressionVisualFixtureAppearance.applyRequested()
+        let visualFixtureState = RegressionVisualFixtureState.requested
+        if let visualFixtureState {
+            model.applyVisualFixture(visualFixtureState)
+        }
+        #endif
+
         let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         guard let button = statusItem.button else {
             LifecycleDiagnostics.write("No se pudo crear el botón de la barra de menús")
@@ -67,9 +75,13 @@ final class RegressionAppDelegate: NSObject, NSApplicationDelegate {
         popover.behavior = .transient
         popover.animates = true
         popover.contentSize = NSSize(width: 390, height: 620)
-        popover.contentViewController = NSHostingController(
-            rootView: MenuBarView(model: model)
-        )
+        #if DEBUG
+        let rootView = MenuBarView(model: model)
+            .modifier(RegressionVisualFixtureEnvironment())
+        #else
+        let rootView = MenuBarView(model: model)
+        #endif
+        popover.contentViewController = NSHostingController(rootView: rootView)
 
         let presenter = RegressionStatusItemPresenter(
             button: button,
@@ -81,6 +93,21 @@ final class RegressionAppDelegate: NSObject, NSApplicationDelegate {
         self.statusItem = statusItem
         self.popover = popover
         statusItemPresenter = presenter
+
+        #if DEBUG
+        if visualFixtureState != nil {
+            DispatchQueue.main.async {
+                popover.show(
+                    relativeTo: button.bounds,
+                    of: button,
+                    preferredEdge: .minY
+                )
+                popover.contentViewController?.view.window?.makeFirstResponder(nil)
+                NSApplication.shared.activate()
+            }
+            return
+        }
+        #endif
 
         Task { @MainActor [model] in
             LifecycleDiagnostics.write("Bootstrap solicitado")
@@ -122,6 +149,9 @@ final class RegressionAppDelegate: NSObject, NSApplicationDelegate {
                 of: sender,
                 preferredEdge: .minY
             )
+            DispatchQueue.main.async {
+                popover.contentViewController?.view.window?.makeFirstResponder(nil)
+            }
             NSApplication.shared.activate()
         }
     }

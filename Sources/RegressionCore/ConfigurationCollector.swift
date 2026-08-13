@@ -14,19 +14,6 @@ public enum ConfigurationCollector {
         "RetinaMode", "VideoMemorySize", "renderer", "OffscreenRenderingMode",
         "UseGLSL", "MouseWarpOverride", "GrabFullscreen", "Decorated"
     ]
-    private static let graphicsComponents = [
-        "d3d9.dll", "d3d10core.dll", "d3d11.dll", "d3d12.dll",
-        "d3d12core.dll", "dxgi.dll", "winevulkan.dll", "vulkan-1.dll"
-    ]
-    private static let runtimeComponents = [
-        "ucrtbase.dll", "vcruntime140.dll", "vcruntime140_1.dll",
-        "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll",
-        "d3dcompiler_43.dll", "d3dcompiler_47.dll",
-        "xinput1_3.dll", "xinput1_4.dll", "xaudio2_7.dll",
-        "openal32.dll", "mf.dll", "mfplat.dll", "mscoree.dll",
-        "winegstreamer.dll"
-    ]
-
     public static func snapshot(
         bottleURL: URL,
         backend: BackendKind,
@@ -41,8 +28,8 @@ public enum ConfigurationCollector {
         ]
         collectBottleConfiguration(at: bottleURL, into: &values)
         collectRegistryConfiguration(at: bottleURL, into: &values)
-        collectGraphicsComponents(at: bottleURL, into: &values)
-        collectRuntimeComponents(at: bottleURL, into: &values)
+        collectRuntimeModuleInventory(at: bottleURL, into: &values)
+        collectDotNetFrameworks(at: bottleURL, into: &values)
         if let game {
             values.merge(GameRuntimeProfileCatalog.configurationValues(
                 for: game.appID,
@@ -117,23 +104,22 @@ public enum ConfigurationCollector {
         }
     }
 
-    private static func collectGraphicsComponents(at bottleURL: URL, into values: inout [String: String]) {
+    private static func collectRuntimeModuleInventory(
+        at bottleURL: URL,
+        into values: inout [String: String]
+    ) {
         let system32 = bottleURL.appendingPathComponent("drive_c/windows/system32", isDirectory: true)
-        for component in graphicsComponents {
-            let url = system32.appendingPathComponent(component)
+        for item in RuntimeModuleCatalog.observedInventory {
+            let url = system32.appendingPathComponent(item.fileName)
             guard let signature = componentSignature(at: url) else { continue }
-            values["component.graphics.\(component)"] = signature
+            values[item.snapshotKey] = signature
         }
     }
 
-    private static func collectRuntimeComponents(at bottleURL: URL, into values: inout [String: String]) {
-        let system32 = bottleURL.appendingPathComponent("drive_c/windows/system32", isDirectory: true)
-        for component in runtimeComponents {
-            let url = system32.appendingPathComponent(component)
-            guard let signature = componentSignature(at: url) else { continue }
-            values["component.runtime.\(component)"] = signature
-        }
-
+    private static func collectDotNetFrameworks(
+        at bottleURL: URL,
+        into values: inout [String: String]
+    ) {
         let frameworkRoot = bottleURL.appendingPathComponent(
             "drive_c/windows/Microsoft.NET/Framework64",
             isDirectory: true
