@@ -10,6 +10,10 @@
 > comparte con Codex) y `README.md` (arquitectura, build reproducible, diagnósticos, método).
 > Si algo aquí difiere de `AGENTS.md`, manda `AGENTS.md`.
 
+> **Contrato actual del checkout (14 de agosto de 2026):** Regression **1.12.0 (38)**, release
+> estable publicada, y SQLite **v17**. **v1.11.0 (37)** es el baseline histórico; conservar sus
+> gates de transición no autoriza a saltarse la matriz global de futuras releases.
+
 ---
 
 ## 1. Estado conseguido (2026-07-28)
@@ -125,6 +129,27 @@
     sesión no termina hasta que `build/verify-canonical-installation.sh` confirma firma,
     Spotlight, LaunchServices y ausencia de otras instalaciones. Ver
     `docs/canonical-installation.md`.
+20. **Un `perfect` requiere custodia completa de procesos.** El PID del run debe ser la fila
+    representativa exacta, todos los procesos deben estar cerrados y la verificación debe ser
+    posterior. Cambiar después `run_processes` invalida el veredicto y su certificación.
+21. **No ocultar degradaciones de telemetría.** Rotación, truncado, lectura parcial, log ausente o
+    formato inesperado se propagan como incidencias tipadas y acotadas. Una nueva época de log no
+    puede consumir eventos antiguos para satisfacer una intención reciente.
+22. **Windows Media solo se repara para un juego exacto.** Exigir App ID canónico, inventario
+    anclado y fresco con WMA/WMV/ASF, Steam en reposo, payload autorizado, lease exclusivo, WAL,
+    backup, rollback, recibo y verificación posterior. Nunca ejecutar la reparación al abrir Steam
+    sin App ID ni tomar rutas o comandos desde SQLite.
+23. **El runtime público es un conjunto sellado.** Wrapper, wineserver, loader, `ntdll.so`,
+    `wine.inf`, las dos `ntdll.dll` PE y VC++/UCRT deben coincidir con hashes/permisos compilados.
+    Usar rutas absolutas al Wine y `WINESERVER` sellados, fijar `PATH` exactamente a
+    `/usr/bin:/bin:/usr/sbin:/sbin`, borrar `WINESERVERSOCKET` heredado y no aceptar Wine,
+    wineserver ni un `PATH` hostil del entorno.
+24. **El sobre de lanzamiento v17 precede al `spawn`.** Debe vincular App ID, run, preflight
+    reciente, generación fresca de requisitos e identidades cerradas. No guarda comandos ni
+    rutas. La telemetría puede adoptar el run y solo la verificación explícita lo completa. Las
+    políticas puras de retry/recuperación no ejecutan auto-retry ni rollback: ambas mutaciones
+    permanecen bloqueadas hasta integrar receta compilada, verificador y recibo. Steam observado
+    exige gesto; un recibo o telemetría cerrada nunca sustituyen la verificación funcional.
 
 ---
 

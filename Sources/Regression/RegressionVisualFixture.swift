@@ -5,7 +5,9 @@
   import SwiftUI
 
   enum RegressionVisualFixtureAppearance: String {
+    case normal
     case light
+    case dark
     case highContrastLight = "high-contrast-light"
     case highContrastDark = "high-contrast-dark"
 
@@ -21,9 +23,15 @@
     @MainActor
     static func applyRequested() {
       guard let appearance = requested else { return }
+      guard appearance != .normal else {
+        NSApplication.shared.appearance = nil
+        return
+      }
       let name: NSAppearance.Name =
         switch appearance {
+        case .normal: .aqua
         case .light: .aqua
+        case .dark: .darkAqua
         case .highContrastLight: .accessibilityHighContrastAqua
         case .highContrastDark: .accessibilityHighContrastDarkAqua
         }
@@ -57,12 +65,18 @@
               : .standard
           )
         switch appearance {
+        case .normal:
+          sizedContent
         case .light:
           sizedContent.preferredColorScheme(.light)
-        case .highContrastLight, .highContrastDark:
-          // La apariencia accesible se fija en NSApplication. Forzar además el esquema
-          // desde SwiftUI lo degradaba a Aqua/Dark Aqua normal y anulaba el fixture.
-          sizedContent
+        case .dark:
+          sizedContent.preferredColorScheme(.dark)
+        case .highContrastLight:
+          // El contraste y el esquema se fuerzan por separado para que los dos fixtures
+          // accesibles no colapsen en la misma captura de Aqua.
+          sizedContent.preferredColorScheme(.light)
+        case .highContrastDark:
+          sizedContent.preferredColorScheme(.dark)
         case nil:
           sizedContent.preferredColorScheme(.dark)
         }
@@ -101,6 +115,34 @@
     }
   }
 
+  enum RegressionVisualFixtureFocus: String {
+    case primaryAction = "primary-action"
+    case gameSearch = "game-search"
+    case custodyEligible = "custody-eligible"
+
+    private static let argumentPrefix = "--regression-visual-focus="
+
+    static var requested: Self? {
+      CommandLine.arguments.lazy
+        .first { $0.hasPrefix(argumentPrefix) }
+        .map { String($0.dropFirst(argumentPrefix.count)) }
+        .flatMap(Self.init(rawValue:))
+    }
+  }
+
+  enum RegressionVisualFixtureScroll: String {
+    case game
+
+    private static let argumentPrefix = "--regression-visual-scroll="
+
+    static var requested: Self? {
+      CommandLine.arguments.lazy
+        .first { $0.hasPrefix(argumentPrefix) }
+        .map { String($0.dropFirst(argumentPrefix.count)) }
+        .flatMap(Self.init(rawValue:))
+    }
+  }
+
   enum RegressionVisualFixtureState: String {
     case ready
     case working
@@ -109,8 +151,10 @@
     case runtimeReady = "runtime-ready"
     case runtimeMissing = "runtime-missing"
     case runtimeDrifted = "runtime-drifted"
+    case runtimeBrokenWithUpdate = "runtime-broken-with-update"
     case mediaRepairable = "media-repairable"
     case mediaMissing = "media-missing"
+    case windowsMediaGameFailure = "windows-media-game-failure"
     case gptkReady = "gptk-ready"
     case gptkDownload = "gptk-download"
     case gptkLicense = "gptk-license"
@@ -131,6 +175,8 @@
     case custodyValidating = "custody-validating"
     case custodyRollingBack = "custody-rolling-back"
     case custodyIndependent = "custody-independent"
+    case custodyTransferError = "custody-transfer-error"
+    case launchTimeline = "launch-timeline"
 
     private static let argumentPrefix = "--regression-visual-fixture="
 
@@ -143,14 +189,17 @@
 
     var expandsMaintenance: Bool {
       switch self {
-      case .runtimeReady, .runtimeMissing, .runtimeDrifted, .mediaRepairable, .mediaMissing,
-           .gptkReady, .gptkDownload, .gptkLicense, .gptkInstalling, .gptk3Blocked,
-           .gptk3License, .gptk3Authorizing, .preflightWarning, .preflightBlocked,
+      case .runtimeReady, .runtimeMissing, .runtimeDrifted, .runtimeBrokenWithUpdate,
+           .mediaRepairable, .mediaMissing,
+           .preflightWarning, .preflightBlocked,
            .updaterAvailable, .updaterFailed:
         true
       case .ready, .working, .empty, .error, .custodyEligible, .custodyPreparing,
            .custodyPreCutover, .custodyCutover, .custodyVerifying, .custodyPendingValidation,
-           .custodyValidating, .custodyRollingBack, .custodyIndependent:
+           .custodyValidating, .custodyRollingBack, .custodyIndependent, .custodyTransferError,
+           .launchTimeline, .windowsMediaGameFailure, .gptkReady,
+           .gptkDownload, .gptkLicense, .gptkInstalling, .gptk3Blocked, .gptk3License,
+           .gptk3Authorizing:
         false
       }
     }
@@ -182,6 +231,8 @@
       autoLaunchEnabled = false
       regressionReleaseStatus = .upToDate(installedVersion: "1.10.1", checkedAt: Date())
       failure = nil
+      gameLaunchIssueByAppID = [:]
+      launchTimelinesByAppID = [:]
       libraryIndependenceState = .independent
       steamRuntimePrerequisitesHealth = fixtureComponentHealth(
         componentID: TrustedComponentCatalog.steamRuntimePrerequisitesComponentID,
@@ -241,7 +292,8 @@
         )
         games = fixtureGames()
         libraryIndependenceState = .error(
-          "El enlace no coincide con la ruta protegida esperada. No se ha movido ningún archivo."
+          phase: .reconciliation,
+          detail: "El enlace no coincide con la ruta protegida esperada. No se ha movido ningún archivo."
         )
       case .runtimeReady:
         applyReadyVisualFixture()
@@ -261,6 +313,15 @@
           recovery: .reinstallTrustedArtifact,
           issue: .payloadDigestMismatch("lib/wine/x86_64-windows/vcruntime140.dll")
         )
+      case .runtimeBrokenWithUpdate:
+        applyReadyVisualFixture()
+        steamRuntimePrerequisitesHealth = fixtureComponentHealth(
+          componentID: TrustedComponentCatalog.steamRuntimePrerequisitesComponentID,
+          status: .drifted,
+          recovery: .reinstallTrustedArtifact,
+          issue: .payloadDigestMismatch("lib/wine/x86_64-windows/vcruntime140.dll")
+        )
+        applyAvailableRegressionReleaseFixture(root: root)
       case .mediaRepairable:
         applyReadyVisualFixture()
         windowsMediaHealth = fixtureComponentHealth(
@@ -279,6 +340,15 @@
           status: .missing,
           recovery: .reinstallTrustedArtifact,
           issue: .payloadMissing
+        )
+      case .windowsMediaGameFailure:
+        applyReadyVisualFixture()
+        guard let game = games.first else { return }
+        gameLaunchIssueByAppID[game.appID] = GameLaunchIssue(
+          title: "Windows Media necesita atención",
+          message: "Este juego requiere Windows Media; el componente no superó su verificación.",
+          technicalDetail: "Fixture sin reparación ni cambio de Steam.",
+          recovery: .repairRegression
         )
       case .gptkReady:
         applyReadyVisualFixture()
@@ -331,13 +401,14 @@
       case .gptk3Blocked:
         applyReadyVisualFixture()
         protectedAppleGPTKAuthorizationState = .requiresAuthorization
-        failure = UserFacingFailure(
+        guard let game = games.first else { return }
+        gameLaunchIssueByAppID[game.appID] = GameLaunchIssue(
           title: "Apple GPTK 3.0 necesita autorización",
           message: "El componente exacto está protegido, pero todavía falta aceptar su licencia local.",
+          technicalDetail: "Fixture de requisito por juego sin mutar la acción principal de Steam.",
           recovery: .reviewProtectedAppleGPTK
         )
-        operation = .error
-        statusDetail = "Los bytes y enlaces coinciden; falta un recibo local verificable de licencia."
+        statusDetail = "Steam sigue disponible; el requisito de Apple GPTK 3.0 afecta solo al juego seleccionado."
       case .gptk3License:
         applyReadyVisualFixture()
         let sourceComponent = root.appendingPathComponent(
@@ -380,18 +451,7 @@
         testReadiness = fixturePreflight(status: .blocked)
       case .updaterAvailable:
         applyReadyVisualFixture()
-        regressionReleaseStatus = .available(
-          installedVersion: "1.10.1",
-          release: RegressionRelease(
-            version: "1.10.2",
-            pageURL: URL(string: "https://github.com/SwonDev/regression/releases/tag/v1.10.2")
-              ?? root,
-            installerURL: URL(string: "https://github.com/SwonDev/regression/releases/download/v1.10.2/install_regression.sh")
-              ?? root,
-            installerSHA256: String(repeating: "a", count: 64),
-            installerSize: 64_000
-          )
-        )
+        applyAvailableRegressionReleaseFixture(root: root)
       case .updaterFailed:
         applyReadyVisualFixture()
         regressionReleaseStatus = .failed(
@@ -400,6 +460,9 @@
       case .custodyEligible:
         operation = .ready
         statusDetail = "Regression está listo para tomar custodia de la biblioteca."
+        // En este fixture no hay CTA global con defaultAction: Return se entrega al control de
+        // custodia explícitamente enfocado y verifica que no compite con Abrir Steam.
+        protectedAppleGPTKAuthorizationState = .authorizing
         libraryIndependenceState = .eligible
         games = fixtureGames()
       case .custodyPreparing:
@@ -443,6 +506,19 @@
         statusDetail = "Motor y biblioteca propios preparados."
         libraryIndependenceState = .independent
         games = fixtureGames()
+      case .custodyTransferError:
+        operation = .ready
+        statusDetail = "El traslado se detuvo antes de cambiar ningún archivo."
+        libraryIndependenceState = .error(
+          phase: .transfer,
+          detail: "El inventario de la biblioteca cambió antes de confirmar el traslado."
+        )
+        physicalLibraryCustodyAssessmentNotice =
+          "No se movió ningún juego; revisa la fase de traslado antes de reintentar."
+        games = fixtureGames()
+      case .launchTimeline:
+        applyReadyVisualFixture()
+        applyLaunchTimelineFixture()
       }
     }
 
@@ -450,6 +526,63 @@
       operation = .ready
       statusDetail = "Motor propio preparado. Steam está cerrado y no se iniciará en este fixture."
       games = fixtureGames()
+    }
+
+    private func applyAvailableRegressionReleaseFixture(root: URL) {
+      regressionReleaseStatus = .available(
+        installedVersion: "1.10.1",
+        release: RegressionRelease(
+          version: "1.10.2",
+          pageURL: URL(string: "https://github.com/SwonDev/regression/releases/tag/v1.10.2")
+            ?? root,
+          installerURL: URL(string: "https://github.com/SwonDev/regression/releases/download/v1.10.2/install_regression.sh")
+            ?? root,
+          installerSHA256: String(repeating: "a", count: 64),
+          installerSize: 64_000
+        )
+      )
+    }
+
+    private func applyLaunchTimelineFixture() {
+      guard let game = games.first else { return }
+      let envelopeID = UUID()
+      let intent = LaunchEnvelopeIntent(
+        id: envelopeID,
+        runID: UUID(),
+        appID: game.appID,
+        backend: .regression,
+        preflightID: UUID(),
+        preflightCheckedAt: Date(),
+        requirementGeneration: 1,
+        requirementIdentities: [],
+        phase: .awaitingTelemetry
+      )
+      let events = [
+        LaunchEnvelopeEvent(envelopeID: envelopeID, phase: .intentDurable),
+        LaunchEnvelopeEvent(envelopeID: envelopeID, phase: .spawnAuthorized),
+        LaunchEnvelopeEvent(envelopeID: envelopeID, phase: .spawnStarted),
+        LaunchEnvelopeEvent(envelopeID: envelopeID, phase: .awaitingTelemetry),
+      ]
+      let receipt = LaunchEnvelopeReceipt(
+        envelopeID: envelopeID,
+        appID: game.appID,
+        backend: .regression,
+        result: .awaitingTelemetry
+      )
+      let repair = RepairAttempt(
+        sourceRunID: nil,
+        appID: game.appID,
+        executable: "FixtureGame.exe",
+        recipe: .unityExclusiveFullscreenBorderless,
+        recipeVersion: 1,
+        state: .awaitingVerification,
+        notes: "Fixture de historial local sin mutación."
+      )
+      launchTimelinesByAppID[game.appID] = GameLaunchTimeline(
+        appID: game.appID,
+        envelopes: [.init(intent: intent, events: events, receipts: [receipt])],
+        repairAttempts: [repair]
+      )
     }
 
     private func fixtureComponentHealth(

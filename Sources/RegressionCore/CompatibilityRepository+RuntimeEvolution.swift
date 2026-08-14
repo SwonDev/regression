@@ -547,9 +547,9 @@ extension CompatibilityRepository {
         appID: String
     ) throws -> GameTechnologyRequirementProjection {
         let state = try gameTechnologyScanState(appID: appID)
-        let requirements = try storedRuntimeRequirements(appID: appID).map(
-            GameRuntimeRequirementResolver.resolve
-        )
+        let requirements = try storedRuntimeRequirements(appID: appID).map {
+            GameRuntimeRequirementResolver.resolve($0)
+        }
         return GameTechnologyRequirementProjection(
             scanState: state,
             requirements: requirements
@@ -1032,10 +1032,21 @@ extension CompatibilityRepository {
             result: String,
             executable: String?,
             verdict: String?,
-            verifiedAt: Date?
+            verifiedAt: Date?,
+            processID: Int?,
+            canonicalProcessCount: Int,
+            openProcessCount: Int,
+            latestProcessEndedAt: Date?
         )] = try query(
             """
-            SELECT r.started_at, r.ended_at, r.result, r.executable, v.verdict, v.verified_at
+            SELECT r.started_at, r.ended_at, r.result, r.executable, v.verdict, v.verified_at,
+                   r.process_id,
+                   (SELECT COUNT(*) FROM run_processes canonical
+                    WHERE canonical.run_id=r.id AND canonical.process_id=r.process_id
+                      AND canonical.is_representative=1),
+                   (SELECT COUNT(*) FROM run_processes p
+                    WHERE p.run_id=r.id AND p.ended_at IS NULL),
+                   (SELECT MAX(p.ended_at) FROM run_processes p WHERE p.run_id=r.id)
             FROM runs r LEFT JOIN run_verifications v ON v.run_id=r.id
             WHERE r.id=? AND r.app_id=? AND r.backend='regression';
             """,
@@ -1048,7 +1059,11 @@ extension CompatibilityRepository {
                 Self.text(statement, 2),
                 Self.optionalText(statement, 3),
                 Self.optionalText(statement, 4),
-                Self.optionalText(statement, 5).flatMap(dateFormatter.date(from:))
+                Self.optionalText(statement, 5).flatMap(dateFormatter.date(from:)),
+                Self.optionalInt(statement, 6),
+                Self.optionalInt(statement, 7) ?? 0,
+                Self.optionalInt(statement, 8) ?? 0,
+                Self.optionalText(statement, 9).flatMap(dateFormatter.date(from:))
             )
         }
         guard let row = rows.first,
@@ -1057,7 +1072,9 @@ extension CompatibilityRepository {
             throw RegressionCoreError.invalidEvidence("el run de reintento no coincide con el intento")
         }
         if [.awaitingVerification, .verified, .acceptedWithIssues].contains(targetState),
-           row.endedAt == nil || row.result == RunResult.preparing.rawValue {
+           row.endedAt == nil || row.result == RunResult.preparing.rawValue
+            || row.processID == nil || row.canonicalProcessCount != 1
+            || row.openProcessCount != 0 {
             throw RegressionCoreError.invalidEvidence("el reintento debe haber terminado")
         }
         if targetState == .verified {
@@ -1065,7 +1082,8 @@ extension CompatibilityRepository {
                   row.verdict == VerificationVerdict.perfect.rawValue,
                   let endedAt = row.endedAt,
                   let verifiedAt = row.verifiedAt,
-                  verifiedAt >= endedAt else {
+                  verifiedAt >= endedAt,
+                  row.latestProcessEndedAt.map({ verifiedAt >= $0 }) ?? true else {
                 throw RegressionCoreError.invalidEvidence("verified exige veredicto perfecto exacto")
             }
         }
@@ -1074,7 +1092,8 @@ extension CompatibilityRepository {
                   row.verdict == VerificationVerdict.playableWithIssues.rawValue,
                   let endedAt = row.endedAt,
                   let verifiedAt = row.verifiedAt,
-                  verifiedAt >= endedAt else {
+                  verifiedAt >= endedAt,
+                  row.latestProcessEndedAt.map({ verifiedAt >= $0 }) ?? true else {
                 throw RegressionCoreError.invalidEvidence("acceptedWithIssues exige su veredicto exacto")
             }
         }
@@ -1192,13 +1211,12 @@ extension CompatibilityRepository {
                 WHERE source.id=attempt.source_run_id AND source.app_id=attempt.app_id
                   AND source.backend='regression' AND source.result='crashed'
                   AND source.ended_at IS NOT NULL AND source.ended_at<=attempt.created_at
-                  AND (
-                      lower(source.executable)=attempt.executable
-                      OR lower(replace(source.executable, char(92), '/'))
-                         LIKE '%/' || attempt.executable
-                  )
+                  AND \(RepairAttemptSchema.exactBasenamePredicate(
+                      executable: "source.executable",
+                      basename: "attempt.executable"
+                  ))
             ) OR (
-                attempt.retry_run_id IS NOT NULL AND NOT EXISTS (
+                attempt.state!='blocked' AND attempt.retry_run_id IS NOT NULL AND NOT EXISTS (
                     SELECT 1 FROM runs retry
                     WHERE retry.id=attempt.retry_run_id AND retry.app_id=attempt.app_id
                       AND retry.backend='regression' AND retry.id!=attempt.source_run_id
@@ -1211,28 +1229,22 @@ extension CompatibilityRepository {
                     attempt.before_fingerprint IS NULL OR attempt.before_fingerprint=''
                     OR attempt.after_fingerprint IS NULL OR attempt.after_fingerprint=''
                     OR attempt.rollback_manifest_json IS NULL OR attempt.rollback_manifest_json=''
-                    OR attempt.applied_at IS NULL OR attempt.applied_at=''
+                    OR attempt.applied_at IS NULL OR trim(attempt.applied_at)=''
                 )
             ) OR (
                 attempt.state IN ('awaitingVerification','verified','acceptedWithIssues')
-                AND attempt.retry_run_id IS NULL
-            ) OR (
-                attempt.state IN ('verified','acceptedWithIssues')
-                AND (attempt.verification_id IS NULL
-                     OR attempt.verification_id!=attempt.retry_run_id
-                     OR NOT EXISTS (
-                         SELECT 1 FROM run_verifications verification
-                         JOIN runs retry ON retry.id=verification.run_id
-                         WHERE verification.run_id=attempt.verification_id
-                           AND retry.ended_at IS NOT NULL
-                           AND verification.verified_at>=retry.ended_at
-                           AND (
-                               (attempt.state='verified' AND verification.verdict='perfect')
-                               OR (attempt.state='acceptedWithIssues'
-                                   AND verification.verdict='playableWithIssues')
-                           )
-                     ))
-            );
+                AND NOT EXISTS (
+                    SELECT 1 FROM runs retry
+                    WHERE retry.id=attempt.retry_run_id
+                      AND retry.ended_at IS NOT NULL AND retry.result!='preparing'
+                      AND NOT EXISTS (
+                          SELECT 1 FROM run_processes p
+                          WHERE p.run_id=retry.id AND p.ended_at IS NULL
+                      )
+                )
+            ) OR (\(RepairAttemptSchema.completedEvidenceViolationPredicate(
+                attemptAlias: "attempt"
+            )));
             """
         )
         guard invalidPromotions == 0,
@@ -1241,6 +1253,36 @@ extension CompatibilityRepository {
               invalidRepairAttempts == 0 else {
             throw RegressionCoreError.database(
                 "Hay candidatos, métricas o reparaciones sin evidencia suficiente"
+            )
+        }
+    }
+
+    func repairAttemptEvidenceViolationCount() throws -> Int {
+        try scalarInt(
+            """
+            SELECT COUNT(*) FROM repair_attempts attempt
+            WHERE \(RepairAttemptSchema.completedEvidenceViolationPredicate(
+                attemptAlias: "attempt"
+            ));
+            """
+        )
+    }
+
+    func reconcileIncoherentCompletedRepairAttempts(at date: Date = Date()) throws {
+        let updatedAt = dateFormatter.string(from: date)
+        try transaction {
+            try execute(
+                """
+                UPDATE repair_attempts AS attempt
+                SET state='blocked',
+                    notes='Intento bloqueado al reabrir: la evidencia del reintento cambió. '
+                          || notes,
+                    updated_at=?
+                WHERE \(RepairAttemptSchema.completedEvidenceViolationPredicate(
+                    attemptAlias: "attempt"
+                ));
+                """,
+                bindings: [updatedAt]
             )
         }
     }
@@ -1556,6 +1598,72 @@ enum RuntimeEvolutionSchema {
 }
 
 enum RepairAttemptSchema {
+    static func exactBasenamePredicate(executable: String, basename: String) -> String {
+        let normalizedExecutable = "lower(replace(\(executable), char(92), '/'))"
+        return """
+            (
+                \(normalizedExecutable)=\(basename)
+                OR (
+                    length(\(normalizedExecutable))>length(\(basename))
+                    AND substr(\(normalizedExecutable), -length(\(basename)))=\(basename)
+                    AND substr(
+                        \(normalizedExecutable),
+                        -(length(\(basename))+1),
+                        1
+                    )='/'
+                )
+            )
+            """
+    }
+
+    static func completedEvidenceViolationPredicate(attemptAlias: String) -> String {
+        """
+        \(attemptAlias).state IN ('verified','acceptedWithIssues') AND (
+            \(attemptAlias).retry_run_id IS NULL
+            OR \(attemptAlias).verification_id IS NULL
+            OR \(attemptAlias).verification_id!=\(attemptAlias).retry_run_id
+            OR \(attemptAlias).applied_at IS NULL
+            OR trim(\(attemptAlias).applied_at)=''
+            OR NOT EXISTS (
+                SELECT 1 FROM runs retry
+                JOIN run_verifications verification ON verification.run_id=retry.id
+                WHERE retry.id=\(attemptAlias).retry_run_id
+                  AND retry.id!=\(attemptAlias).source_run_id
+                  AND retry.app_id=\(attemptAlias).app_id
+                  AND retry.backend='regression'
+                  AND retry.started_at>\(attemptAlias).applied_at
+                  AND \(exactBasenamePredicate(
+                      executable: "retry.executable",
+                      basename: "\(attemptAlias).executable"
+                  ))
+                  AND retry.process_id IS NOT NULL
+                  AND EXISTS (
+                      SELECT 1 FROM run_processes canonical
+                      WHERE canonical.run_id=retry.id
+                        AND canonical.process_id=retry.process_id
+                        AND canonical.is_representative=1
+                  )
+                  AND retry.ended_at IS NOT NULL
+                  AND retry.result!='preparing'
+                  AND verification.run_id=\(attemptAlias).verification_id
+                  AND verification.verified_at>=retry.ended_at
+                  AND (
+                      (\(attemptAlias).state='verified'
+                       AND verification.verdict='perfect')
+                      OR (\(attemptAlias).state='acceptedWithIssues'
+                          AND verification.verdict='playableWithIssues')
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM run_processes p
+                      WHERE p.run_id=retry.id
+                        AND (p.ended_at IS NULL
+                             OR p.ended_at>verification.verified_at)
+                  )
+            )
+        )
+        """
+    }
+
     static let sql = """
         CREATE TABLE IF NOT EXISTS repair_attempts(
             id TEXT PRIMARY KEY,
@@ -1616,11 +1724,10 @@ enum RepairAttemptSchema {
             WHERE source.id=NEW.source_run_id AND source.app_id=NEW.app_id
               AND source.backend='regression' AND source.result='crashed'
               AND source.ended_at IS NOT NULL AND source.ended_at<=NEW.created_at
-              AND (
-                  lower(source.executable)=NEW.executable
-                  OR lower(replace(source.executable, char(92), '/'))
-                     LIKE '%/' || NEW.executable
-              )
+              AND \(exactBasenamePredicate(
+                  executable: "source.executable",
+                  basename: "NEW.executable"
+              ))
         ) OR (
             NEW.retry_run_id IS NOT NULL AND NOT EXISTS (
                 SELECT 1 FROM runs retry
@@ -1647,11 +1754,10 @@ enum RepairAttemptSchema {
             WHERE source.id=NEW.source_run_id AND source.app_id=NEW.app_id
               AND source.backend='regression' AND source.result='crashed'
               AND source.ended_at IS NOT NULL AND source.ended_at<=NEW.created_at
-              AND (
-                  lower(source.executable)=NEW.executable
-                  OR lower(replace(source.executable, char(92), '/'))
-                     LIKE '%/' || NEW.executable
-              )
+              AND \(exactBasenamePredicate(
+                  executable: "source.executable",
+                  basename: "NEW.executable"
+              ))
         ) OR (
             NEW.retry_run_id IS NOT NULL AND NOT EXISTS (
                 SELECT 1 FROM runs retry
@@ -1695,7 +1801,10 @@ enum RepairAttemptSchema {
             SELECT RAISE(ABORT, 'invalid repair attempt transition');
         END;
 
-        CREATE TRIGGER IF NOT EXISTS repair_attempt_evidence_guard_insert
+        DROP TRIGGER IF EXISTS repair_attempt_evidence_guard_insert;
+        DROP TRIGGER IF EXISTS repair_attempt_evidence_guard_update;
+
+        CREATE TRIGGER repair_attempt_evidence_guard_insert
         BEFORE INSERT ON repair_attempts
         WHEN (
             NEW.state IN ('appliedAwaitingRelaunch','relaunching','awaitingVerification',
@@ -1703,7 +1812,7 @@ enum RepairAttemptSchema {
             AND (NEW.before_fingerprint IS NULL OR NEW.before_fingerprint=''
                  OR NEW.after_fingerprint IS NULL OR NEW.after_fingerprint=''
                  OR NEW.rollback_manifest_json IS NULL OR NEW.rollback_manifest_json=''
-                 OR NEW.applied_at IS NULL OR NEW.applied_at='')
+                 OR NEW.applied_at IS NULL OR trim(NEW.applied_at)='')
         ) OR (
             NEW.state IN ('awaitingVerification','verified','acceptedWithIssues')
             AND NEW.retry_run_id IS NULL
@@ -1717,37 +1826,21 @@ enum RepairAttemptSchema {
                 SELECT 1 FROM runs retry
                 WHERE retry.id=NEW.retry_run_id AND retry.app_id=NEW.app_id
                   AND retry.backend='regression' AND retry.started_at>NEW.applied_at
-                  AND (
-                      lower(retry.executable)=NEW.executable
-                      OR lower(retry.executable) LIKE '%/' || NEW.executable
-                      OR lower(replace(retry.executable, char(92), '/'))
-                         LIKE '%/' || NEW.executable
-                  )
+                  AND \(exactBasenamePredicate(
+                      executable: "retry.executable",
+                      basename: "NEW.executable"
+                  ))
                   AND (
                       NEW.state='relaunching'
-                      OR (retry.ended_at IS NOT NULL AND retry.result!='preparing')
+                      OR (retry.ended_at IS NOT NULL AND retry.result!='preparing'
+                          AND NOT EXISTS (
+                              SELECT 1 FROM run_processes p
+                              WHERE p.run_id=retry.id AND p.ended_at IS NULL
+                          ))
                   )
             )
         ) OR (
-            NEW.state='verified' AND NOT EXISTS (
-                SELECT 1 FROM run_verifications verification
-                JOIN runs retry ON retry.id=verification.run_id
-                WHERE verification.run_id=NEW.retry_run_id
-                  AND verification.run_id=NEW.verification_id
-                  AND verification.verdict='perfect'
-                  AND retry.ended_at IS NOT NULL
-                  AND verification.verified_at>=retry.ended_at
-            )
-        ) OR (
-            NEW.state='acceptedWithIssues' AND NOT EXISTS (
-                SELECT 1 FROM run_verifications verification
-                JOIN runs retry ON retry.id=verification.run_id
-                WHERE verification.run_id=NEW.retry_run_id
-                  AND verification.run_id=NEW.verification_id
-                  AND verification.verdict='playableWithIssues'
-                  AND retry.ended_at IS NOT NULL
-                  AND verification.verified_at>=retry.ended_at
-            )
+            \(completedEvidenceViolationPredicate(attemptAlias: "NEW"))
         ) OR (
             NEW.state='legacyAppliedUnverified'
             AND (NEW.before_fingerprint IS NOT NULL OR NEW.after_fingerprint IS NOT NULL)
@@ -1756,7 +1849,7 @@ enum RepairAttemptSchema {
             SELECT RAISE(ABORT, 'repair attempt lacks required evidence');
         END;
 
-        CREATE TRIGGER IF NOT EXISTS repair_attempt_evidence_guard_update
+        CREATE TRIGGER repair_attempt_evidence_guard_update
         BEFORE UPDATE ON repair_attempts
         WHEN (
             NEW.state IN ('appliedAwaitingRelaunch','relaunching','awaitingVerification',
@@ -1764,7 +1857,7 @@ enum RepairAttemptSchema {
             AND (NEW.before_fingerprint IS NULL OR NEW.before_fingerprint=''
                  OR NEW.after_fingerprint IS NULL OR NEW.after_fingerprint=''
                  OR NEW.rollback_manifest_json IS NULL OR NEW.rollback_manifest_json=''
-                 OR NEW.applied_at IS NULL OR NEW.applied_at='')
+                 OR NEW.applied_at IS NULL OR trim(NEW.applied_at)='')
         ) OR (
             NEW.state IN ('awaitingVerification','verified','acceptedWithIssues')
             AND NEW.retry_run_id IS NULL
@@ -1778,43 +1871,30 @@ enum RepairAttemptSchema {
                 SELECT 1 FROM runs retry
                 WHERE retry.id=NEW.retry_run_id AND retry.app_id=NEW.app_id
                   AND retry.backend='regression' AND retry.started_at>NEW.applied_at
-                  AND (
-                      lower(retry.executable)=NEW.executable
-                      OR lower(retry.executable) LIKE '%/' || NEW.executable
-                      OR lower(replace(retry.executable, char(92), '/'))
-                         LIKE '%/' || NEW.executable
-                  )
+                  AND \(exactBasenamePredicate(
+                      executable: "retry.executable",
+                      basename: "NEW.executable"
+                  ))
                   AND (
                       NEW.state='relaunching'
-                      OR (retry.ended_at IS NOT NULL AND retry.result!='preparing')
+                      OR (retry.ended_at IS NOT NULL AND retry.result!='preparing'
+                          AND NOT EXISTS (
+                              SELECT 1 FROM run_processes p
+                              WHERE p.run_id=retry.id AND p.ended_at IS NULL
+                          ))
                   )
             )
         ) OR (
-            NEW.state='verified' AND NOT EXISTS (
-                SELECT 1 FROM run_verifications verification
-                JOIN runs retry ON retry.id=verification.run_id
-                WHERE verification.run_id=NEW.retry_run_id
-                  AND verification.run_id=NEW.verification_id
-                  AND verification.verdict='perfect'
-                  AND retry.ended_at IS NOT NULL
-                  AND verification.verified_at>=retry.ended_at
-            )
-        ) OR (
-            NEW.state='acceptedWithIssues' AND NOT EXISTS (
-                SELECT 1 FROM run_verifications verification
-                JOIN runs retry ON retry.id=verification.run_id
-                WHERE verification.run_id=NEW.retry_run_id
-                  AND verification.run_id=NEW.verification_id
-                  AND verification.verdict='playableWithIssues'
-                  AND retry.ended_at IS NOT NULL
-                  AND verification.verified_at>=retry.ended_at
-            )
+            \(completedEvidenceViolationPredicate(attemptAlias: "NEW"))
         )
         BEGIN
             SELECT RAISE(ABORT, 'repair attempt lacks required evidence');
         END;
 
-        CREATE TRIGGER IF NOT EXISTS repair_attempt_verification_revoked
+        DROP TRIGGER IF EXISTS repair_attempt_verification_revoked;
+        DROP TRIGGER IF EXISTS repair_attempt_retry_timeline_changed;
+
+        CREATE TRIGGER repair_attempt_verification_revoked
         AFTER UPDATE OF verdict, verified_at ON run_verifications
         BEGIN
             UPDATE repair_attempts
@@ -1823,15 +1903,25 @@ enum RepairAttemptSchema {
                 (state='verified' AND (
                     NEW.verdict!='perfect'
                     OR NEW.verified_at<(SELECT ended_at FROM runs WHERE id=NEW.run_id)
+                    OR EXISTS (
+                        SELECT 1 FROM run_processes p
+                        WHERE p.run_id=NEW.run_id
+                          AND (p.ended_at IS NULL OR p.ended_at>NEW.verified_at)
+                    )
                 ))
                 OR (state='acceptedWithIssues' AND (
                     NEW.verdict!='playableWithIssues'
                     OR NEW.verified_at<(SELECT ended_at FROM runs WHERE id=NEW.run_id)
+                    OR EXISTS (
+                        SELECT 1 FROM run_processes p
+                        WHERE p.run_id=NEW.run_id
+                          AND (p.ended_at IS NULL OR p.ended_at>NEW.verified_at)
+                    )
                 ))
             );
         END;
 
-        CREATE TRIGGER IF NOT EXISTS repair_attempt_retry_timeline_changed
+        CREATE TRIGGER repair_attempt_retry_timeline_changed
         AFTER UPDATE OF ended_at ON runs
         BEGIN
             UPDATE repair_attempts

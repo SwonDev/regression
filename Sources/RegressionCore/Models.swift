@@ -696,7 +696,8 @@ public struct EngineProfile: Codable, Equatable, Identifiable, Sendable {
     public let lastObservedAt: Date?
 
     public var graphicsBackend: String? {
-        values["bottle.CX_GRAPHICS_BACKEND"]
+        values["profile.graphics.backend"]
+            ?? values["bottle.CX_GRAPHICS_BACKEND"]
             ?? values["bottle.CX_D3DMETAL"]
             ?? values["bottle.WINED3DMETAL"]
             ?? values["bottle.CX_DXVK"]
@@ -731,9 +732,22 @@ public struct CompatibilityDatabaseHealth: Codable, Equatable, Sendable {
     public let researchGateCount: Int
     public let researchArtifactCount: Int
     public let preflightReportCount: Int
+    /// Opcionales para decodificar exportaciones anteriores al endurecimiento de evidencia v14.
+    public var perfectEvidenceViolationCount: Int? = nil
+    public var activeCertificationViolationCount: Int? = nil
+    public var repairAttemptEvidenceViolationCount: Int? = nil
+    /// Opcionales para mantener decodificables las exportaciones anteriores al envelope v16.
+    public var launchEnvelopeCount: Int? = nil
+    public var launchEnvelopeEventCount: Int? = nil
+    public var launchEnvelopeReceiptCount: Int? = nil
+    public var launchEnvelopeViolationCount: Int? = nil
 
     public var isHealthy: Bool {
         integrity == "ok" && foreignKeyViolations == 0
+            && (perfectEvidenceViolationCount ?? 0) == 0
+            && (activeCertificationViolationCount ?? 0) == 0
+            && (repairAttemptEvidenceViolationCount ?? 0) == 0
+            && (launchEnvelopeViolationCount ?? 0) == 0
     }
 }
 
@@ -759,6 +773,7 @@ public enum RegressionCoreError: LocalizedError, Sendable {
     case launchFailed(String)
     case shutdownTimedOut(BackendKind)
     case unsafeLibraryState(String)
+    case rendererIneligible([RendererIneligibilityReason])
     case testEnvironmentBlocked(String)
     case invalidEvidence(String)
     case externalCatalog(String)
@@ -786,6 +801,8 @@ public enum RegressionCoreError: LocalizedError, Sendable {
             "\(backend.displayName) no cerró Steam a tiempo. Ciérralo manualmente y vuelve a intentarlo."
         case let .unsafeLibraryState(detail):
             "No se puede unificar la biblioteca de forma segura: \(detail)"
+        case let .rendererIneligible(reasons):
+            "La ruta gráfica no es elegible: \(reasons.map(\.diagnosticCode).joined(separator: ", "))"
         case let .testEnvironmentBlocked(detail):
             "La prueba se ha detenido para no generar un falso diagnóstico: \(detail)"
         case let .invalidEvidence(detail):

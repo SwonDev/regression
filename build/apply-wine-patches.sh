@@ -18,6 +18,8 @@ PATCHES=(
     "$ROOT/patches/wine-26.3.0-macos-linux-uname-sigsys.patch"
 )
 
+LEGACY_EXTERNAL_D3DMETAL_MIGRATION="$ROOT/patches/wine-26.3.0-remove-legacy-external-d3dmetal-env.patch"
+
 [[ -d "$WINE_SOURCE" ]] || {
     echo "ERROR: no existe el árbol Wine esperado: $WINE_SOURCE" >&2
     exit 1
@@ -39,6 +41,26 @@ fi
     exit 1
 }
 
+# Los árboles de trabajo anteriores ya contienen el router base y no pueden
+# reaplicar su hunk completo. Migra primero y de forma exacta el único contrato
+# retirado; una fuente limpia aún no contiene la función y llega sin mutaciones
+# al parche base actualizado.
+loader_source="$WINE_SOURCE/dlls/ntdll/unix/loader.c"
+if rg -q 'REGRESSION_EXTERNAL_D3DMETAL_(EXECUTABLE|WINE_ROOT)' "$loader_source"; then
+    [[ -f "$LEGACY_EXTERNAL_D3DMETAL_MIGRATION" ]] || {
+        echo "ERROR: falta la migración del contrato GPTK heredado" >&2
+        exit 1
+    }
+    git -C "$WINE_SOURCE" apply --check --whitespace=error-all \
+        "$LEGACY_EXTERNAL_D3DMETAL_MIGRATION" || {
+        echo "ERROR: el contrato GPTK heredado no coincide con la migración versionada" >&2
+        exit 1
+    }
+    git -C "$WINE_SOURCE" apply --whitespace=error-all \
+        "$LEGACY_EXTERNAL_D3DMETAL_MIGRATION"
+    echo "Migración aplicada: $(basename "$LEGACY_EXTERNAL_D3DMETAL_MIGRATION")"
+fi
+
 for patch_file in "${PATCHES[@]}"; do
     [[ -f "$patch_file" ]] || {
         echo "ERROR: falta el parche requerido: $patch_file" >&2
@@ -59,11 +81,15 @@ for patch_file in "${PATCHES[@]}"; do
          rg -q 'static void regression_set_graphics_backend\(void\)' \
              "$WINE_SOURCE/dlls/ntdll/unix/loader.c" &&
          rg -q 'regression_builtin_bootstrap_routes' \
+             "$WINE_SOURCE/dlls/ntdll/unix/loader.c" &&
+         rg -q 'REGRESSION_EXTERNAL_D3DMETAL_ROUTE_%u_EXECUTABLE' \
+             "$WINE_SOURCE/dlls/ntdll/unix/loader.c" &&
+         ! rg -q 'REGRESSION_EXTERNAL_D3DMETAL_(EXECUTABLE|WINE_ROOT)' \
              "$WINE_SOURCE/dlls/ntdll/unix/loader.c"; then
         # Los perfiles posteriores añaden rutas dentro del bloque que creó este
         # parche. Eso impide invertir el hunk original aunque su contrato esté
-        # íntegro. Verificar ambos símbolos compilados evita confundirlo con un
-        # parche parcial y mantiene el aplicador idempotente.
+        # íntegro. Verificar los símbolos compilados y la ausencia de la ruta
+        # genérica heredada evita aceptar un parche parcial o inseguro.
         echo "Parche ya aplicado y extendido: $(basename "$patch_file")"
     elif [[ "$(basename "$patch_file")" == "wine-26.3.0-tq2-steam-startup-image.patch" ]] &&
          rg -q 'static WCHAR \*regression_tq2_shipping_image' \

@@ -1315,6 +1315,12 @@ private func custodyValidationAuthority(
         startedAt: startedAt,
         launchMilliseconds: 50
     )
+    try await repository.markProcessEnded(
+        id: runID,
+        processID: 123,
+        endedAt: endedAt,
+        exitCode: 0
+    )
     try await repository.finishRun(
         id: runID,
         endedAt: endedAt,
@@ -1334,6 +1340,12 @@ private func custodyValidationAuthority(
         verifiedAt: endedAt.addingTimeInterval(1)
     )
     try await repository.verifyRun(verification)
+    let sealed = try await repository.sealedPerfectRun(appID: request.appID, runID: runID)
+    guard sealed?.verification?.verdict == .perfect else {
+        throw RegressionCoreError.invalidEvidence(
+            "la fixture de custodia no produjo una ejecución perfecta sellada"
+        )
+    }
     return CustodyValidationAuthority(request: request, repository: repository)
 }
 

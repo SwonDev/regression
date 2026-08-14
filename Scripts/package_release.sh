@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Genera el asset público reproducible sin botella, GPTK, rutas personales ni PE recortados.
+# Genera un asset público verificado por autoridad, sin botella, GPTK, rutas personales ni PE recortados.
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${REGRESSION_RELEASE_VERSION:-1.11.0}"
-BUILD_NUMBER="${REGRESSION_RELEASE_BUILD_NUMBER:-37}"
+VERSION="${REGRESSION_RELEASE_VERSION:-1.12.0}"
+BUILD_NUMBER="${REGRESSION_RELEASE_BUILD_NUMBER:-38}"
 APP="$ROOT/Regression.app"
 APP_NAME="Regression.app"
 OUTPUT_DIR="${REGRESSION_RELEASE_OUTPUT_DIR:-$ROOT/build/release-$VERSION}"
@@ -16,7 +16,7 @@ SOURCE_HAN_ASSET="01_SourceHanSans.ttc.zip"
 SOURCE_HAN_SHA256="a024cf1759494847cd47aae4379bcb3dc530017c709f3f503ee0ed918dd92952"
 SWITCH2BRIDGE_COMMIT="ff2e1a1d99c8529a8f693fa4ab7cf82583cd3d7d"
 SWITCH2BRIDGE_SHA256="f38269217d271db25f4d8eaa34274b8a68ec85711d89277798251709d91b82b0"
-PUBLIC_WINE_BUILD="${REGRESSION_PUBLIC_WINE_BUILD:-$ROOT/build/wine64-dist}"
+PUBLIC_WINE_BUILD="${REGRESSION_PUBLIC_WINE_BUILD:-$ROOT/build/release-1.12.0/wine64-public}"
 PUBLIC_WINE_PREFIX="/Applications/Regression.app/Contents/SharedSupport/wine-root"
 WORK_DIR=""
 
@@ -66,6 +66,33 @@ verify_windows_media_catalog_pin() {
         || fail "El PIN público de Windows Media ($configured_hash) no coincide con el candidato real ($actual_hash)."
 }
 
+verify_release_regular_file_modes() {
+    local app="$1" file mode
+
+    [[ -d "$app" && ! -L "$app" ]] || fail "El bundle público debe ser un directorio físico."
+    [[ "$(stat -f '%Lp' "$app/Contents/Info.plist")" == "644" ]] \
+        || fail "Contents/Info.plist debe ser 0644 antes de sellar el asset."
+
+    while IFS= read -r -d '' file; do
+        mode="$(stat -f '%Lp' "$file")"
+        case "$mode" in
+            644|755) ;;
+            *) fail "El asset público contiene un fichero regular con modo no público: ${file#"$app"/} ($mode)." ;;
+        esac
+    done < <(find "$app" -type f -print0)
+}
+
+normalize_release_regular_file_modes() {
+    local app="$1"
+
+    [[ -f "$app/Contents/Info.plist" && ! -L "$app/Contents/Info.plist" ]] \
+        || fail "Falta Contents/Info.plist físico en el bundle público."
+    # plutil puede conservar el modo privado del fichero de origen. Normalizarlo antes
+    # de codesign evita invalidar la firma al preparar el tar público.
+    chmod 644 "$app/Contents/Info.plist"
+    verify_release_regular_file_modes "$app"
+}
+
 cleanup_path() {
     local target="$1"
     [[ -n "$target" && ( -e "$target" || -L "$target" ) ]] || return 0
@@ -87,6 +114,36 @@ download() {
         --output "$2" "$1"
 }
 
+promote_public_111_stage() {
+    local stage_app="$1" current_bin_dir="$2"
+    [[ -d "$stage_app" && ! -L "$stage_app" ]] \
+        || fail "Falta el staging físico public-1.11."
+    [[ -x "$current_bin_dir/Regression" && -x "$current_bin_dir/regressionctl" ]] \
+        || fail "Faltan los productos Swift Release actuales."
+
+    install -m 755 "$current_bin_dir/Regression" "$stage_app/Contents/MacOS/Regression"
+    install -m 755 "$current_bin_dir/regressionctl" \
+        "$stage_app/Contents/SharedSupport/bin/regressionctl"
+    install -m 755 "$ROOT/Scripts/regression-engine.sh" \
+        "$stage_app/Contents/MacOS/regression-engine"
+    install -m 755 "$ROOT/Scripts/install_apple_gptk_component.sh" \
+        "$stage_app/Contents/SharedSupport/bin/install-apple-gptk-component"
+    install -m 755 "$ROOT/Scripts/install_windows_media_component.sh" \
+        "$stage_app/Contents/SharedSupport/bin/install-windows-media-component"
+
+    # Versión, build, binarios y scripts ascienden juntos y únicamente en staging.
+    plutil -replace CFBundleShortVersionString -string "$VERSION" \
+        "$stage_app/Contents/Info.plist"
+    plutil -replace CFBundleVersion -string "$BUILD_NUMBER" \
+        "$stage_app/Contents/Info.plist"
+    "$ROOT/build/verify-current-release-input.sh" \
+        public-1.11 "$stage_app" "$current_bin_dir" "$ROOT"
+    [[ "$(plutil -extract CFBundleShortVersionString raw "$stage_app/Contents/Info.plist")" == "$VERSION" ]] \
+        || fail "El staging public-1.11 no ascendió a la versión $VERSION."
+    [[ "$(plutil -extract CFBundleVersion raw "$stage_app/Contents/Info.plist")" == "$BUILD_NUMBER" ]] \
+        || fail "El staging public-1.11 no ascendió al build $BUILD_NUMBER."
+}
+
 if [[ "${REGRESSION_RELEASE_MANIFEST_PIN_ONLY:-0}" == "1" ]]; then
     INSTALLER_SOURCE="${REGRESSION_RELEASE_INSTALLER_SOURCE:-$INSTALLER_SOURCE}"
     COMPONENT_HEALTH_SOURCE="${REGRESSION_RELEASE_COMPONENT_HEALTH_SOURCE:-$COMPONENT_HEALTH_SOURCE}"
@@ -106,21 +163,19 @@ if [[ "${REGRESSION_RELEASE_CONTRACT_ONLY:-0}" == "1" ]]; then
 fi
 verify_installer_release_contract "$INSTALLER_SOURCE"
 
-[[ -d "$APP/Contents/SharedSupport/wine-root" ]] || fail "Falta el runtime canónico."
-[[ "$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")" == "$VERSION" ]] \
-    || fail "Regression.app no está empaquetada como versión $VERSION."
-[[ "$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")" == "$BUILD_NUMBER" ]] \
-    || fail "Regression.app no está empaquetada como build $BUILD_NUMBER."
-
 INPUT_STATE="${REGRESSION_RELEASE_INPUT_STATE:-development}"
 case "$INPUT_STATE" in
     development)
+        [[ -d "$APP/Contents/SharedSupport/wine-root" ]] || fail "Falta el runtime canónico."
+        [[ "$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")" == "$VERSION" ]] \
+            || fail "El input de desarrollo no está empaquetado como versión $VERSION."
+        [[ "$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")" == "$BUILD_NUMBER" ]] \
+            || fail "El input de desarrollo no está empaquetado como build $BUILD_NUMBER."
         REGRESSION_APP_PATH="$APP" \
-            "$ROOT/build/verify-protected-state.sh" --release-1.11-development-candidate
+            "$ROOT/build/verify-protected-state.sh" --release-1.12-development-candidate
         ;;
     public-1.11)
-        REGRESSION_APP_PATH="$APP" \
-            "$ROOT/build/verify-public-installed-state.sh" --release-1.11.0
+        # La autoridad pública se materializa desde el asset sellado después de crear WORK_DIR.
         ;;
     *)
         fail "REGRESSION_RELEASE_INPUT_STATE debe ser development o public-1.11."
@@ -132,32 +187,34 @@ WORK_DIR="$(mktemp -d /private/tmp/regression-release.XXXXXX)"
 chmod 700 "$WORK_DIR"
 STAGE="$WORK_DIR/stage"
 mkdir -m 700 "$STAGE"
-ditto "$APP" "$STAGE/Regression.app"
 PUBLIC_APP="$STAGE/Regression.app"
-WINE_ROOT="$PUBLIC_APP/Contents/SharedSupport/wine-root"
 
 if [[ "$INPUT_STATE" == "public-1.11" ]]; then
+    "$ROOT/build/materialize-public-1.11-input.sh" "$PUBLIC_APP"
     swift build -c release -Xswiftc -warnings-as-errors --product Regression
     swift build -c release -Xswiftc -warnings-as-errors --product regressionctl
     CURRENT_BIN_DIR="$(swift build -c release --show-bin-path)"
-    install -m 755 "$CURRENT_BIN_DIR/Regression" "$PUBLIC_APP/Contents/MacOS/Regression"
-    install -m 755 "$CURRENT_BIN_DIR/regressionctl" \
-        "$PUBLIC_APP/Contents/SharedSupport/bin/regressionctl"
-    install -m 755 "$ROOT/Scripts/regression-engine.sh" \
-        "$PUBLIC_APP/Contents/MacOS/regression-engine"
-    install -m 755 "$ROOT/Scripts/install_apple_gptk_component.sh" \
-        "$PUBLIC_APP/Contents/SharedSupport/bin/install-apple-gptk-component"
-    install -m 755 "$ROOT/Scripts/install_windows_media_component.sh" \
-        "$PUBLIC_APP/Contents/SharedSupport/bin/install-windows-media-component"
-    "$ROOT/build/verify-current-release-input.sh" \
-        "$INPUT_STATE" "$PUBLIC_APP" "$CURRENT_BIN_DIR" "$ROOT"
+    promote_public_111_stage "$PUBLIC_APP" "$CURRENT_BIN_DIR"
+else
+    ditto "$APP" "$PUBLIC_APP"
 fi
+WINE_ROOT="$PUBLIC_APP/Contents/SharedSupport/wine-root"
 
-# Wine incorpora el prefijo de instalación en sus binarios de arranque. La app canónica de
-# desarrollo apunta al checkout, mientras que el asset público vive siempre en /Applications.
-# Reconstruir y sustituir solo estas tres piezas conserva los módulos PE y los perfiles ya
-# validados, pero garantiza que una descarga limpia resuelva su propio runtime.
-"$ROOT/build/build-public-wine-runtime.sh"
+[[ "$(plutil -extract CFBundleShortVersionString raw "$PUBLIC_APP/Contents/Info.plist")" == "$VERSION" ]] \
+    || fail "El staging no está empaquetado como versión $VERSION."
+[[ "$(plutil -extract CFBundleVersion raw "$PUBLIC_APP/Contents/Info.plist")" == "$BUILD_NUMBER" ]] \
+    || fail "El staging no está empaquetado como build $BUILD_NUMBER."
+normalize_release_regular_file_modes "$PUBLIC_APP"
+
+# Wine incorpora el prefijo de instalación en sus binarios de arranque. `Regression.app/` es un
+# staging de empaquetado que no se ejecuta: tanto ese staging como el asset público deben llevar el
+# conjunto sellado para /Applications. La serie de parches se aplica de forma
+# idempotente sobre la fuente, pero la release nunca reconstruye este artefacto:
+# build-public-wine-runtime.sh es productor de evidencia/desarrollo separado;
+# este consumidor sólo acredita sus bytes pre-firma antes de copiarlos al staging.
+"$ROOT/build/apply-wine-patches.sh"
+REGRESSION_PUBLIC_WINE_BUILD="$PUBLIC_WINE_BUILD" \
+    "$ROOT/build/verify-sealed-public-runtime-1.12.sh"
 cp "$PUBLIC_WINE_BUILD/tools/wine/wine" "$WINE_ROOT/bin/wine"
 cp "$PUBLIC_WINE_BUILD/loader/wine" "$WINE_ROOT/lib/wine/x86_64-unix/wine"
 cp "$PUBLIC_WINE_BUILD/server/wineserver" "$WINE_ROOT/bin/wineserver"
@@ -369,10 +426,11 @@ while IFS= read -r -d '' candidate; do
     fi
 
     while IFS= read -r rpath; do
-        [[ "$rpath" == /Users/* || "$rpath" == /opt/homebrew/* || "$rpath" == /usr/local/* ]] \
+        [[ "$rpath" == /* && "$rpath" != /usr/lib/* && "$rpath" != /System/Library/* ]] \
             || continue
         install_name_tool -delete_rpath "$rpath" "$candidate"
-    done < <(otool -l "$candidate" | awk '/LC_RPATH/{getline; print $2}')
+    done < <(otool -l "$candidate" \
+        | awk '/LC_RPATH/{rpath=1; next} rpath && $1 == "path" { print $2; rpath=0 }')
 
     if [[ $rewrote -eq 1 ]]; then
         relative="${candidate#"$WINE_ROOT/"}"
@@ -385,7 +443,8 @@ while IFS= read -r -d '' candidate; do
             */Contents/SharedSupport/components/windows-media/*/gstreamer-1.0/*) portable_rpath='@loader_path/../../../../wine-root/lib/runtime' ;;
             *) portable_rpath='@loader_path' ;;
         esac
-        existing_rpaths="$(otool -l "$candidate" | awk '/LC_RPATH/{getline; print $2}')"
+        existing_rpaths="$(otool -l "$candidate" \
+            | awk '/LC_RPATH/{rpath=1; next} rpath && $1 == "path" { print $2; rpath=0 }')"
         grep -Fxq "$portable_rpath" <<<"$existing_rpaths" \
             || install_name_tool -add_rpath "$portable_rpath" "$candidate"
     fi
@@ -424,6 +483,12 @@ while IFS= read -r -d '' candidate; do
     file "$candidate" | grep -q 'Mach-O' || continue
     codesign --force --sign - "$candidate" >/dev/null
 done < <(find "$PUBLIC_APP" -type f -print0)
+
+# Los cuatro Mach-O de arranque se originan en el builder raw sellado, pero la
+# release aplica strip, saneado y firma. Esta puerta reproduce esa transformación
+# en un directorio privado y exige identidad byte a byte antes de emitir el asset.
+REGRESSION_PUBLIC_WINE_BUILD="$PUBLIC_WINE_BUILD" \
+    "$ROOT/build/verify-public-runtime-transform-1.12.sh" --verify "$WINE_ROOT"
 
 # La portabilidad, el strip y la firma cambian los bytes del payload después del manifiesto de
 # desarrollo. Regenerarlo ahora mantiene la autorreparación exacta sin aceptar archivos ajenos.
@@ -484,7 +549,12 @@ INSTALLER="$OUTPUT_DIR/install_regression.sh"
 cleanup_path "$OUTPUT"
 cleanup_path "$CHECKSUM"
 cleanup_path "$INSTALLER"
-COPYFILE_DISABLE=1 tar --xattrs --no-mac-metadata -C "$STAGE" -czf "$OUTPUT" "$APP_NAME"
+# bsdtar 3.5.3 local acepta estos campos pax: se fija la identidad de cada header
+# en 0:0 root:wheel, pero se conservan explícitamente los xattrs de las firmas.
+verify_release_regular_file_modes "$PUBLIC_APP"
+COPYFILE_DISABLE=1 tar --xattrs --no-mac-metadata \
+    --uid 0 --gid 0 --uname root --gname wheel \
+    -C "$STAGE" -czf "$OUTPUT" "$APP_NAME"
 SHA256="$(shasum -a 256 "$OUTPUT" | awk '{print $1}')"
 printf '%s  %s\n' "$SHA256" "$ASSET_NAME" > "$CHECKSUM"
 

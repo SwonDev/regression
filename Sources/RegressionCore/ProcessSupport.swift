@@ -42,22 +42,38 @@ public protocol ProcessLaunching: Sendable {
 public struct ProcessLaunchAuthority: Sendable {
     private let regressionInstallation: RegressionInstallation?
     private let custodyPermit: PhysicalLibraryCustodyMutationPermit?
+    private let normalizedAppID: String?
     private let regressionComponentHealthProvider:
         @Sendable (RegressionInstallation) -> ComponentHealthReport
+    private let rendererLaunchValidator:
+        @Sendable (RegressionInstallation, String?) throws -> Void
+    private let gameLaunchAuthority: CompatibilityRepository.GameLaunchSpawnAuthority?
 
     init(
         regressionInstallation: RegressionInstallation?,
         custodyPermit: PhysicalLibraryCustodyMutationPermit?,
+        normalizedAppID: String?,
         regressionComponentHealthProvider: @escaping @Sendable (
             RegressionInstallation
-        ) -> ComponentHealthReport
+        ) -> ComponentHealthReport,
+        rendererLaunchValidator: @escaping @Sendable (
+            RegressionInstallation,
+            String?
+        ) throws -> Void,
+        gameLaunchAuthority: CompatibilityRepository.GameLaunchSpawnAuthority? = nil
     ) {
         self.regressionInstallation = regressionInstallation
         self.custodyPermit = custodyPermit
+        self.normalizedAppID = normalizedAppID
         self.regressionComponentHealthProvider = regressionComponentHealthProvider
+        self.rendererLaunchValidator = rendererLaunchValidator
+        self.gameLaunchAuthority = gameLaunchAuthority
     }
 
-    func validateImmediatelyBeforeSpawn() throws {
+    /// La última operación esperada antes de `Process.run()`. El único `await` persiste el
+    /// marcador y se completa antes de que exista un proceso; por diseño no hay una carrera
+    /// posterior al spawn que pueda reescribirlo como fallo previo.
+    func validateImmediatelyBeforeSpawn() async throws {
         _ = custodyPermit
         guard let regressionInstallation else { return }
         try CompiledRepairActivationStore.validateLaunchSafety(
@@ -66,6 +82,31 @@ public struct ProcessLaunchAuthority: Sendable {
         try RegressionLaunchComponentGate.requireReady(
             regressionComponentHealthProvider(regressionInstallation)
         )
+        try rendererLaunchValidator(regressionInstallation, normalizedAppID)
+        if let normalizedAppID {
+            guard let gameLaunchAuthority else {
+                throw RegressionCoreError.invalidEvidence(
+                    "un App ID no puede cruzar el límite de spawn sin autoridad de envelope"
+                )
+            }
+            guard try gameLaunchAuthority.appIDForBoundGameLaunch() == normalizedAppID else {
+                throw RegressionCoreError.invalidEvidence(
+                    "la autoridad de spawn pertenece a otro Steam App ID"
+                )
+            }
+            try await gameLaunchAuthority.markSpawnStartedAtProcessBoundary()
+        } else if gameLaunchAuthority != nil {
+            throw RegressionCoreError.invalidEvidence(
+                "Steam general no puede llevar autoridad de spawn de juego"
+            )
+        }
+    }
+
+    /// Se llama únicamente desde el `catch` que rodea a `Process.run()`. Si el marker nunca se
+    /// consumió, es un no-op; si sí se consumió, exige el cierre transaccional del envelope y la
+    /// ejecución antes de dejar que el error salga del boundary.
+    func recordSynchronousProcessRunFailure() async throws {
+        try await gameLaunchAuthority?.recordProcessRunFailureBeforeSpawn()
     }
 }
 
@@ -77,7 +118,7 @@ public extension ProcessLaunching {
         logDirectoryURL: URL,
         authority: ProcessLaunchAuthority
     ) async throws -> BackendLaunch {
-        try authority.validateImmediatelyBeforeSpawn()
+        try await authority.validateImmediatelyBeforeSpawn()
         return try await launch(
             backend: backend,
             executableURL: executableURL,
@@ -209,6 +250,11 @@ public actor ProcessLauncher: ProcessLaunching {
                 && $0.executablePath == executablePath
                 && $0.arguments == arguments
         }) {
+            if authority != nil {
+                throw RegressionCoreError.invalidEvidence(
+                    "un lanzamiento de juego no puede reutilizar un proceso idéntico activo"
+                )
+            }
             return existing.launch
         }
 
@@ -232,9 +278,10 @@ public actor ProcessLauncher: ProcessLaunching {
         process.standardError = handle
         do {
             immediatelyBeforeProcessRun()
-            try authority?.validateImmediatelyBeforeSpawn()
+            try await authority?.validateImmediatelyBeforeSpawn()
             try process.run()
         } catch {
+            try await authority?.recordSynchronousProcessRunFailure()
             try? FileManager.default.removeItem(at: logURL)
             throw error
         }

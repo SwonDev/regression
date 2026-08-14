@@ -4,6 +4,11 @@ Fecha: 2026-08-13 20:51 WEST
 Worktree: `/Users/adrianpereradelgado/Documents/Vibeclaude/Regression-aaa-autonomy`
 Rama: `codex/regression-aaa-autonomy`
 Base: `e47f48796ff0b428b15c2c2e6e4fa4c3512077c8` (`v1.10.1`)
+> **Checkpoint histórico cerrado.** Este documento conserva la promoción de v1.11.0 (37) y no
+> describe la release actual 1.12.0 (38) / SQLite v17. Para el contrato vigente, consultar
+> [`AGENTS.md`](AGENTS.md), [`README.md`](README.md) y
+> [`docs/compatibility-platform.md`](docs/compatibility-platform.md).
+
 Estado: cierre final 1.11.0 preparado para publicación; código, UI, artefacto, instalación y
 matriz funcional instalada validados sobre el mismo corte.
 

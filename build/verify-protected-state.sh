@@ -18,6 +18,7 @@ BEFORE_BORDERLANDS4_PROMOTION=false
 BEFORE_BORDERLANDS4_PROCESS_ISOLATION=false
 BEFORE_1_11_PROMOTION=false
 RELEASE_1_11_DEVELOPMENT_CANDIDATE=false
+RELEASE_1_12_DEVELOPMENT_CANDIDATE=false
 
 for argument in "$@"; do
     case "$argument" in
@@ -60,8 +61,11 @@ for argument in "$@"; do
         --release-1.11-development-candidate)
             RELEASE_1_11_DEVELOPMENT_CANDIDATE=true
             ;;
+        --release-1.12-development-candidate)
+            RELEASE_1_12_DEVELOPMENT_CANDIDATE=true
+            ;;
         *)
-            echo "Uso: $0 [--include-bottle] [--before-dd2-promotion|--before-dragonsword-promotion|--before-hwr2-promotion|--before-tq2-route-unification|--before-windows-media-promotion|--before-windows-media-link-fix|--before-three-games-promotion|--before-three-games-hardening|--before-borderlands4-promotion|--before-borderlands4-process-isolation|--before-1.11-promotion|--release-1.11-development-candidate]" >&2
+            echo "Uso: $0 [--include-bottle] [--before-dd2-promotion|--before-dragonsword-promotion|--before-hwr2-promotion|--before-tq2-route-unification|--before-windows-media-promotion|--before-windows-media-link-fix|--before-three-games-promotion|--before-three-games-hardening|--before-borderlands4-promotion|--before-borderlands4-process-isolation|--before-1.11-promotion|--release-1.11-development-candidate|--release-1.12-development-candidate]" >&2
             exit 64
             ;;
     esac
@@ -80,8 +84,9 @@ $BEFORE_BORDERLANDS4_PROMOTION && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1
 $BEFORE_BORDERLANDS4_PROCESS_ISOLATION && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
 $BEFORE_1_11_PROMOTION && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
 $RELEASE_1_11_DEVELOPMENT_CANDIDATE && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
+$RELEASE_1_12_DEVELOPMENT_CANDIDATE && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
 if (( PROMOTION_BASELINES > 1 )); then
-    echo "ERROR: las verificaciones históricas de promoción son mutuamente excluyentes." >&2
+    echo "ERROR: los modos de verificación protegida son mutuamente excluyentes." >&2
     exit 64
 fi
 TRANSITION_1_11=false
@@ -142,10 +147,205 @@ verify_transition_hash()
     fi
 }
 
+verify_mode()
+{
+    local expected="$1"
+    local relative_path="$2"
+    local path="$APP/$relative_path"
+    local actual
+
+    [[ -f "$path" ]] || {
+        echo "ERROR: falta el recurso protegido: $path" >&2
+        exit 1
+    }
+    actual="$(stat -f '%Lp' "$path")"
+    [[ "$actual" == "$expected" ]] || {
+        echo "ERROR: modo inesperado en el recurso protegido: $relative_path" >&2
+        echo "Esperado: $expected" >&2
+        echo "Actual:   $actual" >&2
+        exit 1
+    }
+}
+
+normalized_macho_sha256()
+{
+    local path="$1"
+    local require_signature="$2"
+    local scratch digest status
+
+    [[ -f "$path" && ! -L "$path" ]] || {
+        echo "ERROR: falta el Mach-O que se debe normalizar: $path" >&2
+        return 1
+    }
+    scratch="$(mktemp -d /private/tmp/regression-macho-authority.XXXXXX)"
+    cp "$path" "$scratch/payload"
+    if [[ "$require_signature" == "true" ]]; then
+        codesign --verify --strict "$path" || {
+            find "$scratch" -depth -delete
+            return 1
+        }
+        codesign --remove-signature "$scratch/payload" || {
+            find "$scratch" -depth -delete
+            return 1
+        }
+    elif codesign --verify --strict "$scratch/payload" >/dev/null 2>&1; then
+        codesign --remove-signature "$scratch/payload" || {
+            find "$scratch" -depth -delete
+            return 1
+        }
+    fi
+
+    set +e
+    digest="$(/usr/bin/python3 - "$scratch/payload" <<'PY'
+import hashlib
+import struct
+import sys
+
+payload = bytearray(open(sys.argv[1], "rb").read())
+if len(payload) < 32 or struct.unpack_from("<I", payload, 0)[0] != 0xFEEDFACF:
+    raise SystemExit("no es un Mach-O fino de 64 bits little-endian")
+
+ncmds, sizeofcmds = struct.unpack_from("<II", payload, 16)
+commands_end = 32 + sizeofcmds
+if commands_end > len(payload):
+    raise SystemExit("cabecera Mach-O truncada")
+
+offset = 32
+linkedit_count = 0
+for _ in range(ncmds):
+    if offset + 8 > commands_end:
+        raise SystemExit("load command truncado")
+    command, command_size = struct.unpack_from("<II", payload, offset)
+    if command_size < 8 or offset + command_size > commands_end:
+        raise SystemExit("load command inválido")
+    if command == 0x19 and command_size >= 72:
+        name = bytes(payload[offset + 8:offset + 24]).split(b"\0", 1)[0]
+        if name == b"__LINKEDIT":
+            # codesign --remove-signature recupera el binario pero deja actualizados
+            # vmsize/filesize por el blob que acaba de retirar. Son los únicos dos
+            # campos de enlace que normalizamos; toda la carga ejecutable permanece
+            # en la huella, incluida la cabecera y los demás load commands.
+            payload[offset + 32:offset + 40] = b"\0" * 8
+            payload[offset + 48:offset + 56] = b"\0" * 8
+            linkedit_count += 1
+    offset += command_size
+
+if offset != commands_end or linkedit_count != 1:
+    raise SystemExit("topología Mach-O inesperada para normalización")
+print(hashlib.sha256(payload).hexdigest())
+PY
+)"
+    status=$?
+    set -e
+    find "$scratch" -depth -delete
+    [[ $status -eq 0 && "$digest" =~ ^[0-9a-f]{64}$ ]] || {
+        echo "ERROR: no se pudo normalizar la firma Mach-O: $path" >&2
+        return 1
+    }
+    printf '%s\n' "$digest"
+}
+
+verify_release_1_12_development_runtime_authority()
+{
+    # Los hashes de ComponentHealth y verify-release-asset son post-strip y post-firma
+    # ad hoc: no son bytes válidos para un bundle de desarrollo firmado con identidad Apple.
+    # La raíz del builder se fija por sus hashes pre-firma medidos en
+    # build/release-1.12.0/evidence/public-runtime-hashes.txt. El gate acredita la
+    # identidad de cada Mach-O firmado frente al builder mediante su huella normalizada
+    # y, de forma complementaria, conserva sus contratos semánticos observables.
+    local runtime_build="${REGRESSION_1_12_DEVELOPMENT_RUNTIME_BUILD:-$ROOT/build/release-1.12.0/wine64-public}"
+    local build_relative app_relative expected expected_normalized actual_normalized
+    local -a runtime_entries=(
+        "668a88221884f4e62f3d40bed4a125a45e2e745c1d56610f8e3a33273a219299:tools/wine/wine:bin/wine"
+        "173c4926f53d0551d85ee6efe48e641867230a27bda7fc6a226ac484012d13fb:server/wineserver:bin/wineserver"
+        "48ae6acb327148f3d8f02afcc93d8f8e61ab333b1dec752918244e58828cf5c9:loader/wine:lib/wine/x86_64-unix/wine"
+        "f3ccf2a487d8999659a1e641b043b916487851c1540362a0a983cdf0fd0bb8cc:dlls/ntdll/ntdll.so:lib/wine/x86_64-unix/ntdll.so"
+    )
+
+    [[ -d "$runtime_build" && ! -L "$runtime_build" ]] || {
+        echo "ERROR: falta el builder sellado del runtime 1.12: $runtime_build" >&2
+        exit 1
+    }
+    for entry in "${runtime_entries[@]}"; do
+        IFS=: read -r expected build_relative app_relative <<< "$entry"
+        [[ -f "$runtime_build/$build_relative" && ! -L "$runtime_build/$build_relative" ]] || {
+            echo "ERROR: falta el binario sellado del builder 1.12: $build_relative" >&2
+            exit 1
+        }
+        actual="$(shasum -a 256 "$runtime_build/$build_relative" | awk '{print $1}')"
+        [[ "$actual" == "$expected" ]] || {
+            echo "ERROR: cambió el binario sellado del builder 1.12: $build_relative" >&2
+            exit 1
+        }
+        verify_mode 755 "Contents/SharedSupport/wine-root/$app_relative"
+        codesign --verify --strict "$WINE_ROOT/$app_relative" || {
+            echo "ERROR: el runtime 1.12 del bundle no conserva una firma verificable: $app_relative" >&2
+            exit 1
+        }
+        expected_normalized="$(normalized_macho_sha256 "$runtime_build/$build_relative" false)" || exit 1
+        actual_normalized="$(normalized_macho_sha256 "$WINE_ROOT/$app_relative" true)" || exit 1
+        [[ "$actual_normalized" == "$expected_normalized" ]] || {
+            echo "ERROR: el runtime firmado no coincide con el builder 1.12: $app_relative" >&2
+            exit 1
+        }
+    done
+
+    # Estas sondas no acreditan identidad: la acreditación se cerró arriba con la
+    # huella normalizada de los bytes Mach-O. Solo protegen contratos observables
+    # que el launcher necesita conservar para Steam y los perfiles aislados.
+    strings -a "$WINE_ROOT/bin/wine" | grep -F \
+        '/Applications/Regression.app/Contents/SharedSupport/wine-root/bin' >/dev/null || {
+        echo "ERROR: el wrapper Wine no conserva el prefijo público 1.12." >&2
+        exit 1
+    }
+    for required in \
+        'REGRESSION_BOOTSTRAP_REDIRECT_COUNT' \
+        'REGRESSION_EXTERNAL_D3DMETAL_ROUTE_COUNT' \
+        'REGRESSION_WINDOWS_MEDIA_PROFILE' \
+        'REGRESSION_PROCESS_DLL_ISOLATION_ROUTE_COUNT' \
+        'compiled-repair-activations-v1.tsv'
+    do
+        strings -a "$WINE_ROOT/lib/wine/x86_64-unix/ntdll.so" | grep -F "$required" >/dev/null || {
+            echo "ERROR: ntdll.so no conserva el contrato 1.12: $required" >&2
+            exit 1
+        }
+    done
+    if strings -a "$WINE_ROOT/lib/wine/x86_64-unix/ntdll.so" \
+        | grep -E 'REGRESSION_EXTERNAL_D3DMETAL_(EXECUTABLE|WINE_ROOT)' >/dev/null; then
+        echo "ERROR: ntdll.so conserva la ruta GPTK genérica heredada." >&2
+        exit 1
+    fi
+}
+
 [[ -d "$WINE_ROOT" ]] || {
     echo "ERROR: falta el runtime propio en $WINE_ROOT" >&2
     exit 1
 }
+
+if $RELEASE_1_12_DEVELOPMENT_CANDIDATE; then
+    verify_hash 5cd7370ade8fe210cdc74e6c58f354e7d9cf4e3833012d6482ff6924a4f09fe9 \
+        "Contents/MacOS/regression-engine"
+    verify_mode 755 "Contents/MacOS/regression-engine"
+    verify_hash 291bc4ecf61dc9c7efdebbe9e8e5737baff594ee4bfa626b90b1647a64333073 \
+        "Contents/SharedSupport/bin/install-apple-gptk-component"
+    verify_mode 755 "Contents/SharedSupport/bin/install-apple-gptk-component"
+    verify_hash b1469e452c6ebe94b27fb64504c31f50e251c24ea571ab8eee32ae5015fd0d5f \
+        "Contents/SharedSupport/bin/install-windows-media-component"
+    verify_mode 755 "Contents/SharedSupport/bin/install-windows-media-component"
+    verify_hash da8ba98d99d157f981ef3a2472dc9d74c9ce4673ef126bdd61851b9dd21dedb3 \
+        "Contents/SharedSupport/components/windows-media/1/manifest.sha256"
+    (
+        cd "$APP/Contents/SharedSupport/components/windows-media/1"
+        shasum -a 256 -c manifest.sha256 >/dev/null
+    ) || {
+        echo "ERROR: el payload Windows Media 1.12 no supera su manifiesto." >&2
+        exit 1
+    }
+    verify_release_1_12_development_runtime_authority
+    codesign --verify --deep --strict "$APP"
+    echo "Candidato de desarrollo 1.12 verificado: scripts actuales, medios y runtime sellado."
+    exit 0
+fi
 
 # Lanzador y módulos propios que protegen Steam, DXMT, entrada y routing por juego.
 if $RELEASE_1_11_DEVELOPMENT_CANDIDATE; then

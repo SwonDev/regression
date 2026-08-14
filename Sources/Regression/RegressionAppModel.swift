@@ -37,6 +37,45 @@ struct UserFacingFailure: Equatable {
     let recovery: Recovery
 }
 
+/// Proyección local, de solo lectura, de la custodia de un lanzamiento. No contiene comandos,
+/// rutas ni secretos: se limita a los envelopes, recibos y reparaciones ya persistidos por Core.
+struct GameLaunchTimeline: Equatable {
+    struct Envelope: Equatable, Identifiable {
+        let intent: LaunchEnvelopeIntent
+        let events: [LaunchEnvelopeEvent]
+        let receipts: [LaunchEnvelopeReceipt]
+
+        var id: UUID { intent.id }
+    }
+
+    let appID: String
+    let envelopes: [Envelope]
+    let repairAttempts: [RepairAttempt]
+
+    var latestEnvelope: Envelope? { envelopes.first }
+}
+
+/// Incidencia de requisito limitada al App ID que la produjo. No altera el CTA de Steam ni el
+/// estado global: los demás juegos conservan su capacidad de lanzamiento.
+struct GameLaunchIssue: Equatable {
+    let title: String
+    let message: String
+    let technicalDetail: String?
+    let recovery: UserFacingFailure.Recovery
+
+    init(
+        title: String,
+        message: String,
+        technicalDetail: String? = nil,
+        recovery: UserFacingFailure.Recovery
+    ) {
+        self.title = title
+        self.message = message
+        self.technicalDetail = technicalDetail
+        self.recovery = recovery
+    }
+}
+
 enum AppleGPTKLicenseReviewSource: Equatable {
     case diskImage(descriptor: AppleGPTKInspectionDescriptor, sourceURL: URL)
     case protectedExisting(descriptor: AppleGPTKExistingComponentInspectionDescriptor)
@@ -131,6 +170,8 @@ final class RegressionAppModel {
     var runningState = RunningBackendState()
     var games: [SteamGame] = []
     var recentRuns: [RunSummary] = []
+    var launchTimelinesByAppID: [String: GameLaunchTimeline] = [:]
+    var gameLaunchIssueByAppID: [String: GameLaunchIssue] = [:]
     var profiles: [CompatibilityProfile] = []
     var engineProfiles: [EngineProfile] = []
     var certifications: [VerifiedGameCertification] = VerifiedGameCatalog.all
@@ -175,6 +216,11 @@ final class RegressionAppModel {
     var autoLaunchEnabled: Bool
     var automaticRegressionUpdatesEnabled: Bool
     private(set) var shutdownIsComplete = false
+    #if DEBUG
+    /// Los fixtures pueden validar Return sin ejecutar Steam ni Wine. Este estado no existe en
+    /// builds de distribución y evita que una prueba de teclado toque un backend real.
+    private(set) var visualFixturePrimaryActionInvocationCount = 0
+    #endif
 
     @ObservationIgnored private let processRunner: ProcessRunner
     @ObservationIgnored private let processLauncher: ProcessLauncher
@@ -288,6 +334,35 @@ final class RegressionAppModel {
         runningState.activeBackend == .regression ? "Mostrar Steam" : "Abrir Steam"
     }
 
+    #if DEBUG
+    /// Consume únicamente la acción principal de un fixture. Así el test de tecla Return prueba
+    /// el control nativo sin iniciar procesos, cambiar botellas ni contactar con Steam.
+    func recordVisualFixturePrimaryActionIfNeeded() -> Bool {
+        guard RegressionVisualFixtureState.requested != nil else { return false }
+        visualFixturePrimaryActionInvocationCount += 1
+        statusDetail = "Fixture: acción principal recibida por teclado. Steam no se ha iniciado."
+        return true
+    }
+
+    /// Ruta aislada para validar Return sobre el CTA de custodia elegible. Nunca crea una copia,
+    /// enlace, backup ni diálogo del sistema; solamente deja una evidencia visible del gesto.
+    func recordVisualFixtureCustodyActionIfNeeded() -> Bool {
+        guard RegressionVisualFixtureState.requested != nil else { return false }
+        statusDetail = "Fixture: revisión de custodia recibida por teclado. No se ha movido ningún archivo."
+        return true
+    }
+    #endif
+
+    /// Tamaño observado durante el último inventario de custodia. Nunca se estima ni se fija en
+    /// la interfaz: la cifra solo acompaña a una propuesta de traslado que ya fue inspeccionada.
+    var physicalLibraryCustodySizeDescription: String? {
+        guard let inventory = physicalLibraryCustodyAssessment?.inventory else { return nil }
+        return ByteCountFormatter.string(
+            fromByteCount: Int64(clamping: inventory.totalRegularFileBytes),
+            countStyle: .file
+        )
+    }
+
     var selectedInstallationDetail: String {
         guard let installations else { return "Detectando…" }
         return installations.regression.healthDetail
@@ -316,8 +391,51 @@ final class RegressionAppModel {
         return failures > 0 ? "\(failures) prueba(s) con incidencias" : "Pendiente de verificación visual"
     }
 
+    func launchTimeline(for game: SteamGame) -> GameLaunchTimeline? {
+        launchTimelinesByAppID[game.appID]
+    }
+
+    func gameLaunchIssue(for game: SteamGame) -> GameLaunchIssue? {
+        gameLaunchIssueByAppID[game.appID]
+    }
+
+    private func presentGameLaunchIssue(
+        appID: String,
+        title: String,
+        message: String,
+        technicalDetail: String? = nil,
+        recovery: UserFacingFailure.Recovery
+    ) {
+        gameLaunchIssueByAppID[appID] = GameLaunchIssue(
+            title: title,
+            message: message,
+            technicalDetail: technicalDetail,
+            recovery: recovery
+        )
+    }
+
+    private func clearGameLaunchIssue(appID: String) {
+        gameLaunchIssueByAppID.removeValue(forKey: appID)
+    }
+
     var regressionUpdateNeedsManualRetry: Bool {
         automaticRegressionUpdateDecision == .manualRetryRequired
+    }
+
+    var hasVerifiedNewerRegressionRelease: Bool {
+        if case .available = regressionReleaseStatus { return true }
+        return false
+    }
+
+    /// La recuperación del runtime usa el mismo instalador autenticado que una actualización.
+    /// Cuando ya hay una release posterior verificada, instalarla repara a la vez el runtime
+    /// sellado; con la misma versión, conserva la ruta explícita de reparación.
+    func repairSteamRuntime() async {
+        if hasVerifiedNewerRegressionRelease {
+            await installAvailableRegressionUpdate()
+        } else {
+            await repairRegressionInstallation()
+        }
     }
 
     func bootstrap() async {
@@ -333,6 +451,12 @@ final class RegressionAppModel {
             let reconciled = try await repository.reconcileInterruptedRuns()
             if reconciled > 0 {
                 logger.notice("Se cerraron \(reconciled) observaciones interrumpidas")
+            }
+            let reconciledEnvelopes = try await repository.reconcileInterruptedLaunchEnvelopes()
+            if !reconciledEnvelopes.isEmpty {
+                logger.notice(
+                    "Se reconciliaron \(reconciledEnvelopes.count) custodias de lanzamiento interrumpidas"
+                )
             }
             let reconciledRepairs = try await repository.reconcileInterruptedRepairAttempts()
             if !reconciledRepairs.isEmpty {
@@ -507,6 +631,10 @@ final class RegressionAppModel {
         windowsMediaHealthIsRefreshing = true
         defer { windowsMediaHealthIsRefreshing = false }
 
+        windowsMediaHealth = await freshWindowsMediaHealthReport()
+    }
+
+    private func freshWindowsMediaHealthReport() async -> ComponentHealthReport {
         let context = trustedComponentContext()
         let descriptor = TrustedComponentCatalog.windowsMediaDescriptor(
             applicationVersion: context.applicationVersion,
@@ -515,7 +643,7 @@ final class RegressionAppModel {
             applicationBundleURL: context.bundleURL,
             applicationSupportURL: applicationSupportURL
         )
-        windowsMediaHealth = await Task.detached(priority: .utility) {
+        return await Task.detached(priority: .utility) {
             ComponentHealthService.evaluate(descriptor)
         }.value
     }
@@ -573,31 +701,93 @@ final class RegressionAppModel {
         return report.status != .ready
     }
 
-    func repairWindowsMediaComponent() async {
-        guard let report = windowsMediaHealth else { return }
-        switch report.recovery {
-        case .createExternalLink, .restoreExternalLinkAfterBackup:
-            break
-        case .none, .reinstallTrustedArtifact, .provideUserSource,
-             .installSupportedApplicationBuild:
-            openOfficialRegressionRelease()
+    /// Solo se invoca desde un gesto de lanzamiento de un juego concreto. No hay reparación
+    /// global de multimedia: la autoridad incorpora el App ID y la evidencia fresca del juego.
+    func repairWindowsMediaComponent(appID: String) async {
+        let authorizedAppID = appID
+        guard let authorization = WindowsMediaComponentRepairAuthorization(
+            explicitAppID: authorizedAppID
+        ) else { return }
+        let report = await freshWindowsMediaHealthReport()
+        windowsMediaHealth = report
+        guard let installation = installations?.regression else { return }
+        guard let projection = try? await GameTechnologyEvidenceScanner.refreshProjection(
+            appID: authorization.appID,
+            steamRootURL: installation.steamRootURL,
+            repository: repository
+        ) else {
+            presentGameLaunchIssue(
+                appID: authorization.appID,
+                title: "Windows Media necesita evidencia nueva",
+                message: "Regression no reparará Windows Media sin un inventario actual de este juego.",
+                recovery: .refresh
+            )
+            return
+        }
+        runningState = await coordinator.runningState()
+        let plan = WindowsMediaComponentRepairPlanner.plan(
+            projection: projection,
+            health: report,
+            authorization: authorization,
+            runtimeIsIdle: runningState.activeBackend == nil
+        )
+        guard case .repair = plan else {
+            if plan == .blocked(.runtimeActive) {
+                presentGameLaunchIssue(
+                    appID: authorization.appID,
+                    title: "Cierra Steam antes de reparar Windows Media",
+                    message: "Regression no cambiará el enlace multimedia mientras Steam o un juego estén activos.",
+                    recovery: .refresh
+                )
+            } else if plan != .notRequired {
+                presentGameLaunchIssue(
+                    appID: authorization.appID,
+                    title: "Windows Media no puede repararse automáticamente",
+                    message: "La evidencia del juego está obsoleta o el payload sellado necesita reinstalación.",
+                    recovery: .repairRegression
+                )
+            }
             return
         }
         guard runningState.activeBackend == nil else {
-            presentComponentFailure(
+            presentGameLaunchIssue(
+                appID: authorization.appID,
                 title: "Cierra Steam antes de reparar Windows Media",
                 message: "Regression no cambiará el enlace multimedia mientras Steam o un juego estén activos.",
                 recovery: .refresh
             )
             return
         }
-        guard let installation = installations?.regression else { return }
+        let lease: WindowsMediaRepairLease
+        do {
+            runningState = await coordinator.runningState()
+            lease = try WindowsMediaRepairInterlock.issueRepairLease(
+                appID: authorization.appID,
+                ownerPID: getpid(),
+                applicationSupportURL: applicationSupportURL,
+                runtimeIsIdle: runningState.activeBackend == nil
+            )
+        } catch {
+            presentGameLaunchIssue(
+                appID: authorization.appID,
+                title: "Windows Media no obtuvo reposo exclusivo",
+                message: "Steam empezó a ejecutarse o existe otra reparación activa.",
+                recovery: .refresh
+            )
+            return
+        }
         let installerURL = installation.applicationURL.appendingPathComponent(
             "Contents/SharedSupport/bin/install-windows-media-component",
             isDirectory: false
         )
         guard FileManager.default.isExecutableFile(atPath: installerURL.path) else {
-            presentComponentFailure(
+            try? WindowsMediaRepairInterlock.release(
+                token: lease.token,
+                ownerPID: lease.ownerPID,
+                applicationSupportURL: applicationSupportURL
+            )
+            presentGameLaunchIssue(
+                appID: authorization.appID,
                 title: "No se pudo reparar Windows Media",
                 message: "Falta el reparador firmado de esta instalación.",
                 recovery: .repairRegression
@@ -609,21 +799,41 @@ final class RegressionAppModel {
         statusDetail = "Regression está restaurando el enlace local con backup y verificación final."
         let result: ProcessResult
         do {
-            result = try await processRunner.run(executableURL: installerURL)
+            result = try await processRunner.run(
+                executableURL: installerURL,
+                arguments: [
+                    "--app-id", authorization.appID,
+                    "--lease-token", lease.token,
+                    "--lease-owner-pid", String(lease.ownerPID),
+                ],
+                environment: nil
+            )
         } catch {
-            presentComponentFailure(
+            try? WindowsMediaRepairInterlock.release(
+                token: lease.token,
+                ownerPID: lease.ownerPID,
+                applicationSupportURL: applicationSupportURL
+            )
+            presentGameLaunchIssue(
+                appID: authorization.appID,
                 title: "No se pudo reparar Windows Media",
                 message: error.localizedDescription,
                 recovery: .refresh
             )
             return
         }
+        try? WindowsMediaRepairInterlock.release(
+            token: lease.token,
+            ownerPID: lease.ownerPID,
+            applicationSupportURL: applicationSupportURL
+        )
         guard result.exitCode == 0 else {
             let detail = [result.standardError, result.standardOutput]
                 .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
                 .map { PrivacySanitizer.redactedLogExcerpt($0) }
                 ?? "El reparador terminó con código \(result.exitCode)."
-            presentComponentFailure(
+            presentGameLaunchIssue(
+                appID: authorization.appID,
                 title: "No se pudo reparar Windows Media",
                 message: detail,
                 recovery: .refresh
@@ -631,8 +841,63 @@ final class RegressionAppModel {
             return
         }
         await refreshWindowsMediaHealth()
+        guard windowsMediaHealth?.status == .ready else {
+            presentGameLaunchIssue(
+                appID: authorization.appID,
+                title: "Windows Media no superó la verificación posterior",
+                message: "La reparación no concede autoridad de lanzamiento hasta que ComponentHealth quede listo.",
+                recovery: .repairRegression
+            )
+            return
+        }
         operation = runningState.activeBackend.map(AppOperation.running) ?? .ready
         statusDetail = "Windows Media se reparó y verificó correctamente."
+        clearGameLaunchIssue(appID: authorization.appID)
+    }
+
+    private func ensureWindowsMediaReadyForLaunch(appID: String) async -> Bool {
+        guard let authorization = WindowsMediaComponentRepairAuthorization(
+            explicitAppID: appID
+        ) else { return false }
+        guard let installation = installations?.regression else { return false }
+        guard let projection = try? await GameTechnologyEvidenceScanner.refreshProjection(
+            appID: appID,
+            steamRootURL: installation.steamRootURL,
+            repository: repository
+        ) else {
+            presentGameLaunchIssue(
+                appID: appID,
+                title: "No se pudo actualizar la evidencia del juego",
+                message: "Regression no reparará Windows Media sin un inventario anclado y actual.",
+                recovery: .refresh
+            )
+            return false
+        }
+        let report = await freshWindowsMediaHealthReport()
+        windowsMediaHealth = report
+        runningState = await coordinator.runningState()
+        let plan = WindowsMediaComponentRepairPlanner.plan(
+            projection: projection,
+            health: report,
+            authorization: authorization,
+            runtimeIsIdle: runningState.activeBackend == nil
+        )
+        switch plan {
+        case .notRequired:
+            clearGameLaunchIssue(appID: appID)
+            return true
+        case .repair:
+            await repairWindowsMediaComponent(appID: appID)
+            return windowsMediaHealth?.status == .ready
+        case .blocked:
+            presentGameLaunchIssue(
+                appID: appID,
+                title: "Windows Media necesita atención",
+                message: "La evidencia o la salud del componente no autoriza reparar este juego.",
+                recovery: .refresh
+            )
+            return false
+        }
     }
 
     func openOfficialRegressionRelease() {
@@ -1320,7 +1585,7 @@ final class RegressionAppModel {
         operation = .preparing("Iniciando Steam de Regression")
         statusDetail = "Regression está verificando el runtime y la botella antes de abrir Steam."
         do {
-            let launch = try await coordinator.launchSteam(
+            let launch = try await coordinator.launchSteamGeneral(
                 backend: selectedBackend,
                 installations: installations
             )
@@ -1378,6 +1643,7 @@ final class RegressionAppModel {
         guard let installations else { return }
         guard await ensureSteamRuntimeReadyForLaunch() else { return }
         guard await ensureAppleGPTKReadyForLaunch(appID: game.appID) else { return }
+        guard await ensureWindowsMediaReadyForLaunch(appID: game.appID) else { return }
         let validationLease = libraryIndependenceState == .validating
             ? physicalLibraryCustodyValidationLease
             : nil
@@ -1391,6 +1657,7 @@ final class RegressionAppModel {
         operation = .preparing("Iniciando \(game.name)")
         statusDetail = "Registrando la configuración de compatibilidad antes del lanzamiento…"
         var registeredContext: RunContext?
+        var launchEnvelopeID: UUID?
         do {
             if let active = runningState.activeBackend, active != .regression {
                 presentExternalSteamConflict()
@@ -1440,11 +1707,50 @@ final class RegressionAppModel {
             try await telemetry.registerLaunchIntent(context: context, bottleURL: metadata.bottleURL)
             registeredContext = context
             try await repository.recordPreflight(preflightReport, forRunID: context.id)
-            _ = try await coordinator.launchSteam(
+            // El envelope se prepara contra una instantánea recién verificada. No decide ni
+            // ejecuta reparaciones: limita lo que ya puede solicitar el gesto explícito de este
+            // juego y deja un recibo local antes de que Steam reciba -applaunch.
+            await refreshComponentHealth()
+            guard let runtimeHealth = steamRuntimePrerequisitesHealth else {
+                throw RegressionCoreError.invalidEvidence("el runtime no produjo una salud verificable")
+            }
+            let requirements = try await GameTechnologyEvidenceScanner.refreshProjection(
+                appID: game.appID,
+                steamRootURL: installations.regression.steamRootURL,
+                repository: repository
+            )
+            try RendererLaunchGate.validate(
+                installation: installations.regression,
+                appID: game.appID
+            )
+            let envelope = try LaunchEnvelopeService().prepare(
+                LaunchEnvelopeRequest(
+                    appID: game.appID,
+                    backend: selectedBackend,
+                    runID: context.id,
+                    preflight: preflightReport,
+                    requirements: requirements,
+                    componentHealth: LaunchEnvelopeComponentHealth(
+                        runtime: runtimeHealth,
+                        windowsMedia: windowsMediaHealth
+                    ),
+                    rendererIsEligible: true
+                )
+            )
+            try await repository.recordLaunchEnvelope(envelope)
+            launchEnvelopeID = envelope.id
+            try await repository.authorizeLaunchEnvelopeSpawn(id: envelope.id)
+            let spawnAuthority = try await repository.gameLaunchSpawnAuthority(for: envelope.id)
+            _ = try await coordinator.launchGame(
                 backend: selectedBackend,
                 installations: installations,
-                appID: game.appID,
+                spawnAuthority: spawnAuthority,
                 custodyValidationLease: validationLease
+            )
+            try await repository.advanceLaunchEnvelopeWithReceipt(
+                id: envelope.id,
+                to: .awaitingTelemetry,
+                result: .awaitingTelemetry
             )
             operation = .running(selectedBackend)
             if validationLease != nil {
@@ -1454,19 +1760,73 @@ final class RegressionAppModel {
                 ? "Solicitud enviada a Steam. Regression observará el resultado localmente."
                 : "Solicitud enviada con \(preflightReport.warningCount) aviso(s) documentados en el diagnóstico previo."
         } catch {
-            if let registeredContext {
-                do {
-                    try await telemetry.cancelLaunchIntent(
+            var durablyClosedBeforeSpawn = false
+            if let launchEnvelopeID {
+                durablyClosedBeforeSpawn = await reconcileFailedLaunchEnvelope(id: launchEnvelopeID)
+            }
+            let crossedSpawnBoundary: Bool
+            if let launchEnvelopeID,
+               let envelope = try? await repository.launchEnvelope(id: launchEnvelopeID) {
+                switch envelope.phase {
+                case .spawnStarted, .awaitingTelemetry, .awaitingVerification, .completed,
+                     .rollbackPending, .rolledBack:
+                    crossedSpawnBoundary = true
+                case .intentDurable, .spawnAuthorized, .failedBeforeSpawn:
+                    crossedSpawnBoundary = false
+                }
+            } else {
+                crossedSpawnBoundary = false
+            }
+            if let registeredContext, !crossedSpawnBoundary {
+                // Un envelope ya cerrado terminó el run en la misma transacción; si el
+                // fallo precedió al envelope, TelemetryCoordinator conserva ese cierre.
+                if durablyClosedBeforeSpawn {
+                    await telemetry.discardLaunchIntentAfterDurableFailure(context: registeredContext)
+                } else if launchEnvelopeID == nil {
+                    try? await telemetry.cancelLaunchIntent(
                         context: registeredContext,
-                        reason: error.localizedDescription
-                    )
-                } catch {
-                    logger.error(
-                        "No se pudo cerrar la intención fallida de telemetría: \(error.localizedDescription, privacy: .public)"
+                        reason: "El lanzamiento falló antes de crear su envelope durable."
                     )
                 }
             }
-            presentLaunchError(error)
+            if launchEnvelopeID != nil, !durablyClosedBeforeSpawn, !crossedSpawnBoundary {
+                presentLaunchError(
+                    RegressionCoreError.database(
+                        "El lanzamiento falló y su cierre durable queda pendiente de recuperación: \(error.localizedDescription)"
+                    )
+                )
+            } else {
+                presentLaunchError(error)
+            }
+        }
+    }
+
+    /// Cierra exclusivamente los envelopes que no alcanzaron el spawn. Si el proceso ya empezó,
+    /// el historial queda esperando telemetría; ningún catch puede convertirlo en éxito ni crear
+    /// una verificación funcional.
+    private func reconcileFailedLaunchEnvelope(id: UUID) async -> Bool {
+        do {
+            guard let envelope = try await repository.launchEnvelope(id: id) else { return false }
+            switch envelope.phase {
+            case .intentDurable, .spawnAuthorized:
+                try await repository.failLaunchEnvelopeBeforeSpawn(id: id)
+                return true
+            case .spawnStarted:
+                try await repository.advanceLaunchEnvelopeWithReceipt(
+                    id: id,
+                    to: .awaitingTelemetry,
+                    result: .awaitingTelemetry
+                )
+                return false
+            case .awaitingTelemetry, .awaitingVerification, .completed, .failedBeforeSpawn,
+                 .rollbackPending, .rolledBack:
+                return envelope.phase == .failedBeforeSpawn
+            }
+        } catch {
+            logger.error(
+                "No se pudo reconciliar el envelope fallido: \(error.localizedDescription, privacy: .public)"
+            )
+            return false
         }
     }
 
@@ -1475,7 +1835,8 @@ final class RegressionAppModel {
         await refreshRuntimeState()
         guard runningState.activeBackend == nil else {
             libraryIndependenceState = .error(
-                "Cierra Steam antes de trasladar la biblioteca."
+                phase: .transfer,
+                detail: "Cierra Steam antes de trasladar la biblioteca."
             )
             return
         }
@@ -1483,9 +1844,10 @@ final class RegressionAppModel {
         libraryIndependenceState = .preCutover
         let alert = NSAlert()
         alert.messageText = "Trasladar los juegos a Regression"
+        let observedSize = physicalLibraryCustodySizeDescription.map { " ( \($0) observados)" } ?? ""
         alert.informativeText =
-            "La única carpeta física steamapps se trasladará a la botella propia de Regression. "
-            + "No se copiarán 110 GB, las botellas no se compartirán y la instalación anterior "
+            "La única carpeta física steamapps\(observedSize) se trasladará a la botella propia de Regression. "
+            + "No se copiarán archivos, las botellas no se compartirán y la instalación anterior "
             + "quedará sin juegos. El cambio se verificará antes de pedirte una prueba con Steam."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Trasladar sin duplicar")
@@ -1544,7 +1906,7 @@ final class RegressionAppModel {
             UserDefaults.standard.set(BackendKind.regression.rawValue, forKey: "selectedBackend")
             await refreshGames()
         } catch {
-            libraryIndependenceState = .error(error.localizedDescription)
+            libraryIndependenceState = .error(phase: .transfer, detail: error.localizedDescription)
             present(error)
         }
     }
@@ -1570,7 +1932,7 @@ final class RegressionAppModel {
             libraryIndependenceState = .validating
             operation = .preparing("Abriendo Steam para validar")
             statusDetail = "Iniciando exclusivamente el Steam de Regression…"
-            let launch = try await coordinator.launchSteam(
+            let launch = try await coordinator.launchSteamGeneral(
                 backend: .regression,
                 installations: installations,
                 custodyValidationLease: lease
@@ -1585,7 +1947,7 @@ final class RegressionAppModel {
                 statusDetail =
                     "Steam no se abrió para validar: \(error.localizedDescription)"
             } else {
-                libraryIndependenceState = .error(error.localizedDescription)
+                libraryIndependenceState = .error(phase: .validation, detail: error.localizedDescription)
             }
             present(error)
         }
@@ -1594,7 +1956,8 @@ final class RegressionAppModel {
     func finalizePhysicalLibraryCustodyValidation() async {
         guard let installations, let lease = physicalLibraryCustodyValidationLease else {
             libraryIndependenceState = .error(
-                "No existe una autorización activa para finalizar la validación."
+                phase: .validation,
+                detail: "No existe una autorización activa para finalizar la validación."
             )
             return
         }
@@ -1725,7 +2088,10 @@ final class RegressionAppModel {
 
         await refreshRuntimeState()
         guard runningState.activeBackend == nil else {
-            libraryIndependenceState = .error("Cierra Steam antes de restaurar la biblioteca.")
+            libraryIndependenceState = .error(
+                phase: .rollback,
+                detail: "Cierra Steam antes de restaurar la biblioteca."
+            )
             return
         }
         await continuePhysicalLibraryCustodyRollback(installations: installations)
@@ -1753,7 +2119,7 @@ final class RegressionAppModel {
             statusDetail = "La ubicación anterior se restauró sin duplicar los juegos."
             await refreshGames()
         } catch {
-            libraryIndependenceState = .error(error.localizedDescription)
+            libraryIndependenceState = .error(phase: .rollback, detail: error.localizedDescription)
             present(error)
         }
     }
@@ -1771,7 +2137,8 @@ final class RegressionAppModel {
             physicalLibraryCustodyAssessmentNotice =
                 "Cierra Steam antes de evaluar la custodia de la biblioteca."
             libraryIndependenceState = .error(
-                "Cierra Steam antes de evaluar la custodia de la biblioteca."
+                phase: .assessment,
+                detail: "Cierra Steam antes de evaluar la custodia de la biblioteca."
             )
             return
         }
@@ -1809,7 +2176,8 @@ final class RegressionAppModel {
                 self.physicalLibraryCustodyAssessmentNotice =
                     "La evaluación se descartó porque Steam o la ubicación de la biblioteca cambiaron."
                 self.libraryIndependenceState = .error(
-                    "Steam o la ubicación de la biblioteca cambiaron durante el inventario."
+                    phase: .assessment,
+                    detail: "Steam o la ubicación de la biblioteca cambiaron durante el inventario."
                 )
                 self.physicalLibraryCustodyAssessmentIsRunning = false
                 self.physicalLibraryCustodyAssessmentTask = nil
@@ -1855,7 +2223,7 @@ final class RegressionAppModel {
         case .validating: .validating
         case .rollingBack: .rollingBack
         case .independent: .independent
-        case let .blocked(reason): .error(reason)
+        case let .blocked(reason): .error(phase: .reconciliation, detail: reason)
         }
         if libraryIndependenceState != nextState {
             libraryIndependenceState = nextState
@@ -1948,7 +2316,7 @@ final class RegressionAppModel {
         )
 
         do {
-            try await repository.verifyRun(verification)
+            _ = try await repository.verifyRunAndCompleteEnvelope(verification)
             await refreshStoredData(includeHealth: true)
             statusDetail = verdict == .perfect
                 ? "\(run.gameName) quedó blindado de forma persistente con Regression."
@@ -2001,6 +2369,12 @@ final class RegressionAppModel {
             try await repository.reconcileInterruptedRuns(
                 reason: "Regression se cerró antes de recibir el cierre del proceso."
             )
+            let reconciledEnvelopes = try await repository.reconcileInterruptedLaunchEnvelopes()
+            if !reconciledEnvelopes.isEmpty {
+                logger.notice(
+                    "Se reconciliaron \(reconciledEnvelopes.count) custodias de lanzamiento al cerrar"
+                )
+            }
             try await repository.close()
             logger.notice("Base local cerrada limpiamente")
         } catch {
@@ -2206,14 +2580,18 @@ final class RegressionAppModel {
         guard let requiredVersion = GameRuntimeProfileCatalog.requiredAppleGPTKVersion(
             for: appID,
             backend: selectedBackend
-        ) else { return true }
+        ) else {
+            clearGameLaunchIssue(appID: appID)
+            return true
+        }
 
         if requiredVersion == .version3 {
             if protectedAppleGPTKHealth == nil {
                 await refreshComponentHealth()
             }
             guard protectedAppleGPTKHealth?.status == .ready else {
-                presentComponentFailure(
+                presentGameLaunchIssue(
+                    appID: appID,
                     title: "Este juego necesita Apple GPTK 3.0",
                     message: "Regression no inició el juego porque falta su generación D3DMetal exacta. Apple GPTK 4.0b2 no es intercambiable con el perfil blindado.",
                     technicalDetail: "El payload protegido 3.0 no supera su catálogo compilado de archivos y enlaces.",
@@ -2224,7 +2602,8 @@ final class RegressionAppModel {
 
             await refreshProtectedAppleGPTKAuthorizationStatus()
             guard protectedAppleGPTKAuthorizationState == .ready else {
-                presentComponentFailure(
+                presentGameLaunchIssue(
+                    appID: appID,
                     title: "Apple GPTK 3.0 necesita autorización",
                     message: "Los bytes coinciden, pero Regression no ejecutará este componente de Apple sin un recibo local verificable de licencia.",
                     technicalDetail: "Revisa la licencia exacta del componente protegido antes de autorizarlo.",
@@ -2232,19 +2611,25 @@ final class RegressionAppModel {
                 )
                 return false
             }
+            clearGameLaunchIssue(appID: appID)
             return true
         }
 
-        if appleGPTKState == .ready { return true }
+        if appleGPTKState == .ready {
+            clearGameLaunchIssue(appID: appID)
+            return true
+        }
         await refreshAppleGPTKStatus()
         guard appleGPTKState == .ready else {
-            presentComponentFailure(
+            presentGameLaunchIssue(
+                appID: appID,
                 title: "Este juego necesita Apple GPTK",
                 message: "Regression no inició el juego porque su perfil D3DMetal aún no está preparado. La app te guiará por la descarga oficial y la licencia de Apple.",
                 recovery: .prepareAppleGPTK
             )
             return false
         }
+        clearGameLaunchIssue(appID: appID)
         return true
     }
 
@@ -2459,6 +2844,8 @@ final class RegressionAppModel {
             let refreshedProfiles = try await repository.compatibilityProfiles()
             let refreshedEngines = try await repository.engineProfiles()
             let refreshedCertifications = try await repository.certifications()
+            let refreshedEnvelopes = try await repository.launchEnvelopes()
+            let refreshedRepairAttempts = try await repository.repairAttempts()
             let refreshedTechnologies = try await repository.runtimeTechnologies()
             let refreshedActiveCandidateCount = try await repository.runtimeCandidateCount(
                 activeOnly: true
@@ -2485,6 +2872,32 @@ final class RegressionAppModel {
                 grouping: refreshedCertifications.filter { $0.backend == .regression },
                 by: \.appID
             )
+            var timelines: [String: GameLaunchTimeline] = [:]
+            for (appID, intents) in Dictionary(
+                grouping: refreshedEnvelopes.filter { $0.backend == .regression },
+                by: \.appID
+            ) {
+                var envelopes: [GameLaunchTimeline.Envelope] = []
+                for intent in intents.sorted(by: { $0.createdAt > $1.createdAt }).prefix(3) {
+                    envelopes.append(
+                        GameLaunchTimeline.Envelope(
+                            intent: intent,
+                            events: try await repository.launchEnvelopeEvents(id: intent.id),
+                            receipts: try await repository.launchEnvelopeReceipts(id: intent.id)
+                        )
+                    )
+                }
+                let attempts = refreshedRepairAttempts
+                    .filter { $0.appID == appID && $0.launchOrigin == .regression }
+                    .sorted { $0.updatedAt > $1.updatedAt }
+                    .prefix(3)
+                timelines[appID] = GameLaunchTimeline(
+                    appID: appID,
+                    envelopes: envelopes,
+                    repairAttempts: Array(attempts)
+                )
+            }
+            launchTimelinesByAppID = timelines
             if let refreshedHealth { databaseHealth = refreshedHealth }
         } catch {
             // Una lectura transitoria no debe borrar en pantalla el último estado válido.
@@ -2759,18 +3172,80 @@ final class RegressionAppModel {
         }
         guard let report = steamRuntimePrerequisitesHealth,
               report.status == .ready else {
-            let status = steamRuntimePrerequisitesHealth?.status.rawValue ?? "sin comprobar"
-            let issue = steamRuntimePrerequisitesHealth?.issue.map(String.init(describing:))
-                ?? "No existe un informe verificable."
             presentComponentFailure(
                 title: "El runtime de juegos necesita atención",
                 message: "VC++/UCRT no supera la verificación de esta release. Steam y los juegos no se iniciaron.",
-                technicalDetail: "Estado: \(status). Diagnóstico: \(issue)",
+                technicalDetail: componentHealthLaunchDetail(steamRuntimePrerequisitesHealth),
                 recovery: .repairRegression
             )
             return false
         }
         return true
+    }
+
+    private func componentHealthLaunchDetail(_ report: ComponentHealthReport?) -> String {
+        guard let report else {
+            return "No existe un informe verificable del runtime."
+        }
+        return "Estado: \(componentHealthStatusTitle(report.status)). Diagnóstico: \(componentHealthIssueTitle(report.issue))"
+    }
+
+    private func componentHealthStatusTitle(_ status: ComponentHealthStatus) -> String {
+        return switch status {
+        case .ready: "verificado"
+        case .missing: "faltan archivos"
+        case .drifted: "integridad no válida"
+        case .brokenLink: "enlace local no válido"
+        case .unsupportedVariant: "compilación no compatible"
+        case .repairable: "requiere restauración"
+        case .requiresUserSource: "requiere una fuente autorizada"
+        }
+    }
+
+    private func componentHealthIssueTitle(_ issue: ComponentHealthIssue?) -> String {
+        guard let issue else { return "la comprobación no aportó más detalle." }
+        return switch issue {
+        case .unsupportedVariant:
+            "esta compilación no tiene un contrato de integridad aplicable"
+        case .invalidDescriptor:
+            "el descriptor protegido no es válido"
+        case .payloadMissing:
+            "falta el payload protegido"
+        case .payloadIsNotARegularDirectory:
+            "el directorio del payload no es válido"
+        case .manifestMissing:
+            "falta el manifiesto protegido"
+        case .manifestDigestMismatch:
+            "el manifiesto no coincide con la identidad esperada"
+        case .malformedManifest:
+            "el manifiesto no se puede comprobar"
+        case .unsafeManifestPath:
+            "el manifiesto declara una ruta no permitida"
+        case .duplicateManifestPath:
+            "el manifiesto contiene una entrada duplicada"
+        case .payloadEntryMissing:
+            "falta un archivo obligatorio"
+        case .payloadEntryIsSymbolicLink:
+            "un archivo obligatorio es un enlace no permitido"
+        case .payloadEntryIsNotRegularFile:
+            "un archivo obligatorio no es un fichero regular"
+        case .payloadEntryExceedsLimit:
+            "un archivo obligatorio supera el límite seguro"
+        case .payloadEntryModeMismatch:
+            "un archivo obligatorio tiene permisos inesperados"
+        case .payloadDigestMismatch:
+            "un archivo obligatorio no coincide con la identidad esperada"
+        case .unlistedPayloadEntry:
+            "el payload contiene un archivo no incluido en el contrato"
+        case .externalLinkMissing:
+            "falta el enlace local esperado"
+        case .externalLinkTargetMismatch:
+            "el enlace local apunta a un destino distinto"
+        case .externalPathIsNotSymbolicLink:
+            "la ruta local no es un enlace permitido"
+        case .pendingTransaction:
+            "hay una transacción pendiente de reconciliar"
+        }
     }
 
     private func presentComponentFailure(

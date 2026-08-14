@@ -45,6 +45,7 @@ public struct TrustedComponentDescriptor: Equatable, Sendable {
   public let expectedManifestSHA256: String
   public let sourcePolicy: ComponentSourcePolicy
   public let externalLinkURL: URL?
+  public let transactionIntentURL: URL?
 
   public init(
     identity: ComponentIdentity,
@@ -52,7 +53,8 @@ public struct TrustedComponentDescriptor: Equatable, Sendable {
     manifestRelativePath: String,
     expectedManifestSHA256: String,
     sourcePolicy: ComponentSourcePolicy,
-    externalLinkURL: URL? = nil
+    externalLinkURL: URL? = nil,
+    transactionIntentURL: URL? = nil
   ) {
     self.identity = identity
     self.payloadRootURL = payloadRootURL
@@ -60,6 +62,7 @@ public struct TrustedComponentDescriptor: Equatable, Sendable {
     self.expectedManifestSHA256 = expectedManifestSHA256.lowercased()
     self.sourcePolicy = sourcePolicy
     self.externalLinkURL = externalLinkURL
+    self.transactionIntentURL = transactionIntentURL
   }
 }
 
@@ -71,10 +74,24 @@ public struct TrustedComponentDescriptor: Equatable, Sendable {
 public struct TrustedComponentFile: Equatable, Sendable {
   public let relativePath: String
   public let expectedSHA256: String
+  public let expectedPOSIXMode: UInt16?
 
-  init(relativePath: String, expectedSHA256: String) {
+  init(
+    relativePath: String,
+    expectedSHA256: String,
+    expectedPOSIXMode: UInt16? = nil
+  ) {
     self.relativePath = relativePath
     self.expectedSHA256 = expectedSHA256.lowercased()
+    self.expectedPOSIXMode = expectedPOSIXMode
+  }
+
+  func requiringPOSIXMode(_ mode: UInt16) -> TrustedComponentFile {
+    TrustedComponentFile(
+      relativePath: relativePath,
+      expectedSHA256: expectedSHA256,
+      expectedPOSIXMode: mode
+    )
   }
 }
 
@@ -102,9 +119,9 @@ public enum TrustedComponentCatalog {
   public static let windowsMediaComponentID = "windows-media-gstreamer"
   public static let windowsMediaComponentVersion = "1"
   public static let steamRuntimePrerequisitesComponentID = "steam-runtime-prerequisites"
-  public static let steamRuntimePrerequisitesComponentVersion = "1"
-  public static let supportedApplicationVersion = "1.11.0"
-  public static let supportedBuildIdentifier = "37"
+  public static let steamRuntimePrerequisitesComponentVersion = "3"
+  public static let supportedApplicationVersion = "1.12.0"
+  public static let supportedBuildIdentifier = "38"
 
   private static let windowsMediaDevelopmentManifestSHA256 =
     "ac662661fb3384c6ad100066391cab209f9de60b2e129fb92e07365ee6fe9bb1"
@@ -115,6 +132,53 @@ public enum TrustedComponentCatalog {
   private static let unsupportedManifestPlaceholder = String(repeating: "0", count: 64)
   private static let steamRuntimeMaximumFileBytes: Int64 = 128 * 1_024 * 1_024
   private static let steamRuntimeMaximumPayloadBytes: Int64 = 512 * 1_024 * 1_024
+  private static let steamRuntimeExecutablePaths: Set<String> = [
+    "bin/wine",
+    "bin/wineserver",
+    "lib/wine/x86_64-unix/wine",
+    "lib/wine/x86_64-unix/ntdll.so",
+  ]
+
+  /// Binarios públicos recompilados para el prefijo canónico `/Applications/Regression.app`.
+  ///
+  /// Estos PINs proceden del ensemble público 1.12.0 (38) derivado desde el builder raw sellado
+  /// mediante `strip -S`, saneado literal y firma ad hoc.
+  /// Los Mach-O pre-firma del builder no son bytes de release y se rechazan deliberadamente.
+  private static let steamRuntimePublicCoreFiles: [TrustedComponentFile] = [
+    TrustedComponentFile(
+      relativePath: "bin/wine",
+      expectedSHA256: "fed13faa895c9ea5896a6497490db26674c3dca2a318e3389d8e43ba3e00f552"
+    ),
+    TrustedComponentFile(
+      relativePath: "bin/wineserver",
+      expectedSHA256: "8d14fb9d6d9730c300ba16b5997d98218a2a40a78008d60f3a6edb719f328db3"
+    ),
+    TrustedComponentFile(
+      relativePath: "lib/wine/x86_64-unix/wine",
+      expectedSHA256: "5636a6505e872c8d185d8db7ced2d4aa8e9057e81c4c579e4b623009f9c2857b"
+    ),
+    TrustedComponentFile(
+      relativePath: "lib/wine/x86_64-unix/ntdll.so",
+      expectedSHA256: "66622d2832d99c37cdaa2872c5409b5f9a5dc04d1fdb9dcd426ae37f8365942e"
+    ),
+    TrustedComponentFile(
+      relativePath: "share/wine/wine.inf",
+      expectedSHA256: "0315a55b11a456590a9368f4cb8d0011d6735cc04c9093ea583570d1352e1ee1"
+    ),
+    TrustedComponentFile(
+      relativePath: "lib/wine/x86_64-windows/ntdll.dll",
+      expectedSHA256: "885c0421bfe30600bae9df83961b0fcbb5b9ccd1c02e7b071ce213ff2522e34a"
+    ),
+    TrustedComponentFile(
+      relativePath: "lib/wine/i386-windows/ntdll.dll",
+      expectedSHA256: "7b580e19eb4fce14b5730cd2835c5204dc2622ce0fc4f33b68b0155864477667"
+    ),
+  ]
+
+  /// No hay todavía un contrato reproducible versionado para los cuatro Mach-O cuyo prefijo
+  /// apunta al checkout de desarrollo. `nil` es deliberadamente fail-closed: medir un bundle
+  /// local y aceptar sus hashes convertiría el propio payload observado en autoridad.
+  private static let steamRuntimeDevelopmentCoreFiles: [TrustedComponentFile]? = nil
 
   private static let steamRuntimePrerequisiteFiles: [TrustedComponentFile] = [
     TrustedComponentFile(
@@ -163,8 +227,11 @@ public enum TrustedComponentCatalog {
     let resolvedVariant: ComponentArtifactVariant
     let expectedManifestSHA256: String
 
-    if applicationVersion != supportedApplicationVersion
-      || buildIdentifier != supportedBuildIdentifier
+    let isSupportedWindowsMediaBuild =
+      (applicationVersion == "1.11.0" && buildIdentifier == "37")
+      || (applicationVersion == supportedApplicationVersion
+        && buildIdentifier == supportedBuildIdentifier)
+    if !isSupportedWindowsMediaBuild
     {
       resolvedVariant = .unsupported(
         "Regression \(applicationVersion) (\(buildIdentifier))"
@@ -210,11 +277,15 @@ public enum TrustedComponentCatalog {
       externalLinkURL: canonicalApplicationSupportURL.appendingPathComponent(
         "Components/WindowsMedia/1",
         isDirectory: false
+      ),
+      transactionIntentURL: canonicalApplicationSupportURL.appendingPathComponent(
+        "Transactions/WindowsMedia/1-link-repair.intent",
+        isDirectory: false
       )
     )
   }
 
-  /// Describe los redistribuibles Windows incluidos en el Wine root de Regression 1.11.0 (37).
+  /// Describe el arranque mínimo y los redistribuibles incluidos en el Wine root sellado.
   ///
   /// Es una comprobación del conjunto sellado que la release ya debe contener, no un instalador:
   /// el resultado nunca descarga, copia, sustituye ni registra DLLs.
@@ -225,14 +296,42 @@ public enum TrustedComponentCatalog {
     wineRootURL: URL
   ) -> TrustedComponentFileSetDescriptor {
     let resolvedVariant: ComponentArtifactVariant
+    let files: [TrustedComponentFile]
     if applicationVersion != supportedApplicationVersion
       || buildIdentifier != supportedBuildIdentifier
     {
       resolvedVariant = .unsupported(
         "Regression \(applicationVersion) (\(buildIdentifier))"
       )
+      files = []
     } else {
-      resolvedVariant = variant
+      switch variant {
+      case .publicInstalled:
+        resolvedVariant = .publicInstalled
+        files = (steamRuntimePublicCoreFiles + steamRuntimePrerequisiteFiles).map { file in
+          file.requiringPOSIXMode(
+            steamRuntimeExecutablePaths.contains(file.relativePath) ? 0o755 : 0o644
+          )
+        }
+      case .development:
+        if let developmentCoreFiles = steamRuntimeDevelopmentCoreFiles {
+          resolvedVariant = .development
+          files = (developmentCoreFiles + steamRuntimePrerequisiteFiles).map { file in
+            file.requiringPOSIXMode(
+              steamRuntimeExecutablePaths.contains(file.relativePath) ? 0o755 : 0o644
+            )
+          }
+        } else {
+          resolvedVariant = .unsupported(
+            "Regression \(applicationVersion) (\(buildIdentifier)): "
+              + "runtime de desarrollo sin PIN reproducible"
+          )
+          files = []
+        }
+      case .unsupported(let name):
+        resolvedVariant = .unsupported(name)
+        files = []
+      }
     }
 
     return TrustedComponentFileSetDescriptor(
@@ -243,7 +342,7 @@ public enum TrustedComponentCatalog {
         buildIdentifier: buildIdentifier
       ),
       payloadRootURL: wineRootURL.standardizedFileURL,
-      files: steamRuntimePrerequisiteFiles,
+      files: files,
       maximumFileBytes: steamRuntimeMaximumFileBytes,
       maximumPayloadBytes: steamRuntimeMaximumPayloadBytes
     )
@@ -267,6 +366,7 @@ public enum ComponentRecoveryAction: Equatable, Sendable {
   case reinstallTrustedArtifact
   case createExternalLink(linkURL: URL, targetURL: URL)
   case restoreExternalLinkAfterBackup(linkURL: URL, targetURL: URL)
+  case reconcilePendingTransaction(intentURL: URL)
   case provideUserSource
   case installSupportedApplicationBuild
 }
@@ -285,11 +385,13 @@ public enum ComponentHealthIssue: Equatable, Sendable {
   case payloadEntryIsSymbolicLink(String)
   case payloadEntryIsNotRegularFile(String)
   case payloadEntryExceedsLimit(String)
+  case payloadEntryModeMismatch(String)
   case payloadDigestMismatch(String)
   case unlistedPayloadEntry(String)
   case externalLinkMissing
   case externalLinkTargetMismatch
   case externalPathIsNotSymbolicLink
+  case pendingTransaction
 }
 
 public struct ComponentHealthReport: Equatable, Sendable {
@@ -323,6 +425,18 @@ public enum ComponentHealthService {
     _ descriptor: TrustedComponentDescriptor,
     fileManager: FileManager = .default
   ) -> ComponentHealthReport {
+    evaluate(
+      descriptor,
+      fileManager: fileManager,
+      onExternalLinkTargetRead: nil
+    )
+  }
+
+  static func evaluate(
+    _ descriptor: TrustedComponentDescriptor,
+    fileManager: FileManager,
+    onExternalLinkTargetRead: (() -> Void)?
+  ) -> ComponentHealthReport {
     if case .unsupported(let name) = descriptor.identity.variant {
       return report(
         descriptor,
@@ -334,6 +448,40 @@ public enum ComponentHealthService {
 
     guard validDescriptor(descriptor) else {
       return driftReport(descriptor, issue: .invalidDescriptor)
+    }
+    if let intentURL = descriptor.transactionIntentURL,
+      let externalLinkURL = descriptor.externalLinkURL
+    {
+      let supportURL = externalLinkURL.deletingLastPathComponent()
+        .deletingLastPathComponent().deletingLastPathComponent()
+      let supportPath = supportURL.standardizedFileURL.path
+      let intentPath = intentURL.standardizedFileURL.path
+      guard intentPath.hasPrefix(supportPath + "/") else {
+        return driftReport(descriptor, issue: .pendingTransaction)
+      }
+      let intentRelativePath = String(intentPath.dropFirst(supportPath.count + 1))
+      var supportMetadata = stat()
+      let supportStatus = supportURL.path.withCString { Darwin.lstat($0, &supportMetadata) }
+      if supportStatus != 0, errno == ENOENT {
+        // Sin Application Support tampoco puede existir una transacción pendiente.
+      } else if let supportRoot = AnchoredDirectory.open(supportURL) {
+        let exists: Bool
+        do {
+          exists = try supportRoot.regularFileExists(relativePath: intentRelativePath)
+        } catch {
+          return driftReport(descriptor, issue: .pendingTransaction)
+        }
+        if exists {
+          return report(
+            descriptor,
+            status: .repairable,
+            recovery: .reconcilePendingTransaction(intentURL: intentURL),
+            issue: .pendingTransaction
+          )
+        }
+      } else {
+        return driftReport(descriptor, issue: .pendingTransaction)
+      }
     }
     guard let manifestRelativePath = safeRelativePath(descriptor.manifestRelativePath) else {
       return driftReport(descriptor, issue: .invalidDescriptor)
@@ -448,11 +596,9 @@ public enum ComponentHealthService {
     guard let externalLinkURL = descriptor.externalLinkURL else {
       return report(descriptor, status: .ready, recovery: .none)
     }
-    guard
-      let rawDestination = try? fileManager.destinationOfSymbolicLink(
-        atPath: externalLinkURL.path
-      )
-    else {
+    guard let externalParent = AnchoredDirectory.open(
+      externalLinkURL.deletingLastPathComponent()
+    ) else {
       if fileManager.fileExists(atPath: externalLinkURL.path) {
         return report(
           descriptor,
@@ -474,6 +620,48 @@ public enum ComponentHealthService {
         issue: .externalLinkMissing
       )
     }
+    let linkState: AnchoredSymbolicLinkState
+    do {
+      linkState = try externalParent.stableSymbolicLink(
+        relativePath: externalLinkURL.lastPathComponent,
+        onTargetRead: onExternalLinkTargetRead
+      )
+    } catch {
+      return report(
+        descriptor,
+        status: .brokenLink,
+        recovery: .restoreExternalLinkAfterBackup(
+          linkURL: externalLinkURL,
+          targetURL: descriptor.payloadRootURL
+        ),
+        issue: .externalPathIsNotSymbolicLink
+      )
+    }
+    let rawDestination: String
+    switch linkState {
+    case .missing:
+      return report(
+        descriptor,
+        status: .repairable,
+        recovery: .createExternalLink(
+          linkURL: externalLinkURL,
+          targetURL: descriptor.payloadRootURL
+        ),
+        issue: .externalLinkMissing
+      )
+    case .notSymbolicLink:
+      return report(
+        descriptor,
+        status: .brokenLink,
+        recovery: .restoreExternalLinkAfterBackup(
+          linkURL: externalLinkURL,
+          targetURL: descriptor.payloadRootURL
+        ),
+        issue: .externalPathIsNotSymbolicLink
+      )
+    case .target(let target):
+      rawDestination = target
+    }
 
     let destinationURL =
       rawDestination.hasPrefix("/")
@@ -490,7 +678,11 @@ public enum ComponentHealthService {
         issue: .externalLinkTargetMismatch
       )
     }
-    guard payloadRoot.isStillNamedBy(descriptor.payloadRootURL) else {
+    guard externalParent.isStillNamedBy(externalLinkURL.deletingLastPathComponent()),
+      payloadRoot.isStillNamedBy(descriptor.payloadRootURL),
+      (try? externalParent.stableSymbolicLink(
+        relativePath: externalLinkURL.lastPathComponent
+      )) == .target(rawDestination) else {
       return driftReport(descriptor, issue: .payloadIsNotARegularDirectory)
     }
     return report(descriptor, status: .ready, recovery: .none)
@@ -592,6 +784,14 @@ public enum ComponentHealthService {
         )
       }
       totalBytes += digest.byteCount
+      if let expectedPOSIXMode = file.expectedPOSIXMode,
+        UInt16(digest.identity.mode & mode_t(0o7777)) != expectedPOSIXMode
+      {
+        return fileSetDriftReport(
+          descriptor,
+          issue: .payloadEntryModeMismatch(file.relativePath)
+        )
+      }
       guard digest.sha256 == file.expectedSHA256 else {
         return fileSetDriftReport(
           descriptor,
@@ -695,6 +895,7 @@ public enum ComponentHealthService {
     for file in descriptor.files {
       guard safeRelativePath(file.relativePath) == file.relativePath,
         isSHA256(file.expectedSHA256),
+        file.expectedPOSIXMode.map({ $0 <= 0o7777 }) ?? true,
         seen.insert(file.relativePath).inserted
       else {
         return false
@@ -782,7 +983,7 @@ public enum ComponentHealthService {
   }
 }
 
-private enum AnchoredFileError: Error {
+enum AnchoredFileError: Error {
   case invalidPath
   case symbolicLink
   case notDirectory
@@ -792,7 +993,7 @@ private enum AnchoredFileError: Error {
   case unreadable
 }
 
-private struct AnchoredFileDigest {
+struct AnchoredFileDigest {
   let sha256: String
   let byteCount: Int64
   let identity: AnchoredFileIdentity
@@ -803,7 +1004,64 @@ private struct AnchoredFileDigest {
 /// `openat` con `O_NOFOLLOW` impide que una comprobación de ruta y la lectura posterior observen
 /// objetos diferentes. Cada archivo se compara mediante `fstat` antes y después de leerlo para
 /// rechazar cambios concurrentes de inode, tamaño, modo o tiempos de modificación.
-private final class AnchoredDirectory {
+struct AnchoredInventoryEntry: Equatable, Sendable {
+  let components: [String]
+  let isDirectory: Bool
+  let isRegularFile: Bool
+}
+
+struct AnchoredInventory: Equatable, Sendable {
+  let entries: [AnchoredInventoryEntry]
+  let entryCount: Int
+  let metadataBytes: Int
+}
+
+struct AnchoredSymbolicLinkEntrySnapshot: Equatable {
+  let target: String
+  let identity: AnchoredFileIdentity
+}
+
+final class AnchoredSymbolicLinkSnapshot {
+  private let directory: AnchoredDirectory
+  private let entries: [String: AnchoredSymbolicLinkEntrySnapshot]
+  private let maximumEntries: Int
+
+  fileprivate init(
+    directory: AnchoredDirectory,
+    entries: [String: AnchoredSymbolicLinkEntrySnapshot],
+    maximumEntries: Int
+  ) {
+    self.directory = directory
+    self.entries = entries
+    self.maximumEntries = maximumEntries
+  }
+
+  var targets: [String: String] {
+    entries.mapValues(\.target)
+  }
+
+  var isStillValid: Bool {
+    guard let current = try? directory.captureSymbolicLinks(
+      maximumEntries: maximumEntries
+    ) else { return false }
+    return current == entries
+  }
+}
+
+enum AnchoredInventoryError: Error {
+  case changedDuringTraversal
+  case exceedsEntryBudget
+  case exceedsMetadataBudget
+  case unreadable
+}
+
+enum AnchoredSymbolicLinkState: Equatable {
+  case missing
+  case notSymbolicLink
+  case target(String)
+}
+
+final class AnchoredDirectory {
   private let descriptor: Int32
   private let identity: AnchoredFileIdentity
 
@@ -817,22 +1075,96 @@ private final class AnchoredDirectory {
   }
 
   static func open(_ url: URL) -> AnchoredDirectory? {
-    let fd = url.path.withCString {
-      Darwin.open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-    }
-    guard fd >= 0,
-      let identity = fileIdentity(fd: fd),
-      identity.isDirectory
-    else {
-      if fd >= 0 { Darwin.close(fd) }
+    guard url.isFileURL, url.path.hasPrefix("/"), url.path != "/" else { return nil }
+    guard let anchoredPath = systemAliasCanonicalPath(url.standardizedFileURL.path) else {
       return nil
     }
-    return AnchoredDirectory(descriptor: fd, identity: identity)
+    let components = Array(URL(fileURLWithPath: anchoredPath).pathComponents.dropFirst())
+    guard !components.isEmpty,
+      components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." })
+    else { return nil }
+
+    var currentFD = Darwin.open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+    guard currentFD >= 0 else { return nil }
+    for component in components {
+      let nextFD = component.withCString {
+        Darwin.openat(
+          currentFD,
+          $0,
+          O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+      }
+      guard nextFD >= 0 else {
+        Darwin.close(currentFD)
+        return nil
+      }
+      Darwin.close(currentFD)
+      currentFD = nextFD
+    }
+    guard let identity = fileIdentity(fd: currentFD),
+      identity.isDirectory
+    else {
+      Darwin.close(currentFD)
+      return nil
+    }
+    return AnchoredDirectory(descriptor: currentFD, identity: identity)
+  }
+
+  /// macOS publica `/tmp`, `/var` y `/etc` como aliases administrados por el sistema hacia
+  /// `/private`. Se aceptan únicamente cuando el enlace conserva exactamente ese destino;
+  /// ningún otro ancestro se resuelve antes del recorrido `openat(O_NOFOLLOW)`.
+  private static func systemAliasCanonicalPath(_ path: String) -> String? {
+    let aliases = [
+      (alias: "/tmp", target: "/private/tmp"),
+      (alias: "/var", target: "/private/var"),
+      (alias: "/etc", target: "/private/etc"),
+    ]
+    for candidate in aliases where path == candidate.alias || path.hasPrefix(candidate.alias + "/") {
+      var metadata = stat()
+      guard candidate.alias.withCString({ Darwin.lstat($0, &metadata) }) == 0,
+        (metadata.st_mode & S_IFMT) == S_IFLNK
+      else { return nil }
+      var destination = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
+      let count = candidate.alias.withCString {
+        Darwin.readlink($0, &destination, Int(PATH_MAX))
+      }
+      guard count > 0 else { return nil }
+      let rawTarget = String(
+        decoding: destination.prefix(Int(count)).map { UInt8(bitPattern: $0) },
+        as: UTF8.self
+      )
+      let expectedRelative = String(candidate.target.dropFirst())
+      guard rawTarget == candidate.target || rawTarget == expectedRelative else { return nil }
+      return candidate.target + path.dropFirst(candidate.alias.count)
+    }
+    return path
   }
 
   func isStillNamedBy(_ url: URL) -> Bool {
     guard let replacement = Self.open(url) else { return false }
     return replacement.identity == identity
+  }
+
+  func openSubdirectory(relativePath: String) throws -> AnchoredDirectory {
+    let (parentFD, name) = try openParentDirectory(relativePath)
+    defer { Darwin.close(parentFD) }
+    let childFD = name.withCString {
+      Darwin.openat(parentFD, $0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+    }
+    guard childFD >= 0, let childIdentity = Self.fileIdentity(fd: childFD),
+      childIdentity.isDirectory else {
+      if childFD >= 0 { Darwin.close(childFD) }
+      throw AnchoredFileError.unreadable
+    }
+    return AnchoredDirectory(descriptor: childFD, identity: childIdentity)
+  }
+
+  func stillNamesSubdirectory(
+    relativePath: String,
+    as child: AnchoredDirectory
+  ) -> Bool {
+    guard let replacement = try? openSubdirectory(relativePath: relativePath) else { return false }
+    return replacement.identity == child.identity
   }
 
   func readRegularFile(relativePath: String, maximumBytes: Int64) throws -> Data {
@@ -857,6 +1189,271 @@ private final class AnchoredDirectory {
     }
     try verifyStableIdentity(before, fd: fd, bytesRead: Int64(result.count))
     return result
+  }
+
+  func readPrivateRegularFile(
+    relativePath: String,
+    maximumBytes: Int64,
+    ownerUID: uid_t
+  ) throws -> Data {
+    let fd = try openRegularFile(relativePath: relativePath)
+    defer { Darwin.close(fd) }
+    let before = try stableReadableIdentity(fd: fd, maximumBytes: maximumBytes)
+    guard before.ownerUID == ownerUID, before.mode & 0o7777 == 0o600 else {
+      throw AnchoredFileError.unreadable
+    }
+
+    var result = Data()
+    result.reserveCapacity(Int(before.size))
+    var buffer = [UInt8](repeating: 0, count: 1_024 * 1_024)
+    while true {
+      let count = Darwin.read(fd, &buffer, buffer.count)
+      if count == 0 { break }
+      if count < 0 {
+        if errno == EINTR { continue }
+        throw AnchoredFileError.unreadable
+      }
+      guard Int64(result.count) <= maximumBytes - Int64(count) else {
+        throw AnchoredFileError.exceedsBudget
+      }
+      result.append(buffer, count: count)
+    }
+    try verifyStableIdentity(before, fd: fd, bytesRead: Int64(result.count))
+    return result
+  }
+
+  func stableSymbolicLink(
+    relativePath: String,
+    onTargetRead: (() -> Void)? = nil
+  ) throws -> AnchoredSymbolicLinkState {
+    var components = try Self.validatedComponents(relativePath)
+    guard components.count == 1, let name = components.popLast() else {
+      throw AnchoredFileError.invalidPath
+    }
+    var before = stat()
+    let status = name.withCString {
+      Darwin.fstatat(descriptor, $0, &before, AT_SYMLINK_NOFOLLOW)
+    }
+    if status < 0, errno == ENOENT { return .missing }
+    guard status == 0 else { throw AnchoredFileError.unreadable }
+    guard before.st_mode & S_IFMT == S_IFLNK else { return .notSymbolicLink }
+    let identity = AnchoredFileIdentity(before)
+    var bytes = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
+    let count = name.withCString {
+      Darwin.readlinkat(descriptor, $0, &bytes, Int(PATH_MAX))
+    }
+    guard count > 0, count < Int(PATH_MAX) else { throw AnchoredFileError.unreadable }
+    onTargetRead?()
+    var after = stat()
+    guard name.withCString({
+      Darwin.fstatat(descriptor, $0, &after, AT_SYMLINK_NOFOLLOW)
+    }) == 0, AnchoredFileIdentity(after) == identity else {
+      throw AnchoredFileError.changedDuringRead
+    }
+    let targetBytes = bytes.prefix(Int(count)).map { UInt8(bitPattern: $0) }
+    guard let target = String(bytes: targetBytes, encoding: .utf8) else {
+      throw AnchoredFileError.unreadable
+    }
+    return .target(target)
+  }
+
+  func regularFileExists(relativePath: String) throws -> Bool {
+    var components = try Self.validatedComponents(relativePath)
+    guard let name = components.popLast() else { throw AnchoredFileError.invalidPath }
+    var currentFD = Darwin.dup(descriptor)
+    guard currentFD >= 0 else { throw AnchoredFileError.unreadable }
+    defer { Darwin.close(currentFD) }
+    for component in components {
+      let nextFD = component.withCString {
+        Darwin.openat(currentFD, $0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+      }
+      if nextFD < 0, errno == ENOENT { return false }
+      guard nextFD >= 0 else { throw AnchoredFileError.unreadable }
+      Darwin.close(currentFD)
+      currentFD = nextFD
+    }
+    var metadata = stat()
+    let status = name.withCString {
+      Darwin.fstatat(currentFD, $0, &metadata, AT_SYMLINK_NOFOLLOW)
+    }
+    if status < 0, errno == ENOENT { return false }
+    guard status == 0, (metadata.st_mode & S_IFMT) == S_IFREG else {
+      throw AnchoredFileError.notRegularFile
+    }
+    return true
+  }
+
+  func ensurePrivateDirectory(relativePath: String) throws {
+    let components = try Self.validatedComponents(relativePath)
+    var currentFD = Darwin.dup(descriptor)
+    guard currentFD >= 0 else { throw AnchoredFileError.unreadable }
+    defer { Darwin.close(currentFD) }
+    for component in components {
+      let opened = component.withCString {
+        Darwin.openat(currentFD, $0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+      }
+      let nextFD: Int32
+      if opened >= 0 {
+        nextFD = opened
+      } else {
+        guard errno == ENOENT,
+          component.withCString({ Darwin.mkdirat(currentFD, $0, 0o700) }) == 0
+            || errno == EEXIST
+        else { throw AnchoredFileError.unreadable }
+        nextFD = component.withCString {
+          Darwin.openat(currentFD, $0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        }
+        guard nextFD >= 0 else { throw AnchoredFileError.unreadable }
+      }
+      guard let directoryIdentity = Self.fileIdentity(fd: nextFD),
+        directoryIdentity.isDirectory,
+        directoryIdentity.ownerUID == Darwin.getuid(),
+        directoryIdentity.mode & 0o7777 == 0o700 else {
+        Darwin.close(nextFD)
+        throw AnchoredFileError.unreadable
+      }
+      guard Darwin.fsync(currentFD) == 0 else {
+        Darwin.close(nextFD)
+        throw AnchoredFileError.unreadable
+      }
+      Darwin.close(currentFD)
+      currentFD = nextFD
+    }
+  }
+
+  func createExclusiveRegularFile(relativePath: String, data: Data) throws {
+    let (parentFD, name) = try openParentDirectory(relativePath)
+    defer { Darwin.close(parentFD) }
+    let fd = name.withCString {
+      Darwin.openat(parentFD, $0, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+    }
+    guard fd >= 0 else { throw AnchoredFileError.unreadable }
+    do {
+      try Self.writeAll(data, to: fd)
+      guard Darwin.fsync(fd) == 0, Darwin.fsync(parentFD) == 0 else {
+        throw AnchoredFileError.unreadable
+      }
+      Darwin.close(fd)
+    } catch {
+      Darwin.close(fd)
+      name.withCString { _ = Darwin.unlinkat(parentFD, $0, 0) }
+      throw error
+    }
+  }
+
+  func replaceRegularFile(relativePath: String, data: Data) throws {
+    let (parentFD, name) = try openParentDirectory(relativePath)
+    defer { Darwin.close(parentFD) }
+    let temporary = ".\(name).\(UUID().uuidString)"
+    var fd = temporary.withCString {
+      Darwin.openat(parentFD, $0, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+    }
+    guard fd >= 0 else { throw AnchoredFileError.unreadable }
+    do {
+      try Self.writeAll(data, to: fd)
+      guard Darwin.fsync(fd) == 0 else { throw AnchoredFileError.unreadable }
+      Darwin.close(fd)
+      fd = -1
+      let renamed = temporary.withCString { source in
+        name.withCString { destination in
+          Darwin.renameat(parentFD, source, parentFD, destination)
+        }
+      }
+      guard renamed == 0, Darwin.fsync(parentFD) == 0 else {
+        throw AnchoredFileError.unreadable
+      }
+    } catch {
+      if fd >= 0 { Darwin.close(fd) }
+      temporary.withCString { _ = Darwin.unlinkat(parentFD, $0, 0) }
+      throw error
+    }
+  }
+
+  func unlinkRegularFile(relativePath: String) throws {
+    let (parentFD, name) = try openParentDirectory(relativePath)
+    defer { Darwin.close(parentFD) }
+    guard name.withCString({ Darwin.unlinkat(parentFD, $0, 0) }) == 0,
+      Darwin.fsync(parentFD) == 0 else { throw AnchoredFileError.unreadable }
+  }
+
+  func createSymbolicLink(
+    relativePath: String,
+    target: String,
+    onParentOpened: (() -> Void)? = nil
+  ) throws {
+    let (parentFD, name) = try openParentDirectory(relativePath)
+    defer { Darwin.close(parentFD) }
+    onParentOpened?()
+    let status = target.withCString { rawTarget in
+      name.withCString { rawName in Darwin.symlinkat(rawTarget, parentFD, rawName) }
+    }
+    guard status == 0, Darwin.fsync(parentFD) == 0 else {
+      throw AnchoredFileError.unreadable
+    }
+  }
+
+  func rename(relativeSource: String, relativeDestination: String) throws {
+    let (sourceParent, sourceName) = try openParentDirectory(relativeSource)
+    defer { Darwin.close(sourceParent) }
+    let (destinationParent, destinationName) = try openParentDirectory(relativeDestination)
+    defer { Darwin.close(destinationParent) }
+    let status = sourceName.withCString { source in
+      destinationName.withCString { destination in
+        Darwin.renameat(sourceParent, source, destinationParent, destination)
+      }
+    }
+    guard status == 0, Darwin.fsync(sourceParent) == 0,
+      sourceParent == destinationParent || Darwin.fsync(destinationParent) == 0 else {
+        throw AnchoredFileError.unreadable
+      }
+  }
+
+  func unlink(relativePath: String) throws {
+    let (parentFD, name) = try openParentDirectory(relativePath)
+    defer { Darwin.close(parentFD) }
+    guard name.withCString({ Darwin.unlinkat(parentFD, $0, 0) }) == 0,
+      Darwin.fsync(parentFD) == 0 else { throw AnchoredFileError.unreadable }
+  }
+
+  private func openParentDirectory(_ relativePath: String) throws -> (Int32, String) {
+    var components = try Self.validatedComponents(relativePath)
+    guard let name = components.popLast() else { throw AnchoredFileError.invalidPath }
+    var currentFD = Darwin.dup(descriptor)
+    guard currentFD >= 0 else { throw AnchoredFileError.unreadable }
+    for component in components {
+      let nextFD = component.withCString {
+        Darwin.openat(currentFD, $0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+      }
+      guard nextFD >= 0 else {
+        Darwin.close(currentFD)
+        throw AnchoredFileError.unreadable
+      }
+      Darwin.close(currentFD)
+      currentFD = nextFD
+    }
+    return (currentFD, name)
+  }
+
+  private static func validatedComponents(_ relativePath: String) throws -> [String] {
+    let components = relativePath.split(separator: "/", omittingEmptySubsequences: false)
+      .map(String.init)
+    guard !components.isEmpty,
+      components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." })
+    else { throw AnchoredFileError.invalidPath }
+    return components
+  }
+
+  private static func writeAll(_ data: Data, to descriptor: Int32) throws {
+    try data.withUnsafeBytes { bytes in
+      guard let base = bytes.baseAddress else { return }
+      var offset = 0
+      while offset < bytes.count {
+        let count = Darwin.write(descriptor, base.advanced(by: offset), bytes.count - offset)
+        if count < 0, errno == EINTR { continue }
+        guard count > 0 else { throw AnchoredFileError.unreadable }
+        offset += count
+      }
+    }
   }
 
   func hashRegularFile(
@@ -908,6 +1505,213 @@ private final class AnchoredDirectory {
       result: &result
     )
     return result
+  }
+
+  func boundedInventory(
+    maximumDepth: Int,
+    maximumEntries: Int,
+    maximumMetadataBytes: Int,
+    onDirectoryOpened: ((String) -> Void)? = nil
+  ) throws -> AnchoredInventory {
+    var entries: [AnchoredInventoryEntry] = []
+    var entryCount = 0
+    var metadataBytes = 0
+    try collectBoundedInventory(
+      directoryFD: descriptor,
+      components: [],
+      maximumDepth: maximumDepth,
+      maximumEntries: maximumEntries,
+      maximumMetadataBytes: maximumMetadataBytes,
+      entryCount: &entryCount,
+      metadataBytes: &metadataBytes,
+      entries: &entries,
+      onDirectoryOpened: onDirectoryOpened
+    )
+    return AnchoredInventory(
+      entries: entries,
+      entryCount: entryCount,
+      metadataBytes: metadataBytes
+    )
+  }
+
+  func exactSymbolicLinkInventory(
+    relativeDirectory: String,
+    maximumEntries: Int
+  ) throws -> [String: String] {
+    try symbolicLinkSnapshot(
+      relativeDirectory: relativeDirectory,
+      maximumEntries: maximumEntries
+    ).targets
+  }
+
+  func symbolicLinkSnapshot(
+    relativeDirectory: String,
+    maximumEntries: Int
+  ) throws -> AnchoredSymbolicLinkSnapshot {
+    guard maximumEntries >= 0 else { throw AnchoredInventoryError.exceedsEntryBudget }
+    let child = try openSubdirectory(relativePath: relativeDirectory)
+    let entries = try child.captureSymbolicLinks(maximumEntries: maximumEntries)
+    guard stillNamesSubdirectory(relativePath: relativeDirectory, as: child) else {
+      throw AnchoredInventoryError.changedDuringTraversal
+    }
+    return AnchoredSymbolicLinkSnapshot(
+      directory: child,
+      entries: entries,
+      maximumEntries: maximumEntries
+    )
+  }
+
+  func symbolicLinkSnapshot(
+    maximumEntries: Int
+  ) throws -> AnchoredSymbolicLinkSnapshot {
+    let entries = try captureSymbolicLinks(maximumEntries: maximumEntries)
+    return AnchoredSymbolicLinkSnapshot(
+      directory: self,
+      entries: entries,
+      maximumEntries: maximumEntries
+    )
+  }
+
+  fileprivate func captureSymbolicLinks(
+    maximumEntries: Int
+  ) throws -> [String: AnchoredSymbolicLinkEntrySnapshot] {
+    guard maximumEntries >= 0 else { throw AnchoredInventoryError.exceedsEntryBudget }
+    guard Self.fileIdentity(fd: descriptor) == identity else {
+      throw AnchoredInventoryError.changedDuringTraversal
+    }
+    let enumerationFD = Darwin.openat(
+      descriptor,
+      ".",
+      O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+    )
+    guard enumerationFD >= 0, Self.fileIdentity(fd: enumerationFD) == identity else {
+      if enumerationFD >= 0 { Darwin.close(enumerationFD) }
+      throw AnchoredInventoryError.changedDuringTraversal
+    }
+    defer { Darwin.close(enumerationFD) }
+    let names = try directoryEntryNames(fd: enumerationFD).sorted()
+    guard names.count <= maximumEntries else { throw AnchoredInventoryError.exceedsEntryBudget }
+    var result: [String: AnchoredSymbolicLinkEntrySnapshot] = [:]
+    for entry in names {
+      var discovered = stat()
+      guard entry.withCString({
+        Darwin.fstatat(enumerationFD, $0, &discovered, AT_SYMLINK_NOFOLLOW)
+      }) == 0, (discovered.st_mode & S_IFMT) == S_IFLNK else {
+        throw AnchoredInventoryError.unreadable
+      }
+      let entryIdentity = AnchoredFileIdentity(discovered)
+      var bytes = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
+      let count = entry.withCString {
+        Darwin.readlinkat(enumerationFD, $0, &bytes, Int(PATH_MAX))
+      }
+      guard count > 0, count < Int(PATH_MAX) else { throw AnchoredInventoryError.unreadable }
+      var after = stat()
+      guard entry.withCString({
+        Darwin.fstatat(enumerationFD, $0, &after, AT_SYMLINK_NOFOLLOW)
+      }) == 0, AnchoredFileIdentity(after) == entryIdentity else {
+        throw AnchoredInventoryError.changedDuringTraversal
+      }
+      let targetBytes = bytes.prefix(Int(count)).map { UInt8(bitPattern: $0) }
+      guard let target = String(bytes: targetBytes, encoding: .utf8) else {
+        throw AnchoredInventoryError.unreadable
+      }
+      result[entry] = AnchoredSymbolicLinkEntrySnapshot(
+        target: target,
+        identity: entryIdentity
+      )
+    }
+    guard Self.fileIdentity(fd: descriptor) == identity,
+      Self.fileIdentity(fd: enumerationFD) == identity else {
+      throw AnchoredInventoryError.changedDuringTraversal
+    }
+    return result
+  }
+
+  private func collectBoundedInventory(
+    directoryFD: Int32,
+    components: [String],
+    maximumDepth: Int,
+    maximumEntries: Int,
+    maximumMetadataBytes: Int,
+    entryCount: inout Int,
+    metadataBytes: inout Int,
+    entries: inout [AnchoredInventoryEntry],
+    onDirectoryOpened: ((String) -> Void)?
+  ) throws {
+    let names = try directoryEntryNames(fd: directoryFD)
+    for name in names.sorted() {
+      let childComponents = components + [name]
+      guard childComponents.count <= maximumDepth else { continue }
+      entryCount += 1
+      guard entryCount <= maximumEntries else {
+        throw AnchoredInventoryError.exceedsEntryBudget
+      }
+      metadataBytes += childComponents.reduce(0) { $0 + $1.utf8.count + 1 }
+      guard metadataBytes <= maximumMetadataBytes else {
+        throw AnchoredInventoryError.exceedsMetadataBudget
+      }
+
+      var discoveredMetadata = stat()
+      let status = name.withCString {
+        Darwin.fstatat(directoryFD, $0, &discoveredMetadata, AT_SYMLINK_NOFOLLOW)
+      }
+      guard status == 0 else { throw AnchoredInventoryError.unreadable }
+      let kind = discoveredMetadata.st_mode & S_IFMT
+      if kind == S_IFLNK { continue }
+
+      let isDirectory = kind == S_IFDIR
+      let isRegularFile = kind == S_IFREG
+      entries.append(AnchoredInventoryEntry(
+        components: childComponents,
+        isDirectory: isDirectory,
+        isRegularFile: isRegularFile
+      ))
+      guard isDirectory, childComponents.count < maximumDepth else { continue }
+
+      let discoveredIdentity = AnchoredFileIdentity(discoveredMetadata)
+      let childFD = name.withCString {
+        Darwin.openat(
+          directoryFD,
+          $0,
+          O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+      }
+      guard childFD >= 0,
+        Self.fileIdentity(fd: childFD) == discoveredIdentity
+      else {
+        if childFD >= 0 { Darwin.close(childFD) }
+        throw AnchoredInventoryError.changedDuringTraversal
+      }
+      onDirectoryOpened?(childComponents.joined(separator: "/"))
+      do {
+        try collectBoundedInventory(
+          directoryFD: childFD,
+          components: childComponents,
+          maximumDepth: maximumDepth,
+          maximumEntries: maximumEntries,
+          maximumMetadataBytes: maximumMetadataBytes,
+          entryCount: &entryCount,
+          metadataBytes: &metadataBytes,
+          entries: &entries,
+          onDirectoryOpened: onDirectoryOpened
+        )
+      } catch {
+        Darwin.close(childFD)
+        throw error
+      }
+      var currentMetadata = stat()
+      let currentStatus = name.withCString {
+        Darwin.fstatat(directoryFD, $0, &currentMetadata, AT_SYMLINK_NOFOLLOW)
+      }
+      let openedIdentity = Self.fileIdentity(fd: childFD)
+      Darwin.close(childFD)
+      guard currentStatus == 0,
+        openedIdentity == discoveredIdentity,
+        AnchoredFileIdentity(currentMetadata) == discoveredIdentity
+      else {
+        throw AnchoredInventoryError.changedDuringTraversal
+      }
+    }
   }
 
   private func collectPayloadFiles(
@@ -1112,10 +1916,11 @@ private final class AnchoredDirectory {
   }
 }
 
-private struct AnchoredFileIdentity: Equatable {
+struct AnchoredFileIdentity: Equatable {
   let device: dev_t
   let inode: ino_t
   let mode: mode_t
+  let ownerUID: uid_t
   let size: Int64
   let modificationSeconds: Int64
   let modificationNanoseconds: Int64
@@ -1126,6 +1931,7 @@ private struct AnchoredFileIdentity: Equatable {
     device = metadata.st_dev
     inode = metadata.st_ino
     mode = metadata.st_mode
+    ownerUID = metadata.st_uid
     size = metadata.st_size
     modificationSeconds = Int64(metadata.st_mtimespec.tv_sec)
     modificationNanoseconds = Int64(metadata.st_mtimespec.tv_nsec)

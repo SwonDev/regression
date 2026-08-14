@@ -19,8 +19,43 @@ private struct CertificationEvidenceRecord {
     let verifiedAt: String
 }
 
+enum RunPerfectEvidenceSQL {
+    static func predicate(run: String, verification: String) -> String {
+        """
+        \(verification).verdict='perfect'
+        AND \(run).process_id IS NOT NULL
+        AND \(run).result!='preparing'
+        AND \(run).ended_at IS NOT NULL
+        AND \(verification).verified_at>=\(run).ended_at
+        AND EXISTS (
+            SELECT 1 FROM run_processes canonical
+            WHERE canonical.run_id=\(run).id
+              AND canonical.process_id=\(run).process_id
+              AND canonical.is_representative=1
+        )
+        AND NOT EXISTS (
+            SELECT 1 FROM run_processes tracked
+            WHERE tracked.run_id=\(run).id
+              AND (tracked.ended_at IS NULL
+                   OR tracked.ended_at>\(verification).verified_at)
+        )
+        """
+    }
+
+    static func publicVerdict(run: String, verification: String) -> String {
+        """
+        CASE
+            WHEN \(verification).verdict='perfect'
+             AND NOT (\(predicate(run: run, verification: verification)))
+            THEN 'invalidated'
+            ELSE \(verification).verdict
+        END
+        """
+    }
+}
+
 public actor CompatibilityRepository {
-    public static let currentSchemaVersion = 14
+    public static let currentSchemaVersion = 17
 
     private let databaseURL: URL
     let legacyCompiledRepairBottleURL: URL?
@@ -29,10 +64,26 @@ public actor CompatibilityRepository {
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
     let dateFormatter: ISO8601DateFormatter
+    // Interno al módulo: el único inicializador que lo inyecta es package y producción usa Date.
+    let clock: @Sendable () -> Date
 
     public init(
         databaseURL: URL,
         legacyCompiledRepairBottleURL: URL? = nil
+    ) {
+        self.init(
+            databaseURL: databaseURL,
+            legacyCompiledRepairBottleURL: legacyCompiledRepairBottleURL,
+            clock: Date.init
+        )
+    }
+
+    /// Seam de pruebas: el tiempo de producción se toma dentro del actor que posee SQLite, no
+    /// antes de un hop. La app no puede inyectar un reloj distinto.
+    package init(
+        databaseURL: URL,
+        legacyCompiledRepairBottleURL: URL? = nil,
+        clock: @escaping @Sendable () -> Date
     ) {
         self.databaseURL = databaseURL
         self.legacyCompiledRepairBottleURL = legacyCompiledRepairBottleURL
@@ -41,6 +92,7 @@ public actor CompatibilityRepository {
         self.decoder = JSONDecoder()
         self.dateFormatter = ISO8601DateFormatter()
         self.dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        self.clock = clock
     }
 
     public func close() throws {
@@ -88,6 +140,11 @@ public actor CompatibilityRepository {
                 migrationBackupURL = try createMigrationBackup(fromVersion: startingVersion)
             }
             try migrateSchema(from: startingVersion)
+            try installRepairAttemptSchema()
+            try installLaunchEnvelopeSchema()
+            try installClosedProcessCertificationGuards()
+            try invalidatePerfectEvidenceWithoutClosedProcesses()
+            try reconcileIncoherentCompletedRepairAttempts()
             try transaction {
                 try inventoryLegacyCompiledRepairActivationsIfAvailable()
             }
@@ -377,8 +434,60 @@ public actor CompatibilityRepository {
         )
     }
 
-    public func verifyRun(_ verification: RunVerification) throws {
+    /// Solo para importación/historial dentro del paquete. Los clientes de UI/CLI deben usar la
+    /// operación atómica que exige un envelope; esta ruta no forma parte de RegressionCore
+    /// público y no puede convertirse en un bypass externo de certificación.
+    func verifyRun(_ verification: RunVerification) throws {
         try ensurePrepared()
+        try validateRunVerification(verification)
+        try transaction {
+            try persistRunVerification(verification)
+        }
+    }
+
+    /// Persiste la verificación explícita y el cierre del envelope en una única transacción. Si
+    /// la fase del envelope no permite el cierre, también se revierte la verificación: UI y CLI
+    /// nunca dejan una certificación/recibo a medias tras un cierre de proceso o de la app.
+    @discardableResult
+    public func verifyRunAndCompleteEnvelope(_ verification: RunVerification) throws -> Bool {
+        try ensurePrepared()
+        try validateRunVerification(verification)
+        var completedEnvelope = false
+        try transaction {
+            try persistRunVerification(verification)
+            let envelopes = try launchEnvelopeRows(
+                where: "run_id=?",
+                bindings: [verification.runID.uuidString]
+            )
+            guard envelopes.count == 1, let envelope = envelopes.first else {
+                throw RegressionCoreError.invalidEvidence(
+                    "una verificación de UI/CLI exige exactamente un envelope de lanzamiento"
+                )
+            }
+            guard envelope.phase == .awaitingVerification else {
+                throw RegressionCoreError.invalidEvidence(
+                    "la verificación no puede cerrar un envelope que no espera revisión explícita"
+                )
+            }
+            try transitionLaunchEnvelope(
+                id: envelope.id,
+                from: .awaitingVerification,
+                to: .completed,
+                at: verification.verifiedAt
+            )
+            try ensureLaunchEnvelopeReceiptInTransaction(
+                envelopeID: envelope.id,
+                appID: envelope.appID,
+                backend: envelope.backend,
+                result: .verificationRecorded,
+                at: verification.verifiedAt
+            )
+            completedEnvelope = true
+        }
+        return completedEnvelope
+    }
+
+    func validateRunVerification(_ verification: RunVerification) throws {
         guard verification.hasCompletePerfectEvidence else {
             throw RegressionCoreError.invalidEvidence(
                 "un perfil perfecto exige render, entrada, opciones gráficas y gameplay aprobados"
@@ -404,56 +513,64 @@ public actor CompatibilityRepository {
             }
         }
         if verification.verdict == .perfect {
+            let verifiedAt = dateFormatter.string(from: verification.verifiedAt)
             let eligible = try scalarInt(
                 """
-                SELECT COUNT(*) FROM runs
-                WHERE id=? AND process_id IS NOT NULL AND result!='preparing';
+                SELECT COUNT(*) FROM runs r
+                JOIN (
+                    SELECT ? AS run_id, 'perfect' AS verdict, ? AS verified_at
+                ) v ON v.run_id=r.id
+                WHERE r.id=? AND \(RunPerfectEvidenceSQL.predicate(
+                    run: "r",
+                    verification: "v"
+                ));
                 """,
-                bindings: [verification.runID.uuidString]
+                bindings: [verification.runID.uuidString, verifiedAt, verification.runID.uuidString]
             )
             guard eligible == 1 else {
                 throw RegressionCoreError.invalidEvidence(
-                    "una ejecución debe haber iniciado realmente antes de certificarse como perfecta"
+                    "una ejecución debe haber iniciado y cerrado todos sus procesos antes de certificarse como perfecta"
                 )
             }
         }
+    }
+
+    func persistRunVerification(_ verification: RunVerification) throws {
         let notes = PrivacySanitizer.redactedLogExcerpt(verification.notes, limit: 2_000)
-        try transaction {
-            try execute(
-                """
-                INSERT INTO run_verifications(
-                    run_id, verdict, rendering, input_precision, graphics_settings, gameplay,
-                    source, notes, verified_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(run_id) DO UPDATE SET
-                    verdict=excluded.verdict,
-                    rendering=excluded.rendering,
-                    input_precision=excluded.input_precision,
-                    graphics_settings=excluded.graphics_settings,
-                    gameplay=excluded.gameplay,
-                    source=excluded.source,
-                    notes=excluded.notes,
-                    verified_at=excluded.verified_at;
-                """,
-                bindings: [
-                    verification.runID.uuidString,
-                    verification.verdict.rawValue,
-                    verification.rendering.rawValue,
-                    verification.inputPrecision.rawValue,
-                    verification.graphicsSettings.rawValue,
-                    verification.gameplay.rawValue,
-                    verification.source.rawValue,
-                    notes,
-                    dateFormatter.string(from: verification.verifiedAt)
-                ]
-            )
-            try recordEvent(
-                runID: verification.runID,
-                phase: "verification",
-                value: "\(verification.verdict.rawValue): \(notes)"
-            )
-            try synchronizeLocalCertification(forRunID: verification.runID)
-        }
+        try execute(
+            """
+            INSERT INTO run_verifications(
+                run_id, verdict, rendering, input_precision, graphics_settings, gameplay,
+                source, notes, verified_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_id) DO UPDATE SET
+                verdict=excluded.verdict,
+                rendering=excluded.rendering,
+                input_precision=excluded.input_precision,
+                graphics_settings=excluded.graphics_settings,
+                gameplay=excluded.gameplay,
+                source=excluded.source,
+                notes=excluded.notes,
+                verified_at=excluded.verified_at;
+            """,
+            bindings: [
+                verification.runID.uuidString,
+                verification.verdict.rawValue,
+                verification.rendering.rawValue,
+                verification.inputPrecision.rawValue,
+                verification.graphicsSettings.rawValue,
+                verification.gameplay.rawValue,
+                verification.source.rawValue,
+                notes,
+                dateFormatter.string(from: verification.verifiedAt)
+            ]
+        )
+        try recordEvent(
+            runID: verification.runID,
+            phase: "verification",
+            value: "\(verification.verdict.rawValue): \(notes)"
+        )
+        try synchronizeLocalCertification(forRunID: verification.runID)
     }
 
     /// Reasigna una ejecución histórica al perfil compilado que realmente la produjo.
@@ -480,21 +597,29 @@ public actor CompatibilityRepository {
             let inputPrecision: VerificationDimension
             let graphicsSettings: VerificationDimension
             let gameplay: VerificationDimension
+            let source: VerificationSource
+            let notes: String
+            let verifiedAt: Date
         }
 
         let targets: [TargetRun] = try query(
             """
             SELECT r.app_id, r.backend, r.provider_version, r.started_at, r.result,
                    r.process_id, before.values_json, after.values_json,
-                   v.verdict, v.rendering, v.input_precision, v.graphics_settings,
-                   v.gameplay
+                   \(RunPerfectEvidenceSQL.publicVerdict(run: "r", verification: "v")),
+                   v.rendering, v.input_precision, v.graphics_settings,
+                   v.gameplay, v.source, v.notes, v.verified_at
             FROM runs r
             JOIN configuration_snapshots before
               ON before.fingerprint=r.configuration_fingerprint
             LEFT JOIN configuration_snapshots after
               ON after.fingerprint=r.after_configuration_fingerprint
             JOIN run_verifications v ON v.run_id=r.id
-            WHERE r.id=? LIMIT 1;
+            WHERE r.id=? AND \(RunPerfectEvidenceSQL.predicate(
+                run: "r",
+                verification: "v"
+            ))
+            LIMIT 1;
             """,
             bindings: [runID.uuidString]
         ) { statement in
@@ -511,7 +636,9 @@ public actor CompatibilityRepository {
                 let rendering = VerificationDimension(rawValue: Self.text(statement, 9)),
                 let inputPrecision = VerificationDimension(rawValue: Self.text(statement, 10)),
                 let graphicsSettings = VerificationDimension(rawValue: Self.text(statement, 11)),
-                let gameplay = VerificationDimension(rawValue: Self.text(statement, 12))
+                let gameplay = VerificationDimension(rawValue: Self.text(statement, 12)),
+                let source = VerificationSource(rawValue: Self.text(statement, 13)),
+                let verifiedAt = dateFormatter.date(from: Self.text(statement, 15))
             else { return nil }
 
             let afterConfiguration: [String: String]?
@@ -535,7 +662,10 @@ public actor CompatibilityRepository {
                 rendering: rendering,
                 inputPrecision: inputPrecision,
                 graphicsSettings: graphicsSettings,
-                gameplay: gameplay
+                gameplay: gameplay,
+                source: source,
+                notes: Self.text(statement, 14),
+                verifiedAt: verifiedAt
             )
         }
 
@@ -617,6 +747,20 @@ public actor CompatibilityRepository {
                 ON CONFLICT(run_id) DO UPDATE SET engine_fingerprint=excluded.engine_fingerprint;
                 """,
                 bindings: [runID.uuidString, engineFingerprint]
+            )
+            try execute(
+                """
+                UPDATE run_verifications
+                SET verdict=?, rendering=?, input_precision=?, graphics_settings=?, gameplay=?,
+                    source=?, notes=?, verified_at=?
+                WHERE run_id=?;
+                """,
+                bindings: [
+                    target.verdict.rawValue, target.rendering.rawValue,
+                    target.inputPrecision.rawValue, target.graphicsSettings.rawValue,
+                    target.gameplay.rawValue, target.source.rawValue, target.notes,
+                    dateFormatter.string(from: target.verifiedAt), runID.uuidString
+                ]
             )
             try execute(
                 """
@@ -758,7 +902,8 @@ public actor CompatibilityRepository {
         let sql = """
             SELECT r.id, r.app_id, g.name, r.backend, r.started_at, r.ended_at,
                    r.result, r.exit_code, r.process_id, r.launch_ms, r.configuration_fingerprint,
-                   v.verdict, v.rendering, v.input_precision, v.graphics_settings,
+                   \(RunPerfectEvidenceSQL.publicVerdict(run: "r", verification: "v")),
+                   v.rendering, v.input_precision, v.graphics_settings,
                    v.gameplay, v.source, v.notes, v.verified_at
             FROM runs r
             JOIN games g ON g.app_id = r.app_id
@@ -791,10 +936,9 @@ public actor CompatibilityRepository {
         }
     }
 
-    /// Frontera package-only para decisiones de custodia. Devuelve exclusivamente la ejecución
-    /// persistida que coincide simultáneamente con App ID y UUID; nunca acepta un RunSummary
-    /// construido por el caller como autoridad.
-    package func custodyValidationRun(
+    /// Devuelve una ejecución perfecta cuya identidad, cierre y proceso representativo siguen
+    /// sellados en SQLite. Nunca acepta un resumen construido por el caller como autoridad.
+    public func sealedPerfectRun(
         appID: String,
         runID: UUID
     ) throws -> RunSummary? {
@@ -811,6 +955,7 @@ public actor CompatibilityRepository {
             JOIN games g ON g.app_id = r.app_id
             LEFT JOIN run_verifications v ON v.run_id = r.id
             WHERE r.id=? AND r.app_id=?
+              AND \(RunPerfectEvidenceSQL.predicate(run: "r", verification: "v"))
             LIMIT 1;
             """
         let matches: [RunSummary] = try query(
@@ -846,8 +991,10 @@ public actor CompatibilityRepository {
         let sql = """
             WITH evidence AS (
                 SELECT r.app_id, r.backend, r.configuration_fingerprint,
-                       CASE WHEN v.verdict = 'perfect' AND r.process_id IS NOT NULL
-                                  AND r.result!='preparing' THEN 1 ELSE 0 END AS perfect,
+                       CASE WHEN \(RunPerfectEvidenceSQL.predicate(
+                           run: "r",
+                           verification: "v"
+                       )) THEN 1 ELSE 0 END AS perfect,
                        CASE WHEN v.verdict = 'playableWithIssues' THEN 1 ELSE 0 END AS playable,
                        CASE WHEN v.verdict = 'failed'
                                   OR ((v.run_id IS NULL OR v.verdict='invalidated')
@@ -858,8 +1005,10 @@ public actor CompatibilityRepository {
                             THEN 1 ELSE 0 END AS unverified,
                        r.launch_ms,
                        CASE WHEN v.verdict='playableWithIssues'
-                                  OR (v.verdict='perfect' AND r.process_id IS NOT NULL
-                                      AND r.result!='preparing')
+                                  OR (\(RunPerfectEvidenceSQL.predicate(
+                                      run: "r",
+                                      verification: "v"
+                                  )))
                             THEN v.verified_at END AS successful_at
                 FROM runs r
                 LEFT JOIN run_verifications v ON v.run_id = r.id
@@ -906,8 +1055,10 @@ public actor CompatibilityRepository {
         let sql = """
             WITH evidence AS (
                 SELECT re.engine_fingerprint, r.app_id, r.started_at AS observed_at,
-                       CASE WHEN v.verdict='perfect' AND r.process_id IS NOT NULL
-                                  AND r.result!='preparing' THEN 1 ELSE 0 END AS perfect,
+                       CASE WHEN \(RunPerfectEvidenceSQL.predicate(
+                           run: "r",
+                           verification: "v"
+                       )) THEN 1 ELSE 0 END AS perfect,
                        CASE WHEN v.verdict='playableWithIssues' THEN 1 ELSE 0 END AS playable,
                        CASE WHEN v.verdict='failed'
                                   OR ((v.run_id IS NULL OR v.verdict='invalidated')
@@ -970,7 +1121,8 @@ public actor CompatibilityRepository {
                    r.executable, r.launch_ms, r.command, r.arguments_json, r.system_json,
                    r.configuration_fingerprint, c.values_json,
                    r.after_configuration_fingerprint, r.configuration_delta_json,
-                   v.verdict, v.rendering, v.input_precision, v.graphics_settings,
+                   \(RunPerfectEvidenceSQL.publicVerdict(run: "r", verification: "v")),
+                   v.rendering, v.input_precision, v.graphics_settings,
                    v.gameplay, v.source, v.notes, v.verified_at
             FROM runs r
             JOIN games g ON g.app_id = r.app_id
@@ -1068,7 +1220,22 @@ public actor CompatibilityRepository {
 
     public func certifications(activeOnly: Bool = true) throws -> [VerifiedGameCertification] {
         try ensurePrepared()
-        let activeClause = activeOnly ? "AND c.is_active=1" : ""
+        let activeClause = activeOnly ? """
+            AND c.is_active=1
+            AND (
+                c.origin!='localVerification'
+                OR c.source_observation_id IS NOT NULL
+                OR EXISTS (
+                    SELECT 1 FROM runs r
+                    JOIN run_verifications v ON v.run_id=r.id
+                    WHERE r.id=c.source_run_id
+                      AND \(RunPerfectEvidenceSQL.predicate(
+                          run: "r",
+                          verification: "v"
+                      ))
+                )
+            )
+            """ : ""
         return try query(
             """
             SELECT c.app_id, g.name, c.backend, c.verified_at, c.evidence, c.criteria_version,
@@ -1468,6 +1635,9 @@ public actor CompatibilityRepository {
         try ensurePrepared()
         let integrity = try scalarText("PRAGMA quick_check;") ?? "unknown"
         let violations = try countRows("PRAGMA foreign_key_check;")
+        let perfectEvidenceViolations = try perfectEvidenceViolationCount()
+        let activeCertificationViolations = try activeCertificationViolationCount()
+        let repairAttemptEvidenceViolations = try repairAttemptEvidenceViolationCount()
         return CompatibilityDatabaseHealth(
             schemaVersion: try schemaVersion(),
             integrity: integrity,
@@ -1496,7 +1666,14 @@ public actor CompatibilityRepository {
             researchExperimentCount: try scalarInt("SELECT COUNT(*) FROM research_experiments;"),
             researchGateCount: try scalarInt("SELECT COUNT(*) FROM research_gate_results;"),
             researchArtifactCount: try scalarInt("SELECT COUNT(*) FROM research_artifacts;"),
-            preflightReportCount: try scalarInt("SELECT COUNT(*) FROM run_preflight_reports;")
+            preflightReportCount: try scalarInt("SELECT COUNT(*) FROM run_preflight_reports;"),
+            perfectEvidenceViolationCount: perfectEvidenceViolations,
+            activeCertificationViolationCount: activeCertificationViolations,
+            repairAttemptEvidenceViolationCount: repairAttemptEvidenceViolations,
+            launchEnvelopeCount: try scalarInt("SELECT COUNT(*) FROM launch_envelopes;"),
+            launchEnvelopeEventCount: try scalarInt("SELECT COUNT(*) FROM launch_envelope_events;"),
+            launchEnvelopeReceiptCount: try scalarInt("SELECT COUNT(*) FROM launch_envelope_receipts;"),
+            launchEnvelopeViolationCount: try launchEnvelopeViolationCount()
         )
     }
 
@@ -1519,6 +1696,10 @@ public actor CompatibilityRepository {
             visibleResearchCaseIDs.contains($0.caseID)
         }
         let visibleResearchExperimentIDs = Set(visibleResearchExperiments.map(\.id))
+        let visibleLaunchEnvelopes = try launchEnvelopes().filter {
+            visibleRunIDs.contains($0.runID)
+        }
+        let visibleLaunchEnvelopeIDs = Set(visibleLaunchEnvelopes.map(\.id))
         let payload = CompatibilityExport(
             schemaVersion: Self.currentSchemaVersion,
             exportedAt: Date(),
@@ -1552,6 +1733,13 @@ public actor CompatibilityRepository {
             },
             preflightSnapshots: try preflightSnapshots().filter {
                 visibleRunIDs.contains($0.runID)
+            },
+            launchEnvelopes: visibleLaunchEnvelopes,
+            launchEnvelopeEvents: try visibleLaunchEnvelopes.flatMap {
+                try launchEnvelopeEvents(id: $0.id)
+            },
+            launchEnvelopeReceipts: try launchEnvelopeReceipts().filter {
+                visibleLaunchEnvelopeIDs.contains($0.envelopeID)
             },
             databaseHealth: try databaseHealth()
         )
@@ -1690,6 +1878,36 @@ public actor CompatibilityRepository {
                 )
                 try execute("PRAGMA user_version=14;")
             }
+            if startingVersion < 15 {
+                try execute("DROP TRIGGER IF EXISTS research_experiment_pass_guard_insert;")
+                try execute("DROP TRIGGER IF EXISTS research_experiment_pass_guard_update;")
+                try executeScript(ResearchSchema.sql)
+                try recordMigration(
+                    version: 15,
+                    name: "autoridad representativa en evidencia perfecta"
+                )
+                try execute("PRAGMA user_version=15;")
+            }
+            if startingVersion < 16 {
+                try executeScript(LaunchEnvelopeSchema.sql)
+                try recordMigration(
+                    version: 16,
+                    name: "autoridad durable de lanzamiento por App ID"
+                )
+                try execute("PRAGMA user_version=16;")
+            }
+            if startingVersion < 17 {
+                // La v16 no podía cerrar como fallo una autoridad que ya había marcado el
+                // límite de spawn. v17 sustituye únicamente el trigger, dentro de esta misma
+                // transacción IMMEDIATE: ante un fallo se restauran el guard anterior, las
+                // filas, los eventos y los recibos sin dejar una base a medio migrar.
+                try executeScript(LaunchEnvelopeSchema.v17TransitionGuardSQL)
+                try recordMigration(
+                    version: 17,
+                    name: "recuperación terminal de spawn sin proceso"
+                )
+                try execute("PRAGMA user_version=17;")
+            }
         }
     }
 
@@ -1706,6 +1924,75 @@ public actor CompatibilityRepository {
             WHERE process_id IS NOT NULL;
             """
         )
+    }
+
+    private func installClosedProcessCertificationGuards() throws {
+        try installClosedProcessCertificationGuards(Self.closedProcessCertificationGuards)
+    }
+
+    private func installRepairAttemptSchema() throws {
+        try transaction {
+            try executeScript(RepairAttemptSchema.sql)
+        }
+    }
+
+    private func installLaunchEnvelopeSchema() throws {
+        try transaction {
+            try executeScript(LaunchEnvelopeSchema.sql)
+        }
+    }
+
+    private func installClosedProcessCertificationGuards(_ sql: String) throws {
+        try transaction {
+            try executeScript(sql)
+        }
+    }
+
+    /// Se mantiene disponible para `@testable` también bajo `swift test -c release`: la prueba
+    /// valida la instalación atómica de guards, no habilita ninguna ruta de producto.
+    func installClosedProcessCertificationGuardsForTesting(_ sql: String) throws {
+        try installClosedProcessCertificationGuards(sql)
+    }
+
+    private func invalidatePerfectEvidenceWithoutClosedProcesses() throws {
+        let now = dateFormatter.string(from: Date())
+        try transaction {
+            try execute(
+                """
+                UPDATE run_verifications
+                SET verdict='invalidated', rendering='notTested', input_precision='notTested',
+                    graphics_settings='notTested', gameplay='notTested',
+                    notes='Verificación anulada: la ejecución conserva procesos sin cierre. '
+                          || notes
+                WHERE verdict='perfect' AND run_id IN (
+                    SELECT r.id FROM runs r
+                    JOIN run_verifications v ON v.run_id=r.id AND v.verdict='perfect'
+                    WHERE NOT (\(RunPerfectEvidenceSQL.predicate(
+                        run: "r",
+                        verification: "v"
+                    )))
+                );
+                """
+            )
+            try execute(
+                """
+                UPDATE verified_game_certifications
+                SET is_active=0, source_run_id=NULL, source_observation_id=NULL,
+                    configuration_fingerprint=NULL, engine_fingerprint=NULL, synced_at=?
+                WHERE origin='localVerification' AND source_run_id IS NOT NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM runs r
+                      JOIN run_verifications v ON v.run_id=r.id AND v.verdict='perfect'
+                      WHERE r.id=verified_game_certifications.source_run_id
+                        AND \(RunPerfectEvidenceSQL.predicate(
+                            run: "r",
+                            verification: "v"
+                        ))
+                  );
+                """,
+                bindings: [now]
+            )
+        }
     }
 
     private func addPreflightCaptureColumns() throws {
@@ -1964,8 +2251,10 @@ public actor CompatibilityRepository {
                 FROM (
                     SELECT r.app_id, r.backend
                     FROM runs r JOIN run_verifications v ON v.run_id=r.id
-                    WHERE v.verdict='perfect' AND r.process_id IS NOT NULL
-                      AND r.result!='preparing'
+                    WHERE \(RunPerfectEvidenceSQL.predicate(
+                        run: "r",
+                        verification: "v"
+                    ))
                     UNION
                     SELECT o.app_id, o.backend
                     FROM compatibility_observations o
@@ -2131,8 +2420,10 @@ public actor CompatibilityRepository {
                 FROM runs r
                 JOIN run_verifications v ON v.run_id=r.id AND v.verdict='perfect'
                 JOIN run_engine_snapshots e ON e.run_id=r.id
-                WHERE r.app_id=? AND r.backend=? AND r.process_id IS NOT NULL
-                  AND r.result!='preparing'
+                WHERE r.app_id=? AND r.backend=? AND \(RunPerfectEvidenceSQL.predicate(
+                    run: "r",
+                    verification: "v"
+                ))
                 UNION ALL
                 SELECT 'observation', o.id, o.configuration_fingerprint,
                        e.engine_fingerprint, o.observed_at
@@ -2317,7 +2608,56 @@ public actor CompatibilityRepository {
         }
     }
 
-    private func validateDatabase() throws {
+    private func perfectEvidenceViolationCount() throws -> Int {
+        try scalarInt(
+            """
+            SELECT COUNT(*) FROM run_verifications v
+            JOIN runs r ON r.id=v.run_id
+            WHERE v.verdict='perfect' AND NOT (\(RunPerfectEvidenceSQL.predicate(
+                run: "r",
+                verification: "v"
+            )));
+            """
+        )
+    }
+
+    private func activeCertificationViolationCount() throws -> Int {
+        try scalarInt(
+            """
+            SELECT COUNT(*) FROM verified_game_certifications c
+            WHERE c.is_active=1 AND c.origin='localVerification' AND NOT (
+                (
+                    c.source_run_id IS NOT NULL AND c.source_observation_id IS NULL
+                    AND EXISTS (
+                        SELECT 1 FROM runs r
+                        JOIN run_verifications v ON v.run_id=r.id AND v.verdict='perfect'
+                        JOIN run_engine_snapshots e ON e.run_id=r.id
+                        WHERE r.id=c.source_run_id
+                          AND r.app_id=c.app_id AND r.backend=c.backend
+                          AND r.configuration_fingerprint=c.configuration_fingerprint
+                          AND e.engine_fingerprint=c.engine_fingerprint
+                          AND \(RunPerfectEvidenceSQL.predicate(
+                              run: "r",
+                              verification: "v"
+                          ))
+                    )
+                ) OR (
+                    c.source_observation_id IS NOT NULL AND c.source_run_id IS NULL
+                    AND EXISTS (
+                        SELECT 1 FROM compatibility_observations o
+                        JOIN observation_engine_snapshots e ON e.observation_id=o.id
+                        WHERE o.id=c.source_observation_id AND o.verdict='perfect'
+                          AND o.app_id=c.app_id AND o.backend=c.backend
+                          AND o.configuration_fingerprint=c.configuration_fingerprint
+                          AND e.engine_fingerprint=c.engine_fingerprint
+                    )
+                )
+            );
+            """
+        )
+    }
+
+    func validateDatabase() throws {
         let version = try schemaVersion()
         guard version == Self.currentSchemaVersion else {
             throw RegressionCoreError.database(
@@ -2353,16 +2693,10 @@ public actor CompatibilityRepository {
                 "Hay perfiles perfectos sin todas las dimensiones confirmadas"
             )
         }
-        let perfectRunsWithoutLaunch = try scalarInt(
-            """
-            SELECT COUNT(*) FROM run_verifications v
-            JOIN runs r ON r.id=v.run_id
-            WHERE v.verdict='perfect' AND (r.process_id IS NULL OR r.result='preparing');
-            """
-        )
+        let perfectRunsWithoutLaunch = try perfectEvidenceViolationCount()
         guard perfectRunsWithoutLaunch == 0 else {
             throw RegressionCoreError.database(
-                "Hay verificaciones perfectas sobre ejecuciones que nunca llegaron a iniciarse"
+                "Hay verificaciones perfectas sobre ejecuciones sin cierre completo de procesos"
             )
         }
         let invalidCertificationOrigins = try scalarInt(
@@ -2372,35 +2706,7 @@ public actor CompatibilityRepository {
                OR (source_run_id IS NOT NULL AND source_observation_id IS NOT NULL);
             """
         )
-        let invalidLocalCertifications = try scalarInt(
-            """
-            SELECT COUNT(*) FROM verified_game_certifications c
-            WHERE c.is_active=1 AND c.origin='localVerification' AND NOT (
-                (
-                    c.source_run_id IS NOT NULL AND c.source_observation_id IS NULL
-                    AND EXISTS (
-                        SELECT 1 FROM runs r
-                        JOIN run_verifications v ON v.run_id=r.id AND v.verdict='perfect'
-                        JOIN run_engine_snapshots e ON e.run_id=r.id
-                        WHERE r.id=c.source_run_id
-                          AND r.app_id=c.app_id AND r.backend=c.backend
-                          AND r.configuration_fingerprint=c.configuration_fingerprint
-                          AND e.engine_fingerprint=c.engine_fingerprint
-                    )
-                ) OR (
-                    c.source_observation_id IS NOT NULL AND c.source_run_id IS NULL
-                    AND EXISTS (
-                        SELECT 1 FROM compatibility_observations o
-                        JOIN observation_engine_snapshots e ON e.observation_id=o.id
-                        WHERE o.id=c.source_observation_id AND o.verdict='perfect'
-                          AND o.app_id=c.app_id AND o.backend=c.backend
-                          AND o.configuration_fingerprint=c.configuration_fingerprint
-                          AND e.engine_fingerprint=c.engine_fingerprint
-                    )
-                )
-            );
-            """
-        )
+        let invalidLocalCertifications = try activeCertificationViolationCount()
         guard invalidCertificationOrigins == 0, invalidLocalCertifications == 0 else {
             throw RegressionCoreError.database(
                 "Hay blindados locales sin una evidencia perfecta y reproducible"
@@ -2443,6 +2749,10 @@ public actor CompatibilityRepository {
         try validateRuntimeEvolutionData()
         try validateResearchData()
         try validatePreflightData()
+        // Las filas históricas de envelope se contabilizan por `databaseHealth` y bloquean su
+        // estado sano. No se aborta la apertura de la base por evidencia ya malformada: así la
+        // UI/CLI puede exponer el fallo y seguir rechazando cualquier nuevo lanzamiento, en vez
+        // de ocultar el diagnóstico detrás de una base imposible de inspeccionar.
     }
 
     private func schemaVersion() throws -> Int {
@@ -3007,23 +3317,142 @@ public actor CompatibilityRepository {
             ON verified_game_certifications(source_observation_id);
         CREATE INDEX IF NOT EXISTS verified_certifications_engine_idx
             ON verified_game_certifications(engine_fingerprint);
-        CREATE TRIGGER IF NOT EXISTS run_verifications_perfect_requires_launch_insert
+        """
+
+    private static let closedProcessCertificationGuards = """
+        DROP TRIGGER IF EXISTS run_verifications_perfect_requires_launch_insert;
+        DROP TRIGGER IF EXISTS run_verifications_perfect_requires_launch_update;
+        DROP TRIGGER IF EXISTS run_processes_open_invalidates_perfect_insert;
+        DROP TRIGGER IF EXISTS run_processes_open_invalidates_perfect_update;
+        DROP TRIGGER IF EXISTS run_processes_mutation_invalidates_perfect_insert;
+        DROP TRIGGER IF EXISTS run_processes_mutation_invalidates_perfect_update;
+        DROP TRIGGER IF EXISTS run_processes_mutation_invalidates_perfect_delete;
+        DROP TRIGGER IF EXISTS runs_semantic_mutation_invalidates_perfect;
+        DROP TRIGGER IF EXISTS runs_perfect_history_prevents_delete;
+        DROP TRIGGER IF EXISTS runs_verified_history_prevents_delete;
+        CREATE TRIGGER run_verifications_perfect_requires_launch_insert
         BEFORE INSERT ON run_verifications
         WHEN NEW.verdict='perfect' AND NOT EXISTS (
             SELECT 1 FROM runs r
-            WHERE r.id=NEW.run_id AND r.process_id IS NOT NULL AND r.result!='preparing'
+            WHERE r.id=NEW.run_id AND \(RunPerfectEvidenceSQL.predicate(
+                run: "r",
+                verification: "NEW"
+            ))
         )
         BEGIN
-            SELECT RAISE(ABORT, 'perfect verification requires a launched run');
+            SELECT RAISE(ABORT, 'perfect verification requires a closed launched run');
         END;
-        CREATE TRIGGER IF NOT EXISTS run_verifications_perfect_requires_launch_update
+        CREATE TRIGGER run_verifications_perfect_requires_launch_update
         BEFORE UPDATE ON run_verifications
         WHEN NEW.verdict='perfect' AND NOT EXISTS (
             SELECT 1 FROM runs r
-            WHERE r.id=NEW.run_id AND r.process_id IS NOT NULL AND r.result!='preparing'
+            WHERE r.id=NEW.run_id AND \(RunPerfectEvidenceSQL.predicate(
+                run: "r",
+                verification: "NEW"
+            ))
         )
         BEGIN
-            SELECT RAISE(ABORT, 'perfect verification requires a launched run');
+            SELECT RAISE(ABORT, 'perfect verification requires a closed launched run');
+        END;
+        CREATE TRIGGER run_processes_mutation_invalidates_perfect_insert
+        AFTER INSERT ON run_processes
+        BEGIN
+            UPDATE run_verifications
+            SET verdict='invalidated', rendering='notTested', input_precision='notTested',
+                graphics_settings='notTested', gameplay='notTested',
+                notes='Verificación anulada: cambió el conjunto de procesos observado. ' || notes
+            WHERE run_id=NEW.run_id AND verdict='perfect';
+            UPDATE verified_game_certifications
+            SET is_active=0, source_run_id=NULL, source_observation_id=NULL,
+                configuration_fingerprint=NULL, engine_fingerprint=NULL,
+                synced_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE origin='localVerification' AND source_run_id=NEW.run_id;
+            UPDATE repair_attempts
+            SET state='blocked',
+                notes='Intento bloqueado: cambió el conjunto de procesos del reintento. ' || notes,
+                updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE retry_run_id=NEW.run_id AND state IN ('verified','acceptedWithIssues');
+        END;
+        CREATE TRIGGER run_processes_mutation_invalidates_perfect_update
+        AFTER UPDATE ON run_processes
+        BEGIN
+            UPDATE run_verifications
+            SET verdict='invalidated', rendering='notTested', input_precision='notTested',
+                graphics_settings='notTested', gameplay='notTested',
+                notes='Verificación anulada: cambió un proceso observado. ' || notes
+            WHERE run_id IN (OLD.run_id, NEW.run_id) AND verdict='perfect';
+            UPDATE verified_game_certifications
+            SET is_active=0, source_run_id=NULL, source_observation_id=NULL,
+                configuration_fingerprint=NULL, engine_fingerprint=NULL,
+                synced_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE origin='localVerification' AND source_run_id IN (OLD.run_id, NEW.run_id);
+            UPDATE repair_attempts
+            SET state='blocked',
+                notes='Intento bloqueado: cambió un proceso del reintento. ' || notes,
+                updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE retry_run_id IN (OLD.run_id, NEW.run_id)
+              AND state IN ('verified','acceptedWithIssues');
+        END;
+        CREATE TRIGGER run_processes_mutation_invalidates_perfect_delete
+        AFTER DELETE ON run_processes
+        BEGIN
+            UPDATE run_verifications
+            SET verdict='invalidated', rendering='notTested', input_precision='notTested',
+                graphics_settings='notTested', gameplay='notTested',
+                notes='Verificación anulada: se eliminó un proceso observado. ' || notes
+            WHERE run_id=OLD.run_id AND verdict='perfect';
+            UPDATE verified_game_certifications
+            SET is_active=0, source_run_id=NULL, source_observation_id=NULL,
+                configuration_fingerprint=NULL, engine_fingerprint=NULL,
+                synced_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE origin='localVerification' AND source_run_id=OLD.run_id;
+            UPDATE repair_attempts
+            SET state='blocked',
+                notes='Intento bloqueado: se eliminó un proceso del reintento. ' || notes,
+                updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE retry_run_id=OLD.run_id AND state IN ('verified','acceptedWithIssues');
+        END;
+        CREATE TRIGGER runs_semantic_mutation_invalidates_perfect
+        AFTER UPDATE ON runs
+        WHEN (
+            OLD.app_id IS NOT NEW.app_id OR OLD.backend IS NOT NEW.backend
+            OR OLD.bottle_name IS NOT NEW.bottle_name
+            OR OLD.provider_version IS NOT NEW.provider_version
+            OR OLD.started_at IS NOT NEW.started_at OR OLD.ended_at IS NOT NEW.ended_at
+            OR OLD.result IS NOT NEW.result OR OLD.exit_code IS NOT NEW.exit_code
+            OR OLD.process_id IS NOT NEW.process_id OR OLD.executable IS NOT NEW.executable
+            OR OLD.launch_ms IS NOT NEW.launch_ms OR OLD.command IS NOT NEW.command
+            OR OLD.arguments_json IS NOT NEW.arguments_json
+            OR OLD.system_json IS NOT NEW.system_json
+            OR OLD.configuration_fingerprint IS NOT NEW.configuration_fingerprint
+            OR OLD.after_configuration_fingerprint IS NOT NEW.after_configuration_fingerprint
+            OR OLD.configuration_delta_json IS NOT NEW.configuration_delta_json
+        )
+        BEGIN
+            UPDATE run_verifications
+            SET verdict='invalidated', rendering='notTested', input_precision='notTested',
+                graphics_settings='notTested', gameplay='notTested',
+                notes='Verificación anulada: cambió la ejecución observada. ' || notes
+            WHERE run_id=NEW.id AND verdict='perfect';
+            UPDATE verified_game_certifications
+            SET is_active=0, source_run_id=NULL, source_observation_id=NULL,
+                configuration_fingerprint=NULL, engine_fingerprint=NULL,
+                synced_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE origin='localVerification' AND source_run_id=NEW.id;
+            UPDATE repair_attempts
+            SET state='blocked',
+                notes='Intento bloqueado: cambió la ejecución del reintento. ' || notes,
+                updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE retry_run_id=NEW.id AND state IN ('verified','acceptedWithIssues');
+        END;
+        CREATE TRIGGER runs_verified_history_prevents_delete
+        BEFORE DELETE ON runs
+        WHEN EXISTS (
+            SELECT 1 FROM run_verifications v
+            WHERE v.run_id=OLD.id
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'verified run history cannot be deleted');
         END;
         """
 }
@@ -3052,5 +3481,8 @@ public struct CompatibilityExport: Codable, Sendable {
     public let researchGates: [ResearchGateResult]
     public let researchArtifacts: [ResearchArtifact]
     public let preflightSnapshots: [RunPreflightSnapshot]
+    public let launchEnvelopes: [LaunchEnvelopeIntent]
+    public let launchEnvelopeEvents: [LaunchEnvelopeEvent]
+    public let launchEnvelopeReceipts: [LaunchEnvelopeReceipt]
     public let databaseHealth: CompatibilityDatabaseHealth
 }

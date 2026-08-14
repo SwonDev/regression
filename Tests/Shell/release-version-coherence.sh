@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 INSTALLER="$ROOT/Scripts/install_regression.sh"
-CANDIDATE_PACKAGER="$ROOT/Scripts/package_installed_runtime_candidate.sh"
-CANDIDATE_VERIFIER="$ROOT/build/verify-installed-runtime-candidate.sh"
+RELEASE_PACKAGER="$ROOT/Scripts/package_release.sh"
+NATIVE_PACKAGER="$ROOT/Scripts/package_regression.sh"
 SCRATCH="$(mktemp -d /private/tmp/regression-version-coherence-test.XXXXXX)"
 
 cleanup() {
@@ -24,39 +25,33 @@ contract_value() {
 }
 
 assert_contract() {
-    local installer="$1" packager="$2" verifier="$3"
-    [[ "$(contract_value "$installer" VERSION)" == "1.11.0" ]] || return 1
-    [[ "$(contract_value "$installer" BUILD_NUMBER)" == "37" ]] || return 1
-    [[ "$(contract_value "$packager" BASELINE_VERSION)" == "1.10.1" ]] || return 1
-    [[ "$(contract_value "$packager" BASELINE_BUILD_NUMBER)" == "36" ]] || return 1
-    [[ "$(contract_value "$packager" TARGET_VERSION)" == "1.11.0" ]] || return 1
-    [[ "$(contract_value "$packager" TARGET_BUILD_NUMBER)" == "37" ]] || return 1
-    [[ "$(contract_value "$verifier" BASELINE_VERSION)" == "1.10.1" ]] || return 1
-    [[ "$(contract_value "$verifier" BASELINE_BUILD_NUMBER)" == "36" ]] || return 1
-    [[ "$(contract_value "$verifier" TARGET_VERSION)" == "1.11.0" ]] || return 1
-    [[ "$(contract_value "$verifier" TARGET_BUILD_NUMBER)" == "37" ]] || return 1
-    grep -F 'verify-public-installed-state.sh" --release-1.10.1' "$packager" >/dev/null \
-        || return 1
-    grep -F 'verify-public-installed-state.sh" --release-1.11.0' "$verifier" >/dev/null \
-        || return 1
+    local installer="$1" release_packager="$2" native_packager="$3"
+    [[ "$(contract_value "$installer" VERSION)" == "1.12.0" ]] || return 1
+    [[ "$(contract_value "$installer" BUILD_NUMBER)" == "38" ]] || return 1
+    grep -Fx 'VERSION="${REGRESSION_RELEASE_VERSION:-1.12.0}"' \
+        "$release_packager" >/dev/null || return 1
+    grep -Fx 'BUILD_NUMBER="${REGRESSION_RELEASE_BUILD_NUMBER:-38}"' \
+        "$release_packager" >/dev/null || return 1
+    [[ "$(contract_value "$native_packager" VERSION)" == "1.12.0" ]] || return 1
+    [[ "$(contract_value "$native_packager" BUILD_NUMBER)" == "38" ]] || return 1
 }
 
-assert_contract "$INSTALLER" "$CANDIDATE_PACKAGER" "$CANDIDATE_VERIFIER" || {
-    printf 'FAIL: instalador, promoción y verificador no comparten el contrato 1.11.0 (37).\n' >&2
+assert_contract "$INSTALLER" "$RELEASE_PACKAGER" "$NATIVE_PACKAGER" || {
+    printf 'FAIL: instalador y empaquetadores no comparten el contrato 1.12.0 (38).\n' >&2
     exit 1
 }
 
 cp "$INSTALLER" "$SCRATCH/install_regression.sh"
-cp "$CANDIDATE_PACKAGER" "$SCRATCH/package_installed_runtime_candidate.sh"
-cp "$CANDIDATE_VERIFIER" "$SCRATCH/verify-installed-runtime-candidate.sh"
-/usr/bin/sed -i '' 's/^TARGET_BUILD_NUMBER="37"$/TARGET_BUILD_NUMBER="36"/' \
-    "$SCRATCH/package_installed_runtime_candidate.sh"
+cp "$RELEASE_PACKAGER" "$SCRATCH/package_release.sh"
+cp "$NATIVE_PACKAGER" "$SCRATCH/package_regression.sh"
+/usr/bin/sed -i '' 's/^VERSION="1.12.0"$/VERSION="1.11.0"/' \
+    "$SCRATCH/package_regression.sh"
 if assert_contract \
     "$SCRATCH/install_regression.sh" \
-    "$SCRATCH/package_installed_runtime_candidate.sh" \
-    "$SCRATCH/verify-installed-runtime-candidate.sh"; then
-    printf 'FAIL: el contrato aceptó un build candidato divergente.\n' >&2
+    "$SCRATCH/package_release.sh" \
+    "$SCRATCH/package_regression.sh"; then
+    printf 'FAIL: el contrato aceptó un empaquetador 1.11 divergente.\n' >&2
     exit 1
 fi
 
-printf 'PASS: instalador y candidato comparten 1.11.0 (37) y el drift negativo se rechaza.\n'
+printf 'PASS: instalador y empaquetadores comparten 1.12.0 (38) y el drift 1.11 se rechaza.\n'

@@ -3,6 +3,11 @@
 Este índice separa la portada del producto de la documentación técnica. Empieza por la ruta que
 corresponda a tu objetivo y consulta `AGENTS.md` antes de cambiar runtime, perfiles o botella.
 
+> **Contrato actual del código fuente:** Regression **1.12.0 (38)** y SQLite **v17**.
+> **v1.12.0 (38)** es la release estable actual y **v1.11.0 (37)** el baseline histórico. Los documentos de
+> expedientes conservan versiones anteriores como evidencia y no deben reinterpretarse como el
+> estado de la release actual.
+
 ## Empieza aquí
 
 | Objetivo | Documento |
@@ -11,7 +16,9 @@ corresponda a tu objetivo y consulta `AGENTS.md` antes de cambiar runtime, perfi
 | Investigar un juego sin romper otro | [Protocolo de compatibilidad](compatibility-research.md) |
 | Preparar una prueba reproducible | [Preflight y evidencia](game-test-readiness.md) |
 | Entender datos, perfiles y certificaciones | [Plataforma de compatibilidad](compatibility-platform.md) |
+| Entender la autoridad durable de lanzamiento v17 | [Plataforma de compatibilidad](compatibility-platform.md#autoridad-de-lanzamiento-v17) |
 | Revisar runtimes y autorreparación | [Evolución tecnológica](runtime-evolution.md) |
+| Entender telemetría y certificación v15 | [Plataforma de compatibilidad](compatibility-platform.md#custodia-de-procesos-y-perfectos-v15) |
 | Preparar D3DMetal legalmente | [Apple GPTK: instalación asistida](apple-gptk-onboarding.md) |
 | Auditar la aplicación Swift/macOS | [Auditoría nativa](native-app-audit.md) |
 | Entender el canal de autoactualización | [Actualizaciones automáticas](automatic-updates.md) |
@@ -88,7 +95,7 @@ La explicación completa y los criterios de cierre viven en
 ## Mapa del repositorio
 
 ```text
-Regression.app/                  App canónica de desarrollo
+Regression.app/                  Artefacto local de desarrollo, nunca instalación canónica
 Sources/Regression/              Interfaz nativa de barra de menús
 Sources/RegressionCore/          Coordinación, perfiles, telemetría y catálogo
 Tests/RegressionCoreTests/       Pruebas de comportamiento y no regresión

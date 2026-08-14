@@ -848,8 +848,10 @@ extension CompatibilityRepository {
               ON c.source_run_id=r.id AND c.app_id=r.app_id
              AND c.backend='regression' AND c.is_active=1
             WHERE r.id=? AND r.app_id=? AND r.backend='regression'
-              AND r.process_id IS NOT NULL AND r.result!='preparing'
-              AND v.verdict='perfect'
+              AND \(RunPerfectEvidenceSQL.predicate(
+                  run: "r",
+                  verification: "v"
+              ))
               AND v.rendering='passed' AND v.input_precision='passed'
               AND v.graphics_settings='passed' AND v.gameplay='passed';
             """,
@@ -1252,8 +1254,11 @@ enum ResearchSchema {
                   AND r.app_id=(
                       SELECT app_id FROM compatibility_research_cases WHERE id=NEW.case_id
                   )
-                  AND r.backend='regression' AND r.process_id IS NOT NULL
-                  AND r.result!='preparing' AND v.verdict='perfect'
+                  AND r.backend='regression'
+                  AND \(RunPerfectEvidenceSQL.predicate(
+                      run: "r",
+                      verification: "v"
+                  ))
                   AND v.rendering='passed' AND v.input_precision='passed'
                   AND v.graphics_settings='passed' AND v.gameplay='passed'
             )

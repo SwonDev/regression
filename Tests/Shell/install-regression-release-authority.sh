@@ -38,26 +38,81 @@ expect_failure()
 }
 
 for script in "$INSTALLER" "$VERIFIER"; do
-    /usr/bin/grep -Fq 'REGRESSION_RELEASE_AUTHORITY_V1_BEGIN' "$script" \
-        || fail "falta la autoridad compilada v1 en $script"
-    /usr/bin/grep -Fq 'REGRESSION_RELEASE_AUTHORITY_V1_END' "$script" \
-        || fail "la autoridad compilada v1 no está delimitada en $script"
+    /usr/bin/grep -Fq 'REGRESSION_RELEASE_AUTHORITY_V2_BEGIN' "$script" \
+        || fail "falta la autoridad compilada v2 en $script"
+    /usr/bin/grep -Fq 'REGRESSION_RELEASE_AUTHORITY_V2_END' "$script" \
+        || fail "la autoridad compilada v2 no está delimitada en $script"
     /usr/bin/grep -Fq 'da8ba98d99d157f981ef3a2472dc9d74c9ce4673ef126bdd61851b9dd21dedb3' \
         "$script" || fail "falta la autoridad Windows Media en $script"
+    for runtime_authority in \
+        'fed13faa895c9ea5896a6497490db26674c3dca2a318e3389d8e43ba3e00f552 bin/wine' \
+        '8d14fb9d6d9730c300ba16b5997d98218a2a40a78008d60f3a6edb719f328db3 bin/wineserver' \
+        '5636a6505e872c8d185d8db7ced2d4aa8e9057e81c4c579e4b623009f9c2857b lib/wine/x86_64-unix/wine' \
+        '66622d2832d99c37cdaa2872c5409b5f9a5dc04d1fdb9dcd426ae37f8365942e lib/wine/x86_64-unix/ntdll.so' \
+        '0315a55b11a456590a9368f4cb8d0011d6735cc04c9093ea583570d1352e1ee1 share/wine/wine.inf' \
+        '885c0421bfe30600bae9df83961b0fcbb5b9ccd1c02e7b071ce213ff2522e34a lib/wine/x86_64-windows/ntdll.dll' \
+        '7b580e19eb4fce14b5730cd2835c5204dc2622ce0fc4f33b68b0155864477667 lib/wine/i386-windows/ntdll.dll'
+    do
+        /usr/bin/grep -Fq "$runtime_authority" "$script" \
+            || fail "falta la autoridad del runtime mínimo '$runtime_authority' en $script"
+    done
+    ! /usr/bin/grep -Fq \
+        '8fb847f4f71ae120609c963fc588d3ea77b0887f173858c2d462e424a2d8fd8e' \
+        "$script" || fail "el PIN 1.11 con rutas GPTK legacy sigue autorizado en $script"
+    for pre_sign_hash in \
+        668a88221884f4e62f3d40bed4a125a45e2e745c1d56610f8e3a33273a219299 \
+        173c4926f53d0551d85ee6efe48e641867230a27bda7fc6a226ac484012d13fb \
+        48ae6acb327148f3d8f02afcc93d8f8e61ab333b1dec752918244e58828cf5c9 \
+        f3ccf2a487d8999659a1e641b043b916487851c1540362a0a983cdf0fd0bb8cc
+    do
+        ! /usr/bin/grep -Fq "$pre_sign_hash" "$script" \
+            || fail "un hash pre-firma del builder sigue autorizado en $script"
+    done
+    /usr/bin/grep -Fq 'REGRESSION_EXTERNAL_D3DMETAL_ROUTE_COUNT' "$script" \
+        || fail "el contrato GPTK indexado no se verifica en $script"
+    /usr/bin/grep -Fq 'REGRESSION_EXTERNAL_D3DMETAL_(EXECUTABLE|WINE_ROOT)' "$script" \
+        || fail "la ruta GPTK genérica heredada no se rechaza en $script"
 done
+/usr/bin/grep -Fq 'VERSION="1.12.0"' "$INSTALLER" \
+    || fail "el instalador no declara Regression 1.12.0"
+/usr/bin/grep -Fq 'BUILD_NUMBER="38"' "$INSTALLER" \
+    || fail "el instalador no declara el build 38"
 /usr/bin/grep -Fq 'PATH="/usr/bin:/bin:/usr/sbin:/sbin"' "$INSTALLER" \
     || fail "el instalador público permite sustituir comandos de confianza mediante PATH"
+installer_preamble="$WORK_DIR/installer-preamble.sh"
+/usr/bin/sed -n '1,/^VERSION=/p' "$INSTALLER" > "$installer_preamble"
+WINESERVERSOCKET="$WORK_DIR/hostile-wineserver-socket" \
+    /bin/bash -c 'source "$1"; [[ -z "${WINESERVERSOCKET+x}" ]]' \
+        regression-installer-preamble "$installer_preamble" \
+    || fail "el instalador conserva WINESERVERSOCKET hostil antes del Wine canónico"
 
 installer_authority="$WORK_DIR/installer-authority"
 verifier_authority="$WORK_DIR/verifier-authority"
 /usr/bin/sed -n \
-    '/REGRESSION_RELEASE_AUTHORITY_V1_BEGIN/,/REGRESSION_RELEASE_AUTHORITY_V1_END/p' \
+    '/REGRESSION_RELEASE_AUTHORITY_V2_BEGIN/,/REGRESSION_RELEASE_AUTHORITY_V2_END/p' \
     "$INSTALLER" > "$installer_authority"
 /usr/bin/sed -n \
-    '/REGRESSION_RELEASE_AUTHORITY_V1_BEGIN/,/REGRESSION_RELEASE_AUTHORITY_V1_END/p' \
+    '/REGRESSION_RELEASE_AUTHORITY_V2_BEGIN/,/REGRESSION_RELEASE_AUTHORITY_V2_END/p' \
     "$VERIFIER" > "$verifier_authority"
 /usr/bin/cmp -s "$installer_authority" "$verifier_authority" \
     || fail "instalador y verificador no comparten la misma autoridad compilada"
+# shellcheck disable=SC1090
+source "$installer_authority"
+runtime_authority_accepts()
+{
+    local expected_hash="$1" expected_path="$2"
+    release_runtime_authority_v2 \
+        | /usr/bin/grep -Fxq "$expected_hash $expected_path"
+}
+runtime_authority_accepts \
+    66622d2832d99c37cdaa2872c5409b5f9a5dc04d1fdb9dcd426ae37f8365942e \
+    lib/wine/x86_64-unix/ntdll.so \
+    || fail "ntdll.so post-firma no supera la autoridad pública"
+if runtime_authority_accepts \
+    f3ccf2a487d8999659a1e641b043b916487851c1540362a0a983cdf0fd0bb8cc \
+    lib/wine/x86_64-unix/ntdll.so; then
+    fail "ntdll.so pre-firma supera indebidamente la autoridad pública"
+fi
 
 HELPERS="$WORK_DIR/installer-authority-helpers.sh"
 /usr/bin/sed -n \

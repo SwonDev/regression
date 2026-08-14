@@ -13,8 +13,10 @@ public enum GameTechnologyConfidence: String, Codable, Sendable {
 }
 
 public enum GameTechnologyEvidenceMarker: String, Codable, CaseIterable, Sendable {
+    case directXJune2010Payload = "directx-june-2010-payload"
     case directXSetupLibrary = "directx-setup-library"
     case directXSetupProgram = "directx-setup-program"
+    case dotNetFrameworkRedistributable = "dotnet-framework-redistributable"
     case gameMakerDataArchive = "gamemaker-data-archive"
     case monoGameFrameworkAssembly = "monogame-framework-assembly"
     case unityDataManifest = "unity-data-manifest"
@@ -24,6 +26,8 @@ public enum GameTechnologyEvidenceMarker: String, Codable, CaseIterable, Sendabl
     case unrealShippingExecutable = "unreal-shipping-executable"
     case visualCppRedistributable = "visual-cpp-redistributable"
     case windowsExecutable = "windows-executable"
+    case windowsMediaAsset = "windows-media-asset"
+    case xnaFrameworkRedistributable = "xna-framework-redistributable"
     case xnaFrameworkAssembly = "xna-framework-assembly"
     case xnaGameAssembly = "xna-game-assembly"
 }
@@ -43,9 +47,16 @@ public struct GameTechnologyDetection: Codable, Equatable, Sendable {
 
 public enum GamePackagedRedistributableKind: String, Codable, CaseIterable, Sendable {
     case directXJune2010 = "directx-june-2010"
+    case directXRuntimeUnknown = "directx-runtime-unknown"
+    case dotNetFramework40 = "dotnet-framework-4.0"
+    case dotNetFramework45 = "dotnet-framework-4.5"
+    case dotNetFramework48 = "dotnet-framework-4.8"
+    case dotNetFrameworkUnknown = "dotnet-framework-unknown"
     case visualCppARM64 = "visual-cpp-arm64"
     case visualCppX64 = "visual-cpp-x64"
     case visualCppX86 = "visual-cpp-x86"
+    case xnaFramework31 = "xna-framework-3.1"
+    case xnaFramework40 = "xna-framework-4.0"
 }
 
 public struct GamePackagedRedistributable: Codable, Equatable, Sendable {
@@ -53,9 +64,19 @@ public struct GamePackagedRedistributable: Codable, Equatable, Sendable {
     public let evidence: [GameTechnologyEvidence]
 }
 
+public enum GameRuntimeComponentKind: String, Codable, CaseIterable, Sendable {
+    case windowsMedia = "windows-media"
+}
+
+public struct GameRuntimeComponentDetection: Codable, Equatable, Sendable {
+    public let kind: GameRuntimeComponentKind
+    public let evidence: [GameTechnologyEvidence]
+}
+
 public struct GameTechnologyEvidenceReport: Codable, Equatable, Sendable {
     public let technologies: [GameTechnologyDetection]
     public let packagedRedistributables: [GamePackagedRedistributable]
+    public let runtimeComponents: [GameRuntimeComponentDetection]
     public let runtimeRequirements: [GameRuntimeRequirement]
     public let scannedEntryCount: Int
     public let scannedMetadataBytes: Int
@@ -63,6 +84,7 @@ public struct GameTechnologyEvidenceReport: Codable, Equatable, Sendable {
     public var evidence: [GameTechnologyEvidence] {
         let values = technologies.flatMap(\.evidence)
             + packagedRedistributables.flatMap(\.evidence)
+            + runtimeComponents.flatMap(\.evidence)
         return Array(Set(values)).sorted {
             ($0.marker.rawValue, $0.relativePath) < ($1.marker.rawValue, $1.relativePath)
         }
@@ -96,16 +118,16 @@ public struct GameTechnologyEvidenceReport: Codable, Equatable, Sendable {
         forAppID appID: String,
         observedAt: Date = Date()
     ) throws -> [ResolvedGameRuntimeRequirement] {
-        try requirements(forAppID: appID, observedAt: observedAt).map(
-            GameRuntimeRequirementResolver.resolve
-        )
+        try requirements(forAppID: appID, observedAt: observedAt).map {
+            GameRuntimeRequirementResolver.resolve($0)
+        }
     }
 }
 
 struct GameTechnologyScanLimits: Equatable, Sendable {
     static let standard = Self(
-        maximumDepth: 8,
-        maximumEntries: 8_192,
+        maximumDepth: 7,
+        maximumEntries: 4_096,
         maximumMetadataBytes: 512 * 1_024
     )
 
@@ -114,18 +136,137 @@ struct GameTechnologyScanLimits: Equatable, Sendable {
     let maximumMetadataBytes: Int
 }
 
-/// Inventaría marcadores canónicos sin abrir binarios, seguir enlaces ni aplicar reparaciones.
+    /// Inventaría marcadores canónicos sin abrir binarios, seguir enlaces ni aplicar reparaciones.
 ///
 /// El presupuesto de bytes cubre los metadatos de ruta inspeccionados. El scanner no lee el
 /// contenido de los ficheros y sus requisitos solo contienen identificadores cerrados conocidos.
 public enum GameTechnologyEvidenceScanner {
+    /// Actualiza una única proyección automática desde el manifest que acredita ese App ID.
+    /// El manifest solo aporta el nombre de instalación; el inventario posterior queda anclado.
+    public static func refreshProjection(
+        appID: String,
+        steamRootURL: URL,
+        repository: CompatibilityRepository,
+        observedAt: Date = Date()
+    ) async throws -> GameTechnologyRequirementProjection {
+        try await refreshProjection(
+            appID: appID,
+            steamRootURL: steamRootURL,
+            repository: repository,
+            observedAt: observedAt,
+            onManifestValidated: nil
+        )
+    }
+
+    static func refreshProjection(
+        appID: String,
+        steamRootURL: URL,
+        repository: CompatibilityRepository,
+        observedAt: Date = Date(),
+        onManifestValidated: (() -> Void)?
+    ) async throws -> GameTechnologyRequirementProjection {
+        guard let canonicalAppID = SteamAppID.normalized(appID), canonicalAppID == appID else {
+            throw RegressionCoreError.invalidEvidence(
+                "el App ID solicitado no es canónico"
+            )
+        }
+        do {
+          let steamAppsURL = steamRootURL.appendingPathComponent(
+            "steamapps",
+            isDirectory: true
+          ).standardizedFileURL
+          guard let steamApps = AnchoredDirectory.open(steamAppsURL) else {
+            throw RegressionCoreError.invalidEvidence(
+                "la raíz steamapps no admite un anclaje seguro"
+            )
+          }
+          let manifestName = "appmanifest_\(canonicalAppID).acf"
+          let manifestData: Data
+          do {
+            manifestData = try steamApps.readRegularFile(
+                relativePath: manifestName,
+                maximumBytes: 4 * 1_024 * 1_024
+            )
+          } catch {
+            throw RegressionCoreError.invalidEvidence(
+                "no existe un manifest regular y acotado para el App ID solicitado"
+            )
+          }
+          guard steamApps.isStillNamedBy(steamAppsURL),
+              let manifest = String(data: manifestData, encoding: .utf8),
+              let game = SteamManifestParser.parse(
+                contents: manifest,
+                manifestURL: steamAppsURL.appendingPathComponent(manifestName),
+                backend: .regression
+              ),
+              game.appID == canonicalAppID,
+              SteamManifestParser.installReadiness(in: manifest) != .inProgress else {
+            throw RegressionCoreError.invalidEvidence(
+                "el manifest anclado no acredita una instalación completa para el App ID"
+            )
+          }
+          let directory = game.installDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+          guard !directory.isEmpty, directory != ".", directory != "..",
+              !directory.contains("/"), !directory.contains("\\"),
+              !directory.unicodeScalars.contains(where: { $0.value == 0 }) else {
+            throw RegressionCoreError.invalidEvidence(
+                "el directorio de instalación del juego no es seguro"
+            )
+          }
+          onManifestValidated?()
+          let root = steamAppsURL.appendingPathComponent(
+            "common/\(directory)",
+            isDirectory: true
+          )
+          let relativeGameRoot = "common/\(directory)"
+          let anchoredGameRoot: AnchoredDirectory
+          do {
+            anchoredGameRoot = try steamApps.openSubdirectory(
+              relativePath: relativeGameRoot
+            )
+          } catch {
+            throw RegressionCoreError.invalidEvidence(
+              "la raíz del juego no admite un anclaje seguro desde steamapps"
+            )
+          }
+          let report = try scan(
+            gameRootURL: root,
+            anchoredRoot: anchoredGameRoot,
+            rootIsStillNamed: {
+              steamApps.stillNamesSubdirectory(
+                relativePath: relativeGameRoot,
+                as: anchoredGameRoot
+              ) && steamApps.isStillNamedBy(steamAppsURL)
+            }
+          )
+            let requirements = try report.requirements(
+                forAppID: canonicalAppID,
+                observedAt: observedAt
+            )
+            try await repository.recordSuccessfulGameTechnologyScan(
+                appID: canonicalAppID,
+                requirements: requirements,
+                scannedAt: observedAt
+            )
+            return try await repository.gameTechnologyRequirementProjection(appID: canonicalAppID)
+        } catch {
+            try? await repository.recordFailedGameTechnologyScan(
+                appID: canonicalAppID,
+                error: error.localizedDescription,
+                attemptedAt: observedAt
+            )
+            throw error
+        }
+    }
+
     public static func scan(gameRootURL: URL) throws -> GameTechnologyEvidenceReport {
         try scan(gameRootURL: gameRootURL, limits: .standard)
     }
 
     static func scan(
         gameRootURL: URL,
-        limits: GameTechnologyScanLimits
+        limits: GameTechnologyScanLimits,
+        onDirectoryOpened: ((String) -> Void)? = nil
     ) throws -> GameTechnologyEvidenceReport {
         guard limits.maximumDepth >= 1,
               limits.maximumEntries >= 1,
@@ -135,31 +276,47 @@ public enum GameTechnologyEvidenceScanner {
             )
         }
 
-        let fileManager = FileManager.default
         let rootURL = gameRootURL.standardizedFileURL
-        let rootValues = try rootURL.resourceValues(forKeys: [
-            .isDirectoryKey, .isSymbolicLinkKey
-        ])
-        guard rootValues.isDirectory == true, rootValues.isSymbolicLink != true else {
+        guard let root = AnchoredDirectory.open(rootURL) else {
             throw RegressionCoreError.invalidEvidence(
                 "la raíz del inventario tecnológico debe ser un directorio regular"
             )
         }
 
-        let inventory = try inventory(
-            rootURL: rootURL,
+        return try scan(
+            gameRootURL: rootURL,
+            anchoredRoot: root,
             limits: limits,
-            fileManager: fileManager
+            onDirectoryOpened: onDirectoryOpened,
+            rootIsStillNamed: { root.isStillNamedBy(rootURL) }
+        )
+    }
+
+    private static func scan(
+        gameRootURL: URL,
+        anchoredRoot root: AnchoredDirectory,
+        limits: GameTechnologyScanLimits = .standard,
+        onDirectoryOpened: ((String) -> Void)? = nil,
+        rootIsStillNamed: () -> Bool
+    ) throws -> GameTechnologyEvidenceReport {
+        let inventory = try inventory(
+            rootURL: gameRootURL,
+            root: root,
+            limits: limits,
+            onDirectoryOpened: onDirectoryOpened,
+            rootIsStillNamed: rootIsStillNamed
         )
         let technologies = technologyDetections(in: inventory.entries)
         let redistributables = redistributableDetections(in: inventory.entries)
+        let runtimeComponents = runtimeComponentDetections(in: inventory.entries)
         let requirements = runtimeRequirements(
             for: technologies,
-            redistributables: redistributables
+            runtimeComponents: runtimeComponents
         )
         return GameTechnologyEvidenceReport(
             technologies: technologies,
             packagedRedistributables: redistributables,
+            runtimeComponents: runtimeComponents,
             runtimeRequirements: requirements,
             scannedEntryCount: inventory.entryCount,
             scannedMetadataBytes: inventory.metadataBytes
@@ -186,81 +343,50 @@ public enum GameTechnologyEvidenceScanner {
 
     private static func inventory(
         rootURL: URL,
+        root: AnchoredDirectory,
         limits: GameTechnologyScanLimits,
-        fileManager: FileManager
+        onDirectoryOpened: ((String) -> Void)?,
+        rootIsStillNamed: () -> Bool
     ) throws -> Inventory {
-        let keys: [URLResourceKey] = [
-            .isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey
-        ]
-        var traversalError: Error?
-        guard let enumerator = fileManager.enumerator(
-            at: rootURL,
-            includingPropertiesForKeys: keys,
-            options: [.skipsHiddenFiles],
-            errorHandler: { _, error in
-                traversalError = error
-                return false
-            }
-        ) else {
+        let anchored: AnchoredInventory
+        do {
+            anchored = try root.boundedInventory(
+                maximumDepth: limits.maximumDepth,
+                maximumEntries: limits.maximumEntries,
+                maximumMetadataBytes: limits.maximumMetadataBytes,
+                onDirectoryOpened: onDirectoryOpened
+            )
+        } catch AnchoredInventoryError.exceedsEntryBudget {
             throw RegressionCoreError.invalidEvidence(
-                "no se pudo abrir el inventario tecnológico"
+                "el inventario tecnológico excede el límite de entradas"
+            )
+        } catch AnchoredInventoryError.exceedsMetadataBudget {
+            throw RegressionCoreError.invalidEvidence(
+                "el inventario tecnológico excede el límite de metadatos"
+            )
+        } catch {
+            throw RegressionCoreError.invalidEvidence(
+                "el inventario tecnológico cambió durante la inspección anclada"
             )
         }
-
-        let rootComponents = rootURL.pathComponents
-        var entries: [Entry] = []
-        var entryCount = 0
-        var metadataBytes = 0
-
-        while let discoveredURL = enumerator.nextObject() as? URL {
-            let standardizedURL = discoveredURL.standardizedFileURL
-            let pathComponents = standardizedURL.pathComponents
-            guard pathComponents.starts(with: rootComponents) else {
-                enumerator.skipDescendants()
-                continue
-            }
-            let components = Array(pathComponents.dropFirst(rootComponents.count))
-            guard !components.isEmpty else { continue }
-            if components.count > limits.maximumDepth {
-                enumerator.skipDescendants()
-                continue
-            }
-
-            entryCount += 1
-            guard entryCount <= limits.maximumEntries else {
-                throw RegressionCoreError.invalidEvidence(
-                    "el inventario tecnológico excede el límite de entradas"
-                )
-            }
-            metadataBytes += components.reduce(0) { $0 + $1.utf8.count + 1 }
-            guard metadataBytes <= limits.maximumMetadataBytes else {
-                throw RegressionCoreError.invalidEvidence(
-                    "el inventario tecnológico excede el límite de metadatos"
-                )
-            }
-
-            let values = try standardizedURL.resourceValues(forKeys: Set(keys))
-            if values.isSymbolicLink == true {
-                enumerator.skipDescendants()
-                continue
-            }
-            let isDirectory = values.isDirectory == true
-            if isDirectory, components.count == limits.maximumDepth {
-                enumerator.skipDescendants()
-            }
-            entries.append(Entry(
-                components: components,
-                lowercaseComponents: components.map { $0.lowercased() },
-                relativePath: sanitizedRelativePath(components),
-                isDirectory: isDirectory,
-                isRegularFile: values.isRegularFile == true
-            ))
+        guard rootIsStillNamed() else {
+            throw RegressionCoreError.invalidEvidence(
+                "la raíz del inventario tecnológico cambió durante la inspección"
+            )
         }
-        if let traversalError { throw traversalError }
+        let entries = anchored.entries.map { entry in
+            Entry(
+                components: entry.components,
+                lowercaseComponents: entry.components.map { $0.lowercased() },
+                relativePath: sanitizedRelativePath(entry.components),
+                isDirectory: entry.isDirectory,
+                isRegularFile: entry.isRegularFile
+            )
+        }
         return Inventory(
             entries: entries.sorted { $0.lowercaseComponents.lexicographicallyPrecedes($1.lowercaseComponents) },
-            entryCount: entryCount,
-            metadataBytes: metadataBytes
+            entryCount: anchored.entryCount,
+            metadataBytes: anchored.metadataBytes
         )
     }
 
@@ -350,7 +476,10 @@ public enum GameTechnologyEvidenceScanner {
     private static func redistributableDetections(
         in entries: [Entry]
     ) -> [GamePackagedRedistributable] {
-        var detections: [GamePackagedRedistributable] = []
+        var evidenceByKind: [GamePackagedRedistributableKind: Set<GameTechnologyEvidence>] = [:]
+        func observe(_ kind: GamePackagedRedistributableKind, _ evidence: GameTechnologyEvidence) {
+            evidenceByKind[kind, default: []].insert(evidence)
+        }
         for (name, kind) in [
             ("vc_redist.arm64.exe", GamePackagedRedistributableKind.visualCppARM64),
             ("vc_redist.x64.exe", .visualCppX64),
@@ -359,10 +488,34 @@ public enum GameTechnologyEvidenceScanner {
             if let entry = entries.first(where: {
                 $0.isRegularFile && $0.lowercaseName == name
             }) {
-                detections.append(GamePackagedRedistributable(
-                    kind: kind,
-                    evidence: [evidence(.visualCppRedistributable, entry)]
-                ))
+                observe(kind, evidence(.visualCppRedistributable, entry))
+            }
+        }
+
+        for (name, kind) in [
+            ("xnafx31_redist.msi", GamePackagedRedistributableKind.xnaFramework31),
+            ("xnafx31_redist.exe", .xnaFramework31),
+            ("xnafx40_redist.msi", .xnaFramework40),
+            ("xnafx40_redist.exe", .xnaFramework40)
+        ] {
+            if let entry = entries.first(where: {
+                $0.isRegularFile && $0.lowercaseName == name
+            }) {
+                observe(kind, evidence(.xnaFrameworkRedistributable, entry))
+            }
+        }
+
+        for (name, kind) in [
+            ("dotnetfx40_full_x86_x64.exe", GamePackagedRedistributableKind.dotNetFramework40),
+            ("dotnetfx40_full_setup.exe", .dotNetFramework40),
+            ("dotnetfx45_full_setup.exe", .dotNetFramework45),
+            ("ndp48-x86-x64-allos-enu.exe", .dotNetFramework48),
+            ("dotnetfx.exe", .dotNetFrameworkUnknown)
+        ] {
+            if let entry = entries.first(where: {
+                $0.isRegularFile && $0.lowercaseName == name
+            }) {
+                observe(kind, evidence(.dotNetFrameworkRedistributable, entry))
             }
         }
 
@@ -375,41 +528,83 @@ public enum GameTechnologyEvidenceScanner {
                     && $0.lowercaseName == "dsetup.dll"
                     && $0.parentComponents == setup.parentComponents
             }) {
-                detections.append(GamePackagedRedistributable(
-                    kind: .directXJune2010,
-                    evidence: [
-                        evidence(.directXSetupLibrary, library),
-                        evidence(.directXSetupProgram, setup)
-                    ]
-                ))
+                let junePayload = entries.first { entry in
+                    entry.isRegularFile
+                        && entry.parentComponents == setup.parentComponents
+                        && entry.lowercaseName.hasPrefix("jun2010_")
+                        && entry.lowercaseName.hasSuffix(".cab")
+                }
+                let kind: GamePackagedRedistributableKind = junePayload == nil
+                    ? .directXRuntimeUnknown
+                    : .directXJune2010
+                observe(kind, evidence(.directXSetupLibrary, library))
+                observe(kind, evidence(.directXSetupProgram, setup))
+                if let junePayload {
+                    observe(kind, evidence(.directXJune2010Payload, junePayload))
+                }
                 break
             }
         }
-        return detections.sorted { $0.kind.rawValue < $1.kind.rawValue }
+        return evidenceByKind.map { kind, evidence in
+            GamePackagedRedistributable(
+                kind: kind,
+                evidence: evidence.sorted { lhs, rhs in
+                    (lhs.marker.rawValue, lhs.relativePath) < (rhs.marker.rawValue, rhs.relativePath)
+                }
+            )
+        }
+        .sorted { $0.kind.rawValue < $1.kind.rawValue }
+    }
+
+    private static func runtimeComponentDetections(
+        in entries: [Entry]
+    ) -> [GameRuntimeComponentDetection] {
+        let mediaEvidence = entries.compactMap { entry -> GameTechnologyEvidence? in
+            guard entry.isRegularFile else { return nil }
+            guard [".wma", ".wmv", ".asf"].contains(where: {
+                entry.lowercaseName.hasSuffix($0)
+            }) else {
+                return nil
+            }
+            return evidence(.windowsMediaAsset, entry)
+        }
+        guard !mediaEvidence.isEmpty else { return [] }
+        return [GameRuntimeComponentDetection(
+            kind: .windowsMedia,
+            evidence: mediaEvidence.sorted { $0.relativePath < $1.relativePath }
+        )]
     }
 
     private static func runtimeRequirements(
         for technologies: [GameTechnologyDetection],
-        redistributables: [GamePackagedRedistributable]
+        runtimeComponents: [GameRuntimeComponentDetection]
     ) -> [GameRuntimeRequirement] {
-        var descriptors: [(RuntimeRequirementKind, String)] = technologies.map {
+        // Un assembly, EXE o MSI junto al juego únicamente acredita que ese material está presente.
+        // No demuestra que el prerequisito falte en la botella ni que el ejecutable vaya a usarlo.
+        // En particular, Secrets of Grindea usa XNA mediante Wine Mono/FNA y Forsaken Isle ya
+        // tiene su baseline .NET validado: convertir su inventario pasivo en un bloqueo sería una
+        // regresión. Los requisitos legacy solo podrán entrar aquí cuando exista una autoridad
+        // compilada que pruebe la ausencia y describa una transacción sellada con rollback.
+        var descriptors: [(RuntimeRequirementKind, String)] = technologies.compactMap {
             switch $0.family {
             case .unity: (.dependency, "unity-player")
             case .unrealEngine: (.dependency, "unreal-engine")
             case .gameMaker: (.dependency, "gamemaker-runner")
-            case .xna: (.runtimeComponent, "microsoft-xna-framework")
+            case .xna: nil
             case .monoGame: (.dependency, "monogame-framework")
             }
         }
-        descriptors.append(contentsOf: redistributables.map {
+        descriptors.append(contentsOf: runtimeComponents.map {
             switch $0.kind {
-            case .directXJune2010: (.runtimeComponent, "directx-june-2010-runtime")
-            case .visualCppARM64: (.runtimeComponent, "microsoft-vc-runtime-arm64")
-            case .visualCppX64: (.runtimeComponent, "microsoft-vc-runtime-x64")
-            case .visualCppX86: (.runtimeComponent, "microsoft-vc-runtime-x86")
+            case .windowsMedia:
+                (.runtimeComponent, TrustedComponentCatalog.windowsMediaComponentID)
             }
         })
-        return descriptors.sorted { $0.1 < $1.1 }.map { kind, identifier in
+        let uniqueDescriptors = Dictionary(
+            descriptors.map { (("\($0.0.rawValue):\($0.1)"), $0) },
+            uniquingKeysWith: { first, _ in first }
+        ).values.sorted { $0.1 < $1.1 }
+        return uniqueDescriptors.map { kind, identifier in
             GameRuntimeRequirement(
                 appID: "",
                 kind: kind,
@@ -462,7 +657,7 @@ public enum GameTechnologyEvidenceScanner {
             (0x30...0x39).contains(byte)
                 || (0x41...0x5a).contains(byte)
                 || (0x61...0x7a).contains(byte)
-                || byte == 0x2d || byte == 0x5f
+                || byte == 0x20 || byte == 0x2d || byte == 0x5f
         }
     }
 

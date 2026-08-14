@@ -3,6 +3,256 @@ import Foundation
 import XCTest
 
 final class TelemetryCoordinatorTests: XCTestCase {
+    func testMissingSteamProcessLogIsReturnedAsTelemetryIssue() async throws {
+        let fixture = try TelemetryFixture()
+        defer { fixture.remove() }
+        let missingLogURL = fixture.root.appendingPathComponent("missing-gameprocess_log.txt")
+
+        let outcome = await fixture.telemetry.poll(
+            backend: .regression,
+            logURL: missingLogURL,
+            games: [fixture.game],
+            system: fixture.context().system,
+            steamRootURL: fixture.root.appendingPathComponent("Steam", isDirectory: true),
+            bottleURL: fixture.bottleURL,
+            bottleName: "Steam",
+            providerVersion: "1.12"
+        )
+
+        XCTAssertFalse(outcome.changed)
+        XCTAssertEqual(outcome.issues.count, 1)
+        XCTAssertEqual(outcome.issues[0].code, .steamLog(.logUnavailable))
+        XCTAssertTrue(outcome.issues[0].message.contains("no está disponible"))
+        XCTAssertTrue(outcome.issues[0].isNew)
+    }
+
+    func testPersistentLogFailureRemainsVisibleButIsDeduplicated() async throws {
+        let fixture = try TelemetryFixture()
+        defer { fixture.remove() }
+        let missingLogURL = fixture.root.appendingPathComponent("persistent-missing.txt")
+
+        _ = await fixture.poll(logURL: missingLogURL)
+        let repeated = await fixture.poll(logURL: missingLogURL)
+
+        XCTAssertEqual(repeated.issues.map(\.code), [.steamLog(.logUnavailable)])
+        XCTAssertFalse(try XCTUnwrap(repeated.issues.first).isNew)
+    }
+
+    func testDiscontinuousBatchDoesNotConsumePendingLaunchIntent() async throws {
+        let fixture = try TelemetryFixture()
+        defer { fixture.remove() }
+        let logURL = fixture.root.appendingPathComponent("discontinuous-pending.txt")
+        try Data(repeating: 0x61, count: 256).write(to: logURL)
+        await fixture.telemetry.beginMonitoring(logURL: logURL)
+        let intentDate = try XCTUnwrap(Self.steamLogDate("2026-07-28 12:00:00"))
+        let context = fixture.context(startedAt: intentDate)
+        try await fixture.telemetry.registerLaunchIntent(context: context, bottleURL: fixture.bottleURL)
+        let event = #"[2026-07-28 12:00:01] AppID 219990 adding PID 4242 as a tracked process "C:\Games\Grim Dawn\Grim Dawn.exe""# + "\n"
+        let handle = try FileHandle(forWritingTo: logURL)
+        try handle.truncate(atOffset: 0)
+        try handle.write(contentsOf: Data((event + String(repeating: "rewrite-padding\n", count: 40_000)).utf8))
+        try handle.close()
+
+        let discontinuous = await fixture.poll(logURL: logURL)
+        let historicalRemainder = await fixture.poll(logURL: logURL)
+        let runsAfterDiscontinuity = try await fixture.repository.recentRuns()
+        let preparingRun = try XCTUnwrap(runsAfterDiscontinuity.first)
+        XCTAssertEqual(discontinuous.issues.first?.code, .steamLog(.logTruncated))
+        XCTAssertFalse(historicalRemainder.changed)
+        XCTAssertEqual(preparingRun.result, .preparing)
+
+        let appendHandle = try FileHandle(forWritingTo: logURL)
+        try appendHandle.seekToEnd()
+        try appendHandle.write(contentsOf: Data(event.utf8))
+        try appendHandle.close()
+        _ = await fixture.poll(logURL: logURL)
+
+        let runsAfterValidEvent = try await fixture.repository.recentRuns()
+        XCTAssertEqual(runsAfterValidEvent.first?.result, .launched)
+    }
+
+    func testDiscontinuousEndEventDoesNotCloseActiveRun() async throws {
+        let fixture = try TelemetryFixture()
+        defer { fixture.remove() }
+        let logURL = fixture.root.appendingPathComponent("discontinuous-active.txt")
+        XCTAssertTrue(FileManager.default.createFile(atPath: logURL.path, contents: nil))
+        await fixture.telemetry.beginMonitoring(logURL: logURL)
+        let started = #"[2026-07-28 12:00:00] AppID 219990 adding PID 4242 as a tracked process "C:\Games\Grim Dawn\Grim Dawn.exe""# + "\n"
+        try Data(started.utf8).write(to: logURL)
+        _ = await fixture.poll(logURL: logURL)
+        let ended = "[2026-07-28 12:00:02] AppID 219990 no longer tracking PID 4242, exit code 0\n"
+        let handle = try FileHandle(forWritingTo: logURL)
+        try handle.truncate(atOffset: 0)
+        try handle.write(contentsOf: Data((ended + String(repeating: "rewrite-padding\n", count: 24)).utf8))
+        try handle.close()
+
+        _ = await fixture.poll(logURL: logURL)
+        let runsAfterDiscontinuity = try await fixture.repository.recentRuns()
+        XCTAssertEqual(runsAfterDiscontinuity.first?.result, .launched)
+
+        let appendHandle = try FileHandle(forWritingTo: logURL)
+        try appendHandle.seekToEnd()
+        try appendHandle.write(contentsOf: Data(ended.utf8))
+        try appendHandle.close()
+        _ = await fixture.poll(logURL: logURL)
+        let runsAfterValidEnd = try await fixture.repository.recentRuns()
+        XCTAssertEqual(runsAfterValidEnd.first?.result, .unknown)
+    }
+
+    func testReplacementPartialEndCannotCloseActiveRunOnFollowingPoll() async throws {
+        let fixture = try TelemetryFixture()
+        defer { fixture.remove() }
+        let logURL = fixture.root.appendingPathComponent("partial-discontinuous-active.txt")
+        XCTAssertTrue(FileManager.default.createFile(atPath: logURL.path, contents: nil))
+        await fixture.telemetry.beginMonitoring(logURL: logURL)
+        let started = #"[2026-07-28 12:00:00] AppID 219990 adding PID 4242 as a tracked process "C:\Games\Grim Dawn\Grim Dawn.exe""# + "\n"
+        try Data(started.utf8).write(to: logURL)
+        _ = await fixture.poll(logURL: logURL)
+
+        let handle = try FileHandle(forWritingTo: logURL)
+        try handle.truncate(atOffset: 0)
+        try handle.write(contentsOf: Data("[2026-07-28 12:00:02] AppID 219990 no longer tracking PID".utf8))
+        try handle.close()
+        _ = await fixture.poll(logURL: logURL)
+        let continuation = try FileHandle(forWritingTo: logURL)
+        try continuation.seekToEnd()
+        try continuation.write(contentsOf: Data(" 4242, exit code 0\n".utf8))
+        try continuation.close()
+        _ = await fixture.poll(logURL: logURL)
+
+        let runsAfterContinuation = try await fixture.repository.recentRuns()
+        XCTAssertEqual(runsAfterContinuation.first?.result, .launched)
+
+        let validEnd = "[2026-07-28 12:00:03] AppID 219990 no longer tracking PID 4242, exit code 0\n"
+        let appendHandle = try FileHandle(forWritingTo: logURL)
+        try appendHandle.seekToEnd()
+        try appendHandle.write(contentsOf: Data(validEnd.utf8))
+        try appendHandle.close()
+        _ = await fixture.poll(logURL: logURL)
+
+        let finalRuns = try await fixture.repository.recentRuns()
+        XCTAssertEqual(finalRuns.first?.result, .unknown)
+    }
+
+    func testProcessStartOlderThanIntentIsIgnored() async throws {
+        let fixture = try TelemetryFixture()
+        defer { fixture.remove() }
+        let logURL = fixture.root.appendingPathComponent("stale-start.txt")
+        XCTAssertTrue(FileManager.default.createFile(atPath: logURL.path, contents: nil))
+        await fixture.telemetry.beginMonitoring(logURL: logURL)
+        let context = fixture.context(startedAt: try XCTUnwrap(Self.steamLogDate("2026-07-28 12:00:02")))
+        try await fixture.telemetry.registerLaunchIntent(context: context, bottleURL: fixture.bottleURL)
+        let stale = #"[2026-07-28 12:00:01] AppID 219990 adding PID 4242 as a tracked process "C:\Games\Grim Dawn\Grim Dawn.exe""# + "\n"
+        try Data(stale.utf8).write(to: logURL)
+
+        let outcome = await fixture.poll(logURL: logURL)
+
+        XCTAssertEqual(outcome.issues.map(\.code), [.staleProcessEvent])
+        let runs = try await fixture.repository.recentRuns()
+        XCTAssertEqual(runs.first?.result, .preparing)
+    }
+
+    func testGraceFinalizationStillRunsWhileLogIsUnavailable() async throws {
+        let fixture = try TelemetryFixture(sessionJoinGrace: 0.01)
+        defer { fixture.remove() }
+        let logURL = fixture.root.appendingPathComponent("grace-missing.txt")
+        XCTAssertTrue(FileManager.default.createFile(atPath: logURL.path, contents: nil))
+        await fixture.telemetry.beginMonitoring(logURL: logURL)
+        let batch = #"""
+        [2026-07-28 12:00:00] AppID 219990 adding PID 4242 as a tracked process "C:\Games\Grim Dawn\Grim Dawn.exe"
+        [2026-07-28 12:00:01] AppID 219990 no longer tracking PID 4242, exit code 0
+
+        """#
+        try Data(batch.utf8).write(to: logURL)
+        _ = await fixture.poll(logURL: logURL)
+        try FileManager.default.removeItem(at: logURL)
+        try await Task.sleep(for: .milliseconds(20))
+
+        let outcome = await fixture.poll(logURL: logURL)
+
+        XCTAssertTrue(outcome.changed)
+        XCTAssertEqual(outcome.issues.first?.code, .steamLog(.logUnavailable))
+        let runs = try await fixture.repository.recentRuns()
+        XCTAssertEqual(runs.first?.result, .unknown)
+    }
+
+    func testBacklogDefersGraceFinalizationUntilChildProcessChunkArrives() async throws {
+        let started = #"[2026-07-28 12:00:00] AppID 219990 adding PID 4242 as a tracked process "C:\Games\Grim Dawn\Launcher.exe""# + "\n"
+        let ended = "[2026-07-28 12:00:01] AppID 219990 no longer tracking PID 4242, exit code 0\n"
+        let firstChunk = started + ended
+        let fixture = try TelemetryFixture(
+            sessionJoinGrace: 0,
+            maximumReadBytes: Data(firstChunk.utf8).count
+        )
+        defer { fixture.remove() }
+        let logURL = fixture.root.appendingPathComponent("backlog-child.txt")
+        let childStarted = #"[2026-07-28 12:00:02] AppID 219990 adding PID 4343 as a tracked process "C:\Games\Grim Dawn\Grim Dawn.exe""# + "\n"
+        try Data((firstChunk + childStarted).utf8).write(to: logURL)
+
+        let firstPoll = await fixture.poll(logURL: logURL)
+        let afterFirstPoll = try await fixture.repository.recentRuns()
+        XCTAssertTrue(firstPoll.issues.contains { $0.code == .steamLog(.readLimitReached) })
+        XCTAssertEqual(afterFirstPoll.count, 1)
+        XCTAssertEqual(afterFirstPoll.first?.result, .launched)
+
+        _ = await fixture.poll(logURL: logURL)
+        let afterChild = try await fixture.repository.runDetails()
+        let processes = try await fixture.repository.runProcesses()
+
+        XCTAssertEqual(afterChild.count, 1)
+        XCTAssertEqual(afterChild.first?.processID, 4343)
+        XCTAssertEqual(afterChild.first?.result, .launched)
+        XCTAssertEqual(Set(processes.map(\.processID)), Set([4242, 4343]))
+    }
+
+    func testPartialChildLineDefersGraceAndJoinsContinuationIntoOneRun() async throws {
+        let fixture = try TelemetryFixture(sessionJoinGrace: 0)
+        defer { fixture.remove() }
+        let logURL = fixture.root.appendingPathComponent("partial-child.txt")
+        let start = #"[2026-07-28 12:00:00] AppID 219990 adding PID 4242 as a tracked process "C:\Games\Grim Dawn\Launcher.exe""# + "\n"
+        let end = "[2026-07-28 12:00:01] AppID 219990 no longer tracking PID 4242, exit code 0\n"
+        let partialChild = #"[2026-07-28 12:00:02] AppID 219990 adding PID 4343 as a tracked process "C:\Games\Grim"#
+        let batch = start + end + partialChild
+        try Data(batch.utf8).write(to: logURL)
+
+        _ = await fixture.poll(logURL: logURL)
+        let beforeContinuation = try await fixture.repository.recentRuns()
+        XCTAssertEqual(beforeContinuation.count, 1)
+        XCTAssertEqual(beforeContinuation.first?.result, .launched)
+
+        let handle = try FileHandle(forWritingTo: logURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(" Dawn\\Grim Dawn.exe\"\n".utf8))
+        try handle.close()
+        _ = await fixture.poll(logURL: logURL)
+
+        let runs = try await fixture.repository.runDetails()
+        let processes = try await fixture.repository.runProcesses()
+        XCTAssertEqual(runs.count, 1)
+        XCTAssertEqual(runs.first?.processID, 4343)
+        XCTAssertEqual(runs.first?.result, .launched)
+        XCTAssertEqual(Set(processes.map(\.processID)), Set([4242, 4343]))
+    }
+
+    func testTelemetryOutcomeRoundTripsThroughCodableContract() throws {
+        let outcome = TelemetryPollOutcome(
+            changed: true,
+            issues: [TelemetryIssue(
+                code: .steamLog(.logUnavailable),
+                message: "missing",
+                isNew: false
+            )],
+            resolvedIssues: [.steamLog(.logUnreadable)]
+        )
+
+        let decoded = try JSONDecoder().decode(
+            TelemetryPollOutcome.self,
+            from: JSONEncoder().encode(outcome)
+        )
+
+        XCTAssertEqual(decoded, outcome)
+    }
+
     func testCancelledIntentBecomesFailedEvidenceInsteadOfStalePreparingRun() async throws {
         let fixture = try TelemetryFixture()
         defer { fixture.remove() }
@@ -349,7 +599,10 @@ private final class TelemetryFixture {
         )
     }
 
-    init(sessionJoinGrace: TimeInterval = 0) throws {
+    init(
+        sessionJoinGrace: TimeInterval = 0,
+        maximumReadBytes: Int? = nil
+    ) throws {
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("regression-telemetry-\(UUID().uuidString)", isDirectory: true)
         bottleURL = root.appendingPathComponent("Bottle", isDirectory: true)
@@ -360,13 +613,19 @@ private final class TelemetryFixture {
         artifactCleaner = RecordingArtifactCleaner()
         telemetry = TelemetryCoordinator(
             repository: repository,
-            monitor: SteamLogMonitor(),
+            monitor: maximumReadBytes.map {
+                SteamLogMonitor(
+                    maximumPendingBytes: 256 * 1_024,
+                    unrecognizedCandidateLineThreshold: 32,
+                    maximumReadBytes: $0
+                )
+            } ?? SteamLogMonitor(),
             sessionJoinGrace: sessionJoinGrace,
             artifactCleaner: artifactCleaner
         )
     }
 
-    func context(startedAt: Date = Date()) -> RunContext {
+    func context(startedAt: Date = Date(timeIntervalSince1970: 1_767_225_600)) -> RunContext {
         let configuration = ["backend": "regression"]
         return RunContext(
             appID: "219990",
@@ -387,6 +646,19 @@ private final class TelemetryFixture {
             ),
             configuration: configuration,
             configurationFingerprint: ConfigurationCollector.fingerprint(configuration)
+        )
+    }
+
+    func poll(logURL: URL) async -> TelemetryPollOutcome {
+        await telemetry.poll(
+            backend: .regression,
+            logURL: logURL,
+            games: [game],
+            system: context().system,
+            steamRootURL: root.appendingPathComponent("Steam", isDirectory: true),
+            bottleURL: bottleURL,
+            bottleName: "Steam",
+            providerVersion: "1.12"
         )
     }
 

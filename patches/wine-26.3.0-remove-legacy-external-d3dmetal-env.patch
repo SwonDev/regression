@@ -1,0 +1,32 @@
+--- a/dlls/ntdll/unix/loader.c
++++ b/dlls/ntdll/unix/loader.c
+@@ -556,25 +556,19 @@ static int regression_internal_profile_is_accessible( const char *root, const ch
+ 
+ static const char *regression_external_d3dmetal_root(void)
+ {
+-    const char *legacy_root;
++    const char *route_root;
+     unsigned int i, count;
+     char executable_variable[80], root_variable[80];
+ 
+-    if (regression_executable_matches_env( "REGRESSION_EXTERNAL_D3DMETAL_EXECUTABLE" ))
+-    {
+-        legacy_root = getenv( "REGRESSION_EXTERNAL_D3DMETAL_WINE_ROOT" );
+-        if (legacy_root && legacy_root[0]) return legacy_root;
+-    }
+-
+     count = regression_route_count( "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_COUNT" );
+     for (i = 0; i < count; i++)
+     {
+         snprintf( executable_variable, sizeof(executable_variable),
+                   "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_%u_EXECUTABLE", i );
+         if (!regression_executable_matches_env( executable_variable )) continue;
+         snprintf( root_variable, sizeof(root_variable),
+                   "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_%u_WINE_ROOT", i );
+-        legacy_root = getenv( root_variable );
+-        if (legacy_root && legacy_root[0]) return legacy_root;
++        route_root = getenv( root_variable );
++        if (route_root && route_root[0]) return route_root;
+     }
+     return NULL;
+ }

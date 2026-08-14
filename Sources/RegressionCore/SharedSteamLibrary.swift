@@ -845,7 +845,7 @@ public actor SharedSteamLibraryManager: PhysicalLibraryCustodyInterlocking {
                     || plan.phase == .completed else {
                 throw RegressionCoreError.unsafeLibraryState("La migración todavía no espera validación")
             }
-            guard let run = try await repository.custodyValidationRun(
+            guard let run = try await repository.sealedPerfectRun(
                 appID: request.appID,
                 runID: request.runID
             ) else {

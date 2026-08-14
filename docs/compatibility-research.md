@@ -80,8 +80,9 @@ El número exacto depende del fallo, pero debe declararse antes de ver el result
 
 ## Expediente persistente y estados
 
-El esquema local v14 separa los candidatos tecnológicos de los experimentos que realmente se han
-ejecutado y conserva el estado previo de cada prueba:
+El esquema actual v17 conserva la separación iniciada por los esquemas anteriores entre los
+candidatos tecnológicos y los experimentos que realmente se han ejecutado, además del estado
+previo de cada prueba:
 
 - `compatibility_research_cases`: problema, expectativa reproducible, estado y conclusión;
 - `research_hypotheses`: causas ordenadas, predicción, apoyo o falsación;
@@ -93,6 +94,19 @@ ejecutado y conserva el estado previo de cada prueba:
 - `run_preflight_reports`: diagnóstico saneado, fingerprint SHA-256 y vínculo con el run exacto.
 - `run_processes`: launcher, ejecutable principal y cierres de una única sesión lógica, sin
   multiplicar el número de experimentos por PID.
+- `launch_envelopes`, sus eventos y recibos: autoridad durable previa al `spawn`, sin comandos,
+  rutas ni capacidad de certificar.
+
+El hito v15 exige que el PID canónico del run coincida con su proceso representativo y que todos los
+procesos estén cerrados antes de registrar el perfecto. Una mutación posterior de esa cadena
+invalida la verificación y reabre cualquier promoción de I+D dependiente; no se borra la prueba.
+
+La v17 vincula cada lanzamiento autorizado al preflight reciente, la generación fresca de
+requisitos y las identidades compiladas o selladas que se van a usar. La telemetría puede adoptar
+el run y su cierre solo conduce a verificación explícita. La política pura restringe un eventual
+retry a una receta compilada originada en Regression y distingue rollback de reconciliación, pero
+no ejecuta aún ninguna de esas mutaciones. Steam observado o cualquier segundo intento requiere
+un gesto explícito; nunca se infiere que el experimento terminó bien.
 
 Los estados de un expediente son `open`, `investigating`, `validationPending`, `verified` y
 `pausedExternalDependency`. No existen “abandonado” ni “cerrado sin resolver”. Un experimento
@@ -241,6 +255,7 @@ Cada perfil perfecto debe conservar:
 - observación en Engram y nota de memoria cuando el usuario lo solicite.
 - registro `perfect` en la base de compatibilidad y captura de la fila verde
   `Verificado perfecto: Regression` después de refrescar la app.
+- PID representativo exacto y cierre de todos los procesos rastreados anterior al veredicto.
 
 El cierre estructurado exige además estas ocho puertas sobre el mismo experimento:
 

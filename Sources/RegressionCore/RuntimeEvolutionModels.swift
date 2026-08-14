@@ -258,11 +258,16 @@ public struct GameRuntimeRequirement: Codable, Equatable, Identifiable, Sendable
 
 /// Resultado cerrado al consumir un requisito observado.
 ///
-/// Solo estas tres salidas son posibles. En particular, ningún identificador procedente del
+/// Solo estas salidas cerradas son posibles. En particular, ningún identificador procedente del
 /// inventario puede convertirse en una ruta, URL, comando o instalador ejecutable.
 public enum GameRuntimeRequirementResolution: Codable, Equatable, Sendable {
     case sealedComponent(componentID: String, componentVersion: String)
     case compiledProfile(identifier: String, revision: Int)
+    case legacyComponent(
+        componentID: String,
+        componentVersion: String,
+        state: LegacyRuntimeComponentState
+    )
     case informational
 }
 
@@ -304,6 +309,31 @@ public enum GameRuntimeRequirementResolver {
                     componentID: TrustedComponentCatalog.steamRuntimePrerequisitesComponentID,
                     componentVersion: TrustedComponentCatalog
                         .steamRuntimePrerequisitesComponentVersion
+                )
+            )
+        }
+
+        if requirement.kind == .runtimeComponent,
+           requirement.identifier == TrustedComponentCatalog.windowsMediaComponentID {
+            return ResolvedGameRuntimeRequirement(
+                requirement: requirement,
+                resolution: .sealedComponent(
+                    componentID: TrustedComponentCatalog.windowsMediaComponentID,
+                    componentVersion: TrustedComponentCatalog.windowsMediaComponentVersion
+                )
+            )
+        }
+
+        if requirement.kind == .runtimeComponent,
+           let legacy = LegacyRuntimeComponentCatalog.resolution(
+               forRequirementIdentifier: requirement.identifier
+           ) {
+            return ResolvedGameRuntimeRequirement(
+                requirement: requirement,
+                resolution: .legacyComponent(
+                    componentID: legacy.componentID,
+                    componentVersion: legacy.componentVersion,
+                    state: legacy.state
                 )
             )
         }
@@ -405,6 +435,99 @@ public struct GameTechnologyRequirementProjection: Codable, Equatable, Sendable 
     public var staleAutomaticRequirements: [ResolvedGameRuntimeRequirement] {
         guard scanState?.freshness != .current else { return [] }
         return requirements.filter { $0.requirement.source == .automatic }
+    }
+}
+
+/// Autoridad efímera emitida por un gesto explícito de lanzamiento o reparación para un App ID.
+/// No contiene comandos, rutas ni datos aprendidos y no se persiste en SQLite.
+public struct WindowsMediaComponentRepairAuthorization: Equatable, Sendable {
+    public let appID: String
+
+    public init?(explicitAppID appID: String) {
+        guard let canonicalAppID = SteamAppID.normalized(appID), canonicalAppID == appID else {
+            return nil
+        }
+        self.appID = canonicalAppID
+    }
+}
+
+public enum WindowsMediaComponentRepairBlocker: String, Equatable, Sendable {
+    case componentAuthorityMismatch
+    case evidenceDoesNotMatchAuthorization
+    case runtimeActive
+    case staleEvidence
+    case trustedPayloadRequiresReinstallation
+}
+
+/// Plan de datos cerrado. La evaluación nunca muta el enlace ni ejecuta el instalador.
+public enum WindowsMediaComponentRepairPlan: Equatable, Sendable {
+    case notRequired
+    case blocked(WindowsMediaComponentRepairBlocker)
+    case repair(ComponentRecoveryAction)
+}
+
+public enum WindowsMediaComponentRepairPlanner {
+    public static func plan(
+        projection: GameTechnologyRequirementProjection,
+        health: ComponentHealthReport,
+        authorization: WindowsMediaComponentRepairAuthorization,
+        runtimeIsIdle: Bool
+    ) -> WindowsMediaComponentRepairPlan {
+        if let scanState = projection.scanState,
+           scanState.appID != authorization.appID {
+            return .blocked(.evidenceDoesNotMatchAuthorization)
+        }
+
+        guard let scanState = projection.scanState,
+              scanState.freshness == .current,
+              scanState.generation > 0,
+              scanState.lastSuccessfulGeneration == scanState.generation else {
+            return .blocked(.staleEvidence)
+        }
+        guard health.identity.componentID == TrustedComponentCatalog.windowsMediaComponentID,
+              health.identity.componentVersion == TrustedComponentCatalog.windowsMediaComponentVersion else {
+            return .blocked(.componentAuthorityMismatch)
+        }
+        if health.issue == .pendingTransaction {
+            guard runtimeIsIdle else { return .blocked(.runtimeActive) }
+            guard case .reconcilePendingTransaction = health.recovery else {
+                return .blocked(.componentAuthorityMismatch)
+            }
+            return .repair(health.recovery)
+        }
+
+        let requiredResolution = GameRuntimeRequirementResolution.sealedComponent(
+            componentID: TrustedComponentCatalog.windowsMediaComponentID,
+            componentVersion: TrustedComponentCatalog.windowsMediaComponentVersion
+        )
+        let requiresWindowsMedia = projection.currentRequirements.contains { resolved in
+            resolved.requirement.appID == authorization.appID
+                && resolved.requirement.source == .automatic
+                && resolved.requirement.kind == .runtimeComponent
+                && resolved.requirement.identifier
+                    == TrustedComponentCatalog.windowsMediaComponentID
+                && resolved.resolution == requiredResolution
+        }
+        guard requiresWindowsMedia else {
+            let staleWindowsMedia = projection.staleAutomaticRequirements.contains { resolved in
+                resolved.requirement.appID == authorization.appID
+                    && resolved.requirement.identifier
+                        == TrustedComponentCatalog.windowsMediaComponentID
+            }
+            return staleWindowsMedia ? .blocked(.staleEvidence) : .notRequired
+        }
+        if health.status == .ready, health.recovery == .none {
+            return .notRequired
+        }
+        guard runtimeIsIdle else { return .blocked(.runtimeActive) }
+        switch (health.status, health.recovery) {
+        case (.repairable, .createExternalLink),
+             (.repairable, .reconcilePendingTransaction),
+             (.brokenLink, .restoreExternalLinkAfterBackup):
+            return .repair(health.recovery)
+        default:
+            return .blocked(.trustedPayloadRequiresReinstallation)
+        }
     }
 }
 

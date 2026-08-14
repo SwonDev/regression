@@ -46,6 +46,12 @@ mantiene rollback hasta que Steam y un juego se validan de forma explícita.
 > se certifica juego a juego mediante render, entrada, opciones y gameplay reales; un proceso que
 > termina correctamente no se marca como compatible por sí solo.
 
+> [!NOTE]
+> El contrato del código fuente de esta rama es **Regression 1.12.0 (38)** y SQLite **v17**.
+> **v1.12.0 (38)** es la release estable actual. **v1.11.0 (37)** permanece como baseline
+> histórico verificable y como origen autorizado de la migración. La instalación de arriba
+> siempre descarga la última release publicada.
+
 ## Instalación
 
 ```bash
@@ -93,6 +99,11 @@ futuras reparaciones; Regression nunca toma binarios de CrossOver, Whisky, Mythi
 Modos disponibles: `--check`, `--verify-release`, `--yes`, `--launch` y `--help`.
 
 </details>
+
+La preparación automática no significa «instalar todo por si acaso». Windows Media, por ejemplo,
+solo puede repararse para un App ID canónico cuya instalación acaba de inventariarse y contiene
+WMA, WMV o ASF. La reparación exige Steam en reposo, payload sellado, lease exclusivo, backup,
+recibo y verificación posterior; una sesión general de Steam no activa esa mutación.
 
 ## Diseñado para reparar sin romper
 
@@ -200,6 +211,12 @@ El runtime general permanece fijado. Una corrección solo se promociona cuando s
 del juego objetivo, Steam y los perfiles afectados. Las recetas se compilan y versionan; la base
 de aprendizaje nunca ejecuta comandos almacenados.
 
+La telemetría agrupa launcher y ejecutable principal en una sola sesión. Una certificación
+perfecta exige que el proceso representativo sea el PID exacto del run, que todos los procesos
+rastreados hayan terminado y que la verificación sea posterior al cierre. Una rotación, truncado
+o lectura incompleta del log se conserva como diagnóstico tipado; nunca se interpreta como un
+lanzamiento limpio ni como compatibilidad.
+
 ## Componentes
 
 | Área | Implementación |
@@ -212,6 +229,27 @@ de aprendizaje nunca ejecuta comandos almacenados.
 | Presentación | winemac, MoltenVK y perfiles OpenGL aislados |
 | Datos | SQLite local con huellas de configuración, motor y evidencia |
 | Distribución | Runtime recompilado para la ruta pública y asset verificado tras extraer |
+
+El runtime público 1.12 se considera listo solo si supera como conjunto el wrapper `bin/wine`,
+`bin/wineserver`, el loader Unix, `ntdll.so`, `wine.inf`, las dos mitades PE de `ntdll.dll` y
+VC++/UCRT x86+x64 con hashes y permisos compilados. El launcher usa rutas absolutas al Wine y al
+`WINESERVER` del runtime sellado, restablece `PATH` exactamente a
+`/usr/bin:/bin:/usr/sbin:/sbin` y elimina cualquier `WINESERVERSOCKET` heredado. Así conserva las
+utilidades canónicas de macOS sin aceptar un Wine, wineserver o `PATH` hostil del entorno. Un
+runtime de desarrollo sin PIN reproducible queda deliberadamente no autorizado.
+
+SQLite v17 conserva el sobre durable por App ID y endurece su recuperación. Vincula el run, el
+preflight reciente, la generación de requisitos y las identidades cerradas de componentes y
+perfiles, pero no almacena comandos, rutas ni DLL arbitrarias. La creación del sobre, el `spawn`,
+la adopción de su run por la telemetría, el paso a espera de verificación y el cierre mediante una
+verificación explícita sí están integrados.
+
+v17 también define y prueba una política pura que solo consideraría un reintento para una receta y
+versión compiladas, nacidas en Regression, y que distingue cuándo correspondería rollback o solo
+reconciliación. Esa política no ejecuta acciones: el auto-retry y el rollback automáticos permanecen
+bloqueados hasta que exista un ejecutor conectado que verifique la receta compilada, aplique su
+rollback y persista el recibo. Un lanzamiento observado desde Steam o un intento agotado continúa
+requiriendo un gesto explícito, y ningún recibo se convierte en certificación.
 
 ## Documentación
 
@@ -230,6 +268,10 @@ visual está en [`DESIGN.md`](DESIGN.md).
 
 ## Desarrollo
 
+Este checkout corresponde a la release **1.12.0 (38)**. Los helpers que nombran `public-1.11`
+son puertas históricas para comprobar la transición desde el asset anterior; no definen la
+versión estable actual.
+
 ```bash
 # Validación Swift
 swift test
@@ -238,7 +280,7 @@ swift build -c release
 # Estado protegido y botella
 bash build/verify-protected-state.sh --include-bottle
 
-# Empaquetado nativo
+# Preparar el staging firmado de la release; no se ejecuta desde el checkout
 bash Scripts/package_regression.sh
 codesign --verify --deep --strict Regression.app
 
@@ -250,10 +292,11 @@ El verificador extrae el mismo tar que recibirá el usuario, audita dependencias
 redistribuibles y rutas, y ejecuta además un arranque mínimo de Wine. Un asset cuyo wrapper no
 pueda localizar y cargar su `ntdll.so` se rechaza antes de poder publicarse o instalarse.
 
-`Regression.app/` es el artefacto local de desarrollo y no debe aparecer como instalación. La
-única app canónica es el bundle físico `/Applications/Regression.app`; el Wine público se
-recompila para `/Applications/Regression.app/Contents/SharedSupport/wine-root`. Mover el bundle
-sin recompilar rompe sus rutas horneadas. Antes de entregar una build, ejecuta
+`Regression.app/` es un staging local de empaquetado, no un bundle ejecutable desde el checkout,
+y no debe registrarse ni abrirse. La única app canónica es el bundle físico
+`/Applications/Regression.app`; su Wine se recompila para
+`/Applications/Regression.app/Contents/SharedSupport/wine-root`. Mover el bundle sin recompilar
+rompe sus rutas horneadas. Antes de entregar una build, ejecuta
 `bash build/verify-canonical-installation.sh` para comprobar firma, Spotlight y LaunchServices.
 
 ## Licencia y límites

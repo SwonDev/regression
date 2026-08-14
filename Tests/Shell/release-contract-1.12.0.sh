@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -24,12 +25,13 @@ EOF
     chmod 755 "$path"
 }
 
-write_installer "$SCRATCH/matching.sh" 1.11.0 37
+write_installer "$SCRATCH/matching.sh" 1.12.0 38
 REGRESSION_RELEASE_CONTRACT_ONLY=1 \
 REGRESSION_RELEASE_INSTALLER_SOURCE="$SCRATCH/matching.sh" \
     "$PACKAGER" >/dev/null
+REGRESSION_RELEASE_CONTRACT_ONLY=1 "$PACKAGER" >/dev/null
 
-write_installer "$SCRATCH/wrong-version.sh" 1.10.1 37
+write_installer "$SCRATCH/wrong-version.sh" 1.11.0 38
 if REGRESSION_RELEASE_CONTRACT_ONLY=1 \
     REGRESSION_RELEASE_INSTALLER_SOURCE="$SCRATCH/wrong-version.sh" \
     "$PACKAGER" >/dev/null 2>&1; then
@@ -37,7 +39,7 @@ if REGRESSION_RELEASE_CONTRACT_ONLY=1 \
     exit 1
 fi
 
-write_installer "$SCRATCH/wrong-build.sh" 1.11.0 36
+write_installer "$SCRATCH/wrong-build.sh" 1.12.0 37
 if REGRESSION_RELEASE_CONTRACT_ONLY=1 \
     REGRESSION_RELEASE_INSTALLER_SOURCE="$SCRATCH/wrong-build.sh" \
     "$PACKAGER" >/dev/null 2>&1; then
@@ -86,7 +88,7 @@ grep -F 'ASSET_NAME="Regression-${VERSION}-macos-arm64.tar.gz"' "$PACKAGER" >/de
     || { printf 'FAIL: package_release no emite el gzip autocontenido de macOS.\n' >&2; exit 1; }
 grep -F 'ASSET_NAME="Regression-${VERSION}-macos-arm64.tar.gz"' \
     "$ROOT/Scripts/install_regression.sh" >/dev/null \
-    || { printf 'FAIL: el instalador no solicita el gzip canónico 1.11.\n' >&2; exit 1; }
+    || { printf 'FAIL: el instalador no solicita el gzip canónico de la release.\n' >&2; exit 1; }
 grep -F 'verify-current-release-input.sh' "$PACKAGER" >/dev/null \
     || { printf 'FAIL: package_release no verifica el staging público actual.\n' >&2; exit 1; }
 for release_build_gate in \
@@ -103,10 +105,10 @@ if grep -F 'REGRESSION_RELEASE_SWIFT_BIN_DIR' "$PACKAGER" >/dev/null; then
 fi
 grep -F "cmp -s \"\$INSTALLER_SOURCE\" \"\$INSTALLER_TEMP\"" "$PACKAGER" >/dev/null \
     || { printf 'FAIL: package_release no exige copia byte a byte.\n' >&2; exit 1; }
-grep -Fx 'VERSION="1.11.0"' "$NATIVE_PACKAGER" >/dev/null \
-    || { printf 'FAIL: package_regression no declara 1.11.0.\n' >&2; exit 1; }
-grep -Fx 'BUILD_NUMBER="37"' "$NATIVE_PACKAGER" >/dev/null \
-    || { printf 'FAIL: package_regression no declara build 37.\n' >&2; exit 1; }
+grep -Fx 'VERSION="1.12.0"' "$NATIVE_PACKAGER" >/dev/null \
+    || { printf 'FAIL: package_regression no declara 1.12.0.\n' >&2; exit 1; }
+grep -Fx 'BUILD_NUMBER="38"' "$NATIVE_PACKAGER" >/dev/null \
+    || { printf 'FAIL: package_regression no declara build 38.\n' >&2; exit 1; }
 grep -F 'NATIVE_BACKUP_PATHS+=(Contents/SharedSupport/bin/install-apple-gptk-component)' \
     "$NATIVE_PACKAGER" >/dev/null \
     || { printf 'FAIL: el backup nativo omite el instalador GPTK.\n' >&2; exit 1; }
@@ -120,5 +122,17 @@ for historical_mode in --baseline-1.10.0 --release-1.10.1; do
 done
 grep -F -- '--release-1.11.0)' "$PUBLIC_STATE_GATE" >/dev/null \
     || { printf 'FAIL: falta el seam público 1.11.0.\n' >&2; exit 1; }
+grep -F -- '--release-1.12.0)' "$PUBLIC_STATE_GATE" >/dev/null \
+    || { printf 'FAIL: falta el seam público 1.12.0.\n' >&2; exit 1; }
+for installed_pin in \
+    5cd7370ade8fe210cdc74e6c58f354e7d9cf4e3833012d6482ff6924a4f09fe9 \
+    fed13faa895c9ea5896a6497490db26674c3dca2a318e3389d8e43ba3e00f552 \
+    8d14fb9d6d9730c300ba16b5997d98218a2a40a78008d60f3a6edb719f328db3 \
+    5636a6505e872c8d185d8db7ced2d4aa8e9057e81c4c579e4b623009f9c2857b \
+    66622d2832d99c37cdaa2872c5409b5f9a5dc04d1fdb9dcd426ae37f8365942e
+do
+    grep -F "$installed_pin" "$PUBLIC_STATE_GATE" >/dev/null \
+        || { printf 'FAIL: el estado público 1.12 omite el PIN %s.\n' "$installed_pin" >&2; exit 1; }
+done
 
 printf 'PASS: versión, build, instalador exacto y PIN público derivado están cerrados.\n'

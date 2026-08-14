@@ -5,6 +5,15 @@
 > propios y no contiene red, CLI ni backend de CodeWeavers. Las menciones posteriores a CrossOver
 > se conservan únicamente como evidencia fechada de aquella etapa; no son instrucciones vigentes.
 
+> **Adenda actual, 14 de agosto de 2026.** El código fuente prepara Regression **1.12.0 (38)** y
+> SQLite **v17**; **v1.11.0 (37)** sigue siendo el baseline publicado. El hito v15 exige un proceso
+> representativo exacto y todos los PID cerrados antes de aceptar un perfecto, propaga la salud
+> tipada y acotada del monitor de Steam y autoriza Windows Media solo para un App ID con evidencia
+> fresca, lease exclusivo, WAL, backup, rollback y recibo. La v17 añade recuperación durable
+> anterior al `spawn`, ligada a preflight/requisitos/identidades cerradas y sin comandos o rutas;
+> sus recibos nunca certifican. Esta adenda no reescribe las mediciones ni el inventario histórico
+> v11 que se conserva debajo.
+
 Fecha: 28 de julio de 2026. Alcance histórico: SwiftUI/AppKit, coordinación de motores, aprendizaje local,
 catálogo externo entonces existente, CLI, privacidad, rendimiento, ciclo de vida, empaquetado, documentación y
 coherencia del proyecto. Esta pasada no modificó Wine, DXMT, DXVK, D3DMetal, Apple GPTK, la

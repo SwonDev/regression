@@ -1,6 +1,6 @@
 import Foundation
 
-public struct TelemetryObservedRunStart: Equatable, Sendable {
+public struct TelemetryObservedRunStart: Codable, Equatable, Sendable {
     public let runID: UUID
     public let appID: String
     public let gameName: String
@@ -22,25 +22,50 @@ public struct TelemetryObservedRunStart: Equatable, Sendable {
     }
 }
 
-public struct TelemetryPollOutcome: Equatable, Sendable {
+public enum TelemetryIssueCode: Codable, Equatable, Sendable {
+    case steamLog(SteamLogMonitorIssueCode)
+    case staleProcessEvent
+    case repositoryOperation
+    case artifactCleanup
+}
+
+public struct TelemetryIssue: Codable, Equatable, Sendable, CustomStringConvertible {
+    public let code: TelemetryIssueCode
+    public let message: String
+    public let isNew: Bool
+
+    public init(code: TelemetryIssueCode, message: String, isNew: Bool = true) {
+        self.code = code
+        self.message = message
+        self.isNew = isNew
+    }
+
+    public var description: String { message }
+}
+
+public struct TelemetryPollOutcome: Codable, Equatable, Sendable {
     public var changed: Bool
     public var unpreparedRunStarts: [TelemetryObservedRunStart]
-    public var issues: [String]
+    public var issues: [TelemetryIssue]
+    public var resolvedIssues: [TelemetryIssueCode]
 
     public init(
         changed: Bool = false,
         unpreparedRunStarts: [TelemetryObservedRunStart] = [],
-        issues: [String] = []
+        issues: [TelemetryIssue] = [],
+        resolvedIssues: [TelemetryIssueCode] = []
     ) {
         self.changed = changed
         self.unpreparedRunStarts = unpreparedRunStarts
         self.issues = issues
+        self.resolvedIssues = resolvedIssues
     }
 
     public mutating func merge(_ other: TelemetryPollOutcome) {
         changed = changed || other.changed
         unpreparedRunStarts.append(contentsOf: other.unpreparedRunStarts)
         issues.append(contentsOf: other.issues)
+        resolvedIssues.append(contentsOf: other.resolvedIssues)
     }
 }
 
@@ -121,6 +146,15 @@ public actor TelemetryCoordinator {
         try await repository.failRunBeforeLaunch(id: context.id, reason: reason)
     }
 
+    /// Descarta solamente la referencia en memoria después de que el repositorio ya haya
+    /// persistido su cierre atómico. No vuelve a tocar el run ni puede añadir un evento fuera de
+    /// la transacción del envelope.
+    public func discardLaunchIntentAfterDurableFailure(context: RunContext) {
+        let key = Self.sessionKey(backend: context.backend, appID: context.appID)
+        guard pending[key]?.context.id == context.id else { return }
+        pending.removeValue(forKey: key)
+    }
+
     /// Consume el log de Steam como sesiones lógicas por backend y App ID.
     ///
     /// Steam puede iniciar primero un launcher y después el binario real. Los PID se conservan
@@ -137,16 +171,33 @@ public actor TelemetryCoordinator {
         providerVersion: String,
         configurationOverrides: [String: String] = [:]
     ) async -> TelemetryPollOutcome {
-        let events = await monitor.readNewEvents(from: logURL)
-        if events.isEmpty {
-            return await finalizeExpiredSessions(backend: backend, now: Date())
+        let read = await monitor.readNewEvents(from: logURL)
+        let newLogIssues = Set(read.newlyObservedIssues)
+        let typedLogIssues = read.issues.map {
+            TelemetryIssue(
+                code: .steamLog($0.code),
+                message: $0.message,
+                isNew: newLogIssues.contains($0.code)
+            )
+        }
+        let resolvedLogIssues = read.resolvedIssues.map(TelemetryIssueCode.steamLog)
+        if read.events.isEmpty || read.discontinuity != nil {
+            var outcome = read.hasMoreData || read.hasPendingLine
+                ? TelemetryPollOutcome()
+                : await finalizeExpiredSessions(backend: backend, now: Date())
+            outcome.issues.append(contentsOf: typedLogIssues)
+            outcome.resolvedIssues.append(contentsOf: resolvedLogIssues)
+            return outcome
         }
 
         let gameNames = Dictionary(uniqueKeysWithValues: games.map { ($0.appID, $0.name) })
         let gamesByID = Dictionary(uniqueKeysWithValues: games.map { ($0.appID, $0) })
-        var outcome = TelemetryPollOutcome()
+        var outcome = TelemetryPollOutcome(
+            issues: typedLogIssues,
+            resolvedIssues: resolvedLogIssues
+        )
 
-        for event in events {
+        for event in read.events {
             switch event {
             case let .started(timestamp, rawAppID, processID, executable):
                 guard SteamGameProcessLogParser.isPrimaryExecutable(executable),
@@ -154,6 +205,10 @@ public actor TelemetryCoordinator {
                 let key = Self.sessionKey(backend: backend, appID: appID)
 
                 if var run = active[key] {
+                    guard timestamp >= run.startedAt else {
+                        outcome.issues.append(Self.staleEventIssue(appID: appID))
+                        continue
+                    }
                     guard run.processes[processID] == nil else { continue }
                     do {
                         try await repository.markAdditionalProcessStarted(
@@ -178,7 +233,24 @@ public actor TelemetryCoordinator {
                     continue
                 }
 
-                let pendingRun = pending[key]
+                // El CLI no comparte memoria con la app. Antes de crear una sesión observada,
+                // adopta la intención durable exacta (App ID + backend + run preparado) para no
+                // duplicar evidencia ni perder su envelope/nonce.
+                let pendingRun: PendingRun?
+                if let inMemory = pending[key] {
+                    pendingRun = inMemory
+                } else if let durable = try? await repository.adoptableLaunchEnvelopeRun(
+                    appID: appID,
+                    backend: backend
+                ) {
+                    pendingRun = PendingRun(context: durable.context, bottleURL: bottleURL)
+                } else {
+                    pendingRun = nil
+                }
+                if let pendingRun, timestamp < pendingRun.context.startedAt {
+                    outcome.issues.append(Self.staleEventIssue(appID: appID))
+                    continue
+                }
                 let configuration = pendingRun?.context.configuration
                     ?? Self.configuration(
                         bottleURL: bottleURL,
@@ -263,6 +335,10 @@ public actor TelemetryCoordinator {
                 guard let appID = SteamAppID.normalized(rawAppID) else { continue }
                 let key = Self.sessionKey(backend: backend, appID: appID)
                 guard var run = active[key], run.processes[processID] != nil else { continue }
+                guard timestamp >= run.startedAt else {
+                    outcome.issues.append(Self.staleEventIssue(appID: appID))
+                    continue
+                }
                 do {
                     try await repository.markProcessEnded(
                         id: run.id,
@@ -290,7 +366,9 @@ public actor TelemetryCoordinator {
             }
         }
 
-        outcome.merge(await finalizeExpiredSessions(backend: backend, now: Date()))
+        if !read.hasMoreData && !read.hasPendingLine {
+            outcome.merge(await finalizeExpiredSessions(backend: backend, now: Date()))
+        }
         return outcome
     }
 
@@ -335,11 +413,16 @@ public actor TelemetryCoordinator {
                     afterConfiguration: after,
                     delta: delta
                 )
+                // El final de telemetría solo desbloquea la revisión humana. Nunca convierte un
+                // exit code ni la presencia de un proceso en certificación funcional.
+                _ = try await repository.reconcileLaunchEnvelopeAfterTelemetry(runID: run.id)
                 outcome.issues.append(contentsOf: await artifactCleaner.clean(
                     appID: run.appID,
                     backend: run.backend,
                     endedWindowsProcessIDs: Set(run.exitCodes.keys)
-                ))
+                ).map {
+                    TelemetryIssue(code: .artifactCleanup, message: $0)
+                })
                 if result == .crashed, run.backend == .regression {
                     do {
                         if let detection = try CompiledCrashRepairLearner.detect(
@@ -383,10 +466,20 @@ public actor TelemetryCoordinator {
         "\(backend.rawValue):\(appID)"
     }
 
-    private static func issue(_ prefix: String, error: any Error) -> String {
-        PrivacySanitizer.redactedLogExcerpt(
-            "\(prefix): \(error.localizedDescription)",
-            limit: 500
+    private static func issue(_ prefix: String, error: any Error) -> TelemetryIssue {
+        TelemetryIssue(
+            code: .repositoryOperation,
+            message: PrivacySanitizer.redactedLogExcerpt(
+                "\(prefix): \(error.localizedDescription)",
+                limit: 500
+            )
+        )
+    }
+
+    private static func staleEventIssue(appID: String) -> TelemetryIssue {
+        TelemetryIssue(
+            code: .staleProcessEvent,
+            message: "Se ignoró un evento anterior al inicio verificable del App ID \(appID)."
         )
     }
 

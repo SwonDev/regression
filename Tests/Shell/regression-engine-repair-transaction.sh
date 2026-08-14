@@ -35,10 +35,12 @@ fail()
     'set -euo pipefail' \
     'case "${1:-}" in' \
     '  unreal-bootstrap-routes) exit 0 ;;' \
+    '  windows-media-pending-recovery-app-id) printf "%s\n" "REGRESSION_WINDOWS_MEDIA_PENDING_APP_ID=none" ;;' \
     '  prepare-launch-state)' \
     '    [[ "${REGRESSION_REPAIR_TEST_EXIT:-0}" == "0" ]] || exit "$REGRESSION_REPAIR_TEST_EXIT"' \
     '    [[ -n "${REGRESSION_REPAIR_TEST_STATE:-}" ]] && printf "%s\n" "$REGRESSION_REPAIR_TEST_STATE"' \
     '    ;;' \
+    '  acquire-windows-media-runtime-lease) printf "%s\n" "REGRESSION_WINDOWS_MEDIA_RUNTIME_LEASE=22222222-2222-4222-8222-222222222222" ;;' \
     '  *) exit 1 ;;' \
     'esac' \
     > "$CONTROLLER"

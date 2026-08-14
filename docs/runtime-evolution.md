@@ -1,6 +1,6 @@
 # Evolución de runtimes, rendimiento y autonomía
 
-Fecha de revisión del inventario: **13 de agosto de 2026**. Este documento define cómo Regression
+Fecha de revisión del inventario: **14 de agosto de 2026**. Este documento define cómo Regression
 puede adoptar tecnologías nuevas sin degradar un juego que ya funciona y manteniendo un runtime
 FOSS, una botella y una biblioteca completamente propios.
 
@@ -48,6 +48,40 @@ Fuentes oficiales del snapshot:
 
 Las versiones se actualizan únicamente después de contrastar la fuente oficial y registrar la
 fecha. “Hay una versión nueva” significa **candidato de investigación**, no “actualizar estable”.
+
+## Esquema vigente v17
+
+La v17 conserva el sobre durable v16 y añade recuperación transaccional del límite de `spawn`.
+Conserva el run,
+backend Regression, preflight reciente, generación fresca de requisitos e identidades cerradas de
+componentes y perfiles; nunca guarda comandos, rutas, DLLs ni argumentos. La ruta integrada crea
+esa autoridad, lanza, permite que la telemetría adopte el mismo run, espera su cierre y exige una
+verificación explícita antes de completar el sobre.
+
+Si `Process.run()` rechaza síncronamente el ejecutable después del marker, v17 cierra en una sola
+transacción el run, el evento, el receipt y el envelope como `failedBeforeSpawn`. Tras un cierre
+inesperado, una sesión con proceso representativo cerrado pasa a verificación; sin PID con fallo
+confirmado termina como fallo previo; la evidencia ambigua queda en `rollbackPending` hasta una
+recuperación explícita. Ninguna de esas rutas certifica compatibilidad.
+
+Las decisiones de retry y recuperación son todavía una política pura. Delimitan un futuro
+reintento a una receta y versión compiladas, nacidas en Regression, ya aplicadas y sin un intento
+previo, y distinguen una fase que requeriría rollback de otra que solo permitiría reconciliar
+telemetría. No existe aún un ejecutor seguro que consuma esas decisiones, aplique/verifique el
+rollback y persista el recibo; auto-retry y rollback automáticos permanecen bloqueados hasta
+integrarlo. La observación desde Steam o un límite agotado exige un gesto explícito. El recibo de
+orquestación no es evidencia de render, entrada, opciones o gameplay y nunca crea certificación.
+
+## Hito v15: custodia perfecta representativa
+
+La v15 reinstala dentro de la migración transaccional los guards de `research_experiments` y
+vincula la promoción a un proceso representativo rastreado y cerrado. Un perfecto legacy sin esa
+autoridad se invalida y no alimenta catálogo, perfiles, motores, custodia ni aprendizaje.
+
+Este corte corresponde a la release estable **Regression 1.12.0 (38)**. **v1.11.0 (37)** es su
+baseline histórico: permanece verificable y sus artefactos no se reetiquetan ni se reescriben.
+Los gates `public-1.11` demuestran la transición desde ese baseline; no rebajan el contrato de
+versión de la release actual.
 
 ## Esquema v14
 
@@ -152,6 +186,45 @@ La implementación actual cubre tres clases:
 Cada reparación genera o conserva evidencia de antes/después y rollback. Si faltan la fuente
 oficial, el hash, la firma, el permiso o una receta auditada, Regression se detiene o recomienda;
 no improvisa una descarga ni modifica el sistema.
+
+### Reparación Windows Media por App ID
+
+Windows Media no es una dependencia global de Steam. El escáner abre el
+`appmanifest_<APP_ID>.acf` exacto, ancla la carpeta `steamapps/common/<installdir>` y busca
+WMA/WMV/ASF sin seguir symlinks, con profundidad máxima 7, 4096 entradas y 512 KiB de metadatos.
+La proyección debe ser fresca y pertenecer al mismo App ID que solicita el lanzamiento.
+
+Si el componente necesita reparar su enlace versionado, el planner exige ComponentHealth
+autorizado y Steam en reposo. El engine o la app obtiene un lease exclusivo ligado a App ID y
+PID; el instalador consume ese lease, verifica la autoridad compilada del manifiesto, reconcilia
+su WAL, hace backup, realiza el cutover anclado, sincroniza el recibo y vuelve a verificar. Cada
+fase admite recuperación idempotente. Un WAL pendiente de otro App ID bloquea el lanzamiento hasta
+reconciliarlo y una apertura general de Steam no consulta ni ejecuta la reparación.
+
+### Autoridad de perfiles y renderers
+
+`GameRuntimeProfileCatalog` es la autoridad única de `identifier`, `revision` y `executable`; una
+configuración contradictoria no puede sustituirlos. Las rutas externas D3DMetal se derivan como
+entradas indexadas del catálogo y las variables genéricas legacy se neutralizan. El informe de
+capacidad solo declara una ruta efectiva cuando está completo el conjunto de módulos exigido por
+DXMT, DXVK o D3DMetal. D3DMetal requiere además que la versión GPTK autorizada coincida exactamente
+con la fijada por el perfil; la presencia parcial de DLLs no concede autoridad.
+
+### Sello del runtime público 1.12
+
+La salud del runtime no se deduce de que `wine --version` responda. La variante pública
+1.12.0 (38) contiene un catálogo compilado de hashes, tamaños y permisos para el wrapper
+`bin/wine`, `bin/wineserver`, el loader `lib/wine/x86_64-unix/wine`, `ntdll.so`, `wine.inf`,
+`x86_64-windows/ntdll.dll`, `i386-windows/ntdll.dll` y VC++/UCRT de ambas arquitecturas. La
+instalación, el descubrimiento y el coordinador consumen el mismo resultado de salud antes de
+lanzar.
+
+`regression-engine` usa rutas absolutas al Wine y al `WINESERVER` del mismo runtime sellado,
+elimina `WINESERVERSOCKET` heredado y restablece `PATH` exactamente a
+`/usr/bin:/bin:/usr/sbin:/sbin`. De este modo usa las utilidades canónicas de macOS sin heredar un
+Wine, wineserver o `PATH` hostil ni buscar un runtime alternativo. La variante de desarrollo no
+reutiliza los hashes públicos ni se autoriza midiendo sus propios bytes: permanece fail-closed
+hasta disponer de un PIN reproducible separado.
 
 ### Fase C — selección automática acotada
 

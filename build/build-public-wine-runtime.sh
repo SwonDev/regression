@@ -3,6 +3,7 @@
 # El resto del runtime se conserva byte a byte desde la app canónica validada.
 set -Eeuo pipefail
 
+# shellcheck disable=SC1091
 source "$(dirname "$0")/toolchain-common.sh"
 
 PUBLIC_BUILD="${REGRESSION_PUBLIC_WINE_BUILD:-$ROOT/build/wine64-dist}"
@@ -65,6 +66,7 @@ for required in \
     "$PUBLIC_PREFIX/lib/wine" \
     "$PUBLIC_PREFIX/share/wine" \
     REGRESSION_BOOTSTRAP_REDIRECT_COUNT \
+    REGRESSION_EXTERNAL_D3DMETAL_ROUTE_COUNT \
     REGRESSION_WINDOWS_MEDIA_PROFILE \
     REGRESSION_PROCESS_DLL_ISOLATION_ROUTE_COUNT \
     compiled-repair-activations-v1.tsv
@@ -72,6 +74,11 @@ do
     strings -a "$NTDLL" | grep -F "$required" >/dev/null \
         || fail "ntdll.so público no contiene el contrato requerido: $required"
 done
+
+if strings -a "$NTDLL" \
+    | grep -E 'REGRESSION_EXTERNAL_D3DMETAL_(EXECUTABLE|WINE_ROOT)' >/dev/null; then
+    fail "ntdll.so público aún acepta la ruta GPTK genérica heredada"
+fi
 
 if strings -a "$NTDLL" "$WINE_LOADER" "$WINE_WRAPPER" "$WINESERVER" \
     | grep -E '/Users/[^/]+/.*Regression\.app' >/dev/null; then

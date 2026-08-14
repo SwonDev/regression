@@ -7,8 +7,8 @@ MACOS_DIR="$APP/Contents/MacOS"
 PLIST="$APP/Contents/Info.plist"
 RESOURCES_DIR="$APP/Contents/Resources"
 STATE_ICON_DIR="$ROOT/assets/menubar/states"
-VERSION="1.11.0"
-BUILD_NUMBER="37"
+VERSION="1.12.0"
+BUILD_NUMBER="38"
 BACKUP_ROOT="$ROOT/backups/native-packaging"
 COMPATIBILITY_ROOT="${REGRESSION_COMPATIBILITY_ROOT:-$HOME/Library/Application Support/Regression/Compatibility}"
 COMPATIBILITY_DB="$COMPATIBILITY_ROOT/compatibility.sqlite"
@@ -25,6 +25,8 @@ verify_protected_state()
         arguments+=(--before-1.11-promotion)
     elif [[ "$phase" == "release-1.11-development-candidate" ]]; then
         arguments+=(--release-1.11-development-candidate)
+    elif [[ "$phase" == "release-1.12-development-candidate" ]]; then
+        arguments+=(--release-1.12-development-candidate)
     elif [[ "$phase" == "before-tq2-route-unification" ]]; then
         arguments+=(--before-tq2-route-unification)
     elif [[ "$phase" == "before-windows-media-promotion" ]]; then
@@ -60,7 +62,24 @@ verify_prepackage_state()
     source_hash="$(shasum -a 256 "$source_engine" | awk '{print $1}')"
     installed_ntdll_hash="$(shasum -a 256 "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so" | awk '{print $1}')"
 
-    if [[ "$installed_hash" == "0aa2c39d5476d8b5767d9a1979af5ecaf96f36648cbe15d376a761aad06e7ca4" &&
+    if [[ "$installed_hash" == "5cd7370ade8fe210cdc74e6c58f354e7d9cf4e3833012d6482ff6924a4f09fe9" &&
+          "$source_hash" == "$installed_hash" ]]; then
+        # La migración 1.12 sustituye el conjunto entero de arranque Wine después
+        # del backup. El bundle previo no se puede acreditar aún con ese builder,
+        # pero sí debe conservar scripts/medios 1.12 y una firma íntegra antes de
+        # iniciar una mutación reversible.
+        [[ "$(shasum -a 256 "$ROOT/Scripts/install_windows_media_component.sh" | awk '{print $1}')" == \
+           "b1469e452c6ebe94b27fb64504c31f50e251c24ea571ab8eee32ae5015fd0d5f" ]] || {
+            echo "ERROR: el instalador Windows Media fuente no es el candidato 1.12." >&2
+            exit 1
+        }
+        [[ "$(shasum -a 256 "$APP/Contents/SharedSupport/components/windows-media/1/manifest.sha256" | awk '{print $1}')" == \
+           "da8ba98d99d157f981ef3a2472dc9d74c9ce4673ef126bdd61851b9dd21dedb3" ]] || {
+            echo "ERROR: el manifiesto Windows Media instalado no es la autoridad 1.12." >&2
+            exit 1
+        }
+        codesign --verify --deep --strict "$APP"
+    elif [[ "$installed_hash" == "0aa2c39d5476d8b5767d9a1979af5ecaf96f36648cbe15d376a761aad06e7ca4" &&
           "$source_hash" == "$installed_hash" &&
           "$installed_ntdll_hash" == "d41e2468e46ef1993fa124f5b759716d67618989f5304501ccde21fbf4c5eef8" ]]; then
         verify_protected_state release-1.11-development-candidate
@@ -203,17 +222,22 @@ if [[ ! -x "$CONTROL_BINARY" ]]; then
 fi
 
 # Valida todos los insumos antes de crear el rollback o modificar el bundle. Un
-# requisito ausente debe dejar Regression.app exactamente como estaba.
-CANDIDATE_NTDLL="${REGRESSION_CANDIDATE_NTDLL:-$ROOT/build/wine64/dlls/ntdll/ntdll.so}"
-[[ -f "$CANDIDATE_NTDLL" &&
-   "$(shasum -a 256 "$CANDIDATE_NTDLL" | awk '{print $1}')" == "${REGRESSION_CANDIDATE_NTDLL_SHA256:-PENDING_1_11_NTDLL_SHA256}" ]] || {
-    echo "ERROR: falta el ntdll candidato exacto de las reparaciones compiladas." >&2
-    exit 1
-}
-strings -a "$CANDIDATE_NTDLL" | grep -F 'compiled-repair-activations-v1.tsv' >/dev/null || {
-    echo "ERROR: el ntdll candidato no contiene el consumidor de aprendizaje tipado." >&2
-    exit 1
-}
+# requisito ausente debe dejar Regression.app exactamente como estaba. La 1.12 no
+# admite actualizar solo ntdll: los cuatro Mach-O de arranque proceden del mismo
+# builder sellado y se comparan de nuevo, tras firmar, por la huella normalizada.
+RUNTIME_1_12_BUILD="${REGRESSION_1_12_DEVELOPMENT_RUNTIME_BUILD:-$ROOT/build/release-1.12.0/wine64-public}"
+RUNTIME_1_12_SOURCE_PATHS=(
+    tools/wine/wine
+    server/wineserver
+    loader/wine
+    dlls/ntdll/ntdll.so
+)
+for runtime_source_path in "${RUNTIME_1_12_SOURCE_PATHS[@]}"; do
+    [[ -f "$RUNTIME_1_12_BUILD/$runtime_source_path" && ! -L "$RUNTIME_1_12_BUILD/$runtime_source_path" ]] || {
+        echo "ERROR: falta el builder 1.12 sellado: $RUNTIME_1_12_BUILD/$runtime_source_path" >&2
+        exit 1
+    }
+done
 ENGINE_SOURCE="$ROOT/Scripts/regression-engine.sh"
 [[ -x "$ENGINE_SOURCE" ]] || {
     echo "ERROR: falta el lanzador versionado del motor propio." >&2
@@ -250,6 +274,9 @@ NATIVE_BACKUP_PATHS=(
     Contents/MacOS/regression-engine
     Contents/Resources
     Contents/SharedSupport/bin/regressionctl
+    Contents/SharedSupport/wine-root/bin/wine
+    Contents/SharedSupport/wine-root/bin/wineserver
+    Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/wine
     Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so
     Contents/_CodeSignature
 )
@@ -272,10 +299,22 @@ ROLLBACK_DIR="$(mktemp -d "$BACKUP_ROOT/.package-rollback.XXXXXX")"
 cp -cR "$APP" "$ROLLBACK_DIR/Regression.app"
 MUTATION_STARTED=true
 
-NTDLL_DESTINATION="$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
-TEMP_NTDLL="$NTDLL_DESTINATION.new"
-install -m 755 "$CANDIDATE_NTDLL" "$TEMP_NTDLL"
-mv "$TEMP_NTDLL" "$NTDLL_DESTINATION"
+install_runtime_1_12_file()
+{
+    local source_relative="$1"
+    local destination_relative="$2"
+    local destination="$APP/Contents/SharedSupport/wine-root/$destination_relative"
+    local temporary="$destination.new"
+
+    mkdir -p "$(dirname "$destination")"
+    install -m 755 "$RUNTIME_1_12_BUILD/$source_relative" "$temporary"
+    mv "$temporary" "$destination"
+}
+
+install_runtime_1_12_file tools/wine/wine bin/wine
+install_runtime_1_12_file server/wineserver bin/wineserver
+install_runtime_1_12_file loader/wine lib/wine/x86_64-unix/wine
+install_runtime_1_12_file dlls/ntdll/ntdll.so lib/wine/x86_64-unix/ntdll.so
 
 mkdir -p "$MACOS_DIR"
 ENGINE_LAUNCHER="$MACOS_DIR/regression-engine"
@@ -384,8 +423,28 @@ done
 # Info.plist cambie. Renovarlo evita que Launch Services/Spotlight sigan mostrando una versión
 # anterior; el mtime del directorio no forma parte del sello de código.
 touch "$APP"
+
+# `codesign --deep` del bundle no firma de forma fiable estos ejecutables Wine anidados
+# porque no viven en un framework. Deben tener firma individual antes de sellar el bundle
+# raíz; el verificador 1.12 compara después su huella Mach-O sin LC_CODE_SIGNATURE.
+runtime_signing_identity="${REGRESSION_CODESIGN_IDENTITY:-}"
+if [[ -z "$runtime_signing_identity" ]]; then
+    runtime_signing_identity="$(security find-identity -v -p codesigning 2>/dev/null \
+        | awk '/"Apple Development:/ { print $2; exit }')"
+fi
+if [[ -z "$runtime_signing_identity" ]]; then
+    runtime_signing_identity="-"
+fi
+for signed_runtime in \
+    "$APP/Contents/SharedSupport/wine-root/bin/wine" \
+    "$APP/Contents/SharedSupport/wine-root/bin/wineserver" \
+    "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/wine" \
+    "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+do
+    codesign --force --options runtime --sign "$runtime_signing_identity" "$signed_runtime"
+done
 "$ROOT/Scripts/sign_regression.sh" "$APP"
-verify_protected_state release-1.11-development-candidate
+verify_protected_state release-1.12-development-candidate
 
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 if [[ -x "$LSREGISTER" ]]; then

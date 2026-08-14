@@ -3,6 +3,8 @@ import Foundation
 public actor InstallationDiscovery {
     private let fileManager: FileManager
     private let homeDirectoryURL: URL
+    private let regressionComponentHealthProvider:
+        @Sendable (RegressionInstallation) -> ComponentHealthReport
 
     public init(
         runner: any ProcessRunning,
@@ -17,6 +19,24 @@ public actor InstallationDiscovery {
         self.fileManager = fileManager
         let home = homeDirectoryURL ?? fileManager.homeDirectoryForCurrentUser
         self.homeDirectoryURL = home
+        self.regressionComponentHealthProvider = RegressionLaunchComponentGate.evaluate
+    }
+
+    init(
+        runner: any ProcessRunning,
+        fileManager: FileManager = .default,
+        homeDirectoryURL: URL? = nil,
+        applicationRoots: [URL]? = nil,
+        regressionComponentHealthProvider: @escaping @Sendable (
+            RegressionInstallation
+        ) -> ComponentHealthReport
+    ) {
+        _ = runner
+        _ = applicationRoots
+        self.fileManager = fileManager
+        let home = homeDirectoryURL ?? fileManager.homeDirectoryForCurrentUser
+        self.homeDirectoryURL = home
+        self.regressionComponentHealthProvider = regressionComponentHealthProvider
     }
 
     public func discover(regressionApplicationURL: URL? = nil) async -> InstallationSnapshot {
@@ -57,7 +77,7 @@ public actor InstallationDiscovery {
             detail = "Motor propio disponible"
         }
 
-        return RegressionInstallation(
+        let installation = RegressionInstallation(
             applicationURL: resolvedApplicationURL,
             bottleURL: bottle,
             steamExecutableURL: steam,
@@ -65,6 +85,23 @@ public actor InstallationDiscovery {
             health: health,
             healthDetail: detail
         )
+        guard health == .ready else { return installation }
+
+        let runtimeHealth = regressionComponentHealthProvider(installation)
+        do {
+            try RegressionLaunchComponentGate.requireReady(runtimeHealth)
+        } catch {
+            return RegressionInstallation(
+                applicationURL: resolvedApplicationURL,
+                bottleURL: bottle,
+                steamExecutableURL: steam,
+                engineLauncherURL: launcher,
+                health: .damaged,
+                healthDetail: "El runtime sellado no supera ComponentHealth "
+                    + "(\(runtimeHealth.status.rawValue))"
+            )
+        }
+        return installation
     }
 
 }

@@ -5,7 +5,454 @@ import XCTest
 
 @testable import RegressionCore
 
+private final class LockedTestBox<Value>: @unchecked Sendable {
+  private let lock = NSLock()
+  private var stored: Value?
+
+  func store(_ value: Value) {
+    lock.lock()
+    stored = value
+    lock.unlock()
+  }
+
+  func load() -> Value? {
+    lock.lock()
+    defer { lock.unlock() }
+    return stored
+  }
+}
+
 final class ComponentHealthTests: XCTestCase {
+  func testAnchoredPrivateFileReadRequiresOwnerAndMode0600() throws {
+    let support = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "regression-anchored-private-file-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: support) }
+    let root = try XCTUnwrap(AnchoredDirectory.open(support))
+    try root.createExclusiveRegularFile(relativePath: "lease", data: Data("sealed".utf8))
+
+    XCTAssertEqual(
+      try root.readPrivateRegularFile(
+        relativePath: "lease",
+        maximumBytes: 32,
+        ownerUID: getuid()
+      ),
+      Data("sealed".utf8)
+    )
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o640],
+      ofItemAtPath: support.appendingPathComponent("lease").path
+    )
+    XCTAssertThrowsError(try root.readPrivateRegularFile(
+      relativePath: "lease",
+      maximumBytes: 32,
+      ownerUID: getuid()
+    ))
+  }
+
+  func testAnchoredDirectoryAcceptsSystemTmpAlias() throws {
+    let directory = URL(
+      fileURLWithPath: "/tmp/regression-anchored-system-alias-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    XCTAssertNotNil(AnchoredDirectory.open(directory))
+  }
+
+  func testAnchoredDirectoryRejectsHostileParentSymlink() throws {
+    let container = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "regression-anchored-parent-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    let target = container.appendingPathComponent("target/child", isDirectory: true)
+    let alias = container.appendingPathComponent("alias", isDirectory: true)
+    try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(
+      at: alias,
+      withDestinationURL: container.appendingPathComponent("target", isDirectory: true)
+    )
+    defer { try? FileManager.default.removeItem(at: container) }
+
+    XCTAssertNil(AnchoredDirectory.open(alias.appendingPathComponent("child", isDirectory: true)))
+  }
+
+  func testPendingWindowsMediaJournalOverridesReadyLinkUntilReconciled() throws {
+    let fixture = try ComponentHealthFixture()
+    defer { fixture.remove() }
+    let manifest = try fixture.writePayload(["codec.dylib": "sealed"])
+    try FileManager.default.createDirectory(
+      at: fixture.externalLink.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    try FileManager.default.createSymbolicLink(
+      at: fixture.externalLink,
+      withDestinationURL: fixture.payload
+    )
+    let intent = fixture.root.appendingPathComponent("transaction.intent")
+    try Data("phase=swapped\n".utf8).write(to: intent)
+    let base = fixture.descriptor(manifestSHA256: manifest)
+    let descriptor = TrustedComponentDescriptor(
+      identity: base.identity,
+      payloadRootURL: base.payloadRootURL,
+      manifestRelativePath: base.manifestRelativePath,
+      expectedManifestSHA256: base.expectedManifestSHA256,
+      sourcePolicy: base.sourcePolicy,
+      externalLinkURL: base.externalLinkURL,
+      transactionIntentURL: intent
+    )
+
+    let report = ComponentHealthService.evaluate(descriptor)
+
+    XCTAssertEqual(report.status, .repairable)
+    XCTAssertEqual(report.issue, .pendingTransaction)
+    XCTAssertEqual(report.recovery, .reconcilePendingTransaction(intentURL: intent))
+  }
+
+  func testWindowsMediaLeaseIsExclusiveConsumedAfterFreshIdleCheckAndReleased() throws {
+    let support = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "regression-wm-lease-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: support) }
+    let owner = getpid()
+    let lease = try WindowsMediaRepairInterlock.issueRepairLease(
+      appID: "347940",
+      ownerPID: owner,
+      applicationSupportURL: support,
+      runtimeIsIdle: true
+    )
+
+    XCTAssertThrowsError(try WindowsMediaRepairInterlock.issueRuntimeLease(
+      ownerPID: owner,
+      applicationSupportURL: support
+    ))
+    XCTAssertThrowsError(try WindowsMediaRepairInterlock.consumeRepairLease(
+      appID: "347940",
+      token: lease.token,
+      ownerPID: owner,
+      applicationSupportURL: support,
+      runtimeIsIdle: false
+    ))
+    try WindowsMediaRepairInterlock.consumeRepairLease(
+      appID: "347940",
+      token: lease.token,
+      ownerPID: owner,
+      applicationSupportURL: support,
+      runtimeIsIdle: true
+    )
+    try WindowsMediaRepairInterlock.release(
+      token: lease.token,
+      ownerPID: owner,
+      applicationSupportURL: support
+    )
+    XCTAssertNoThrow(try WindowsMediaRepairInterlock.issueRuntimeLease(
+      ownerPID: owner,
+      applicationSupportURL: support
+    ))
+  }
+
+#if DEBUG
+  func testWindowsMediaStaleLeaseReclaimCannotDeleteAuthorityIssuedByAnotherEmitter() throws {
+    let support = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "regression-wm-stale-lease-cas-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+    let crashedEmitter = Process()
+    crashedEmitter.executableURL = URL(fileURLWithPath: "/usr/bin/true")
+    try crashedEmitter.run()
+    crashedEmitter.waitUntilExit()
+    let staleOwnerPID = crashedEmitter.processIdentifier
+    XCTAssertFalse(Darwin.kill(staleOwnerPID, 0) == 0 || errno == EPERM)
+    let staleLeaseData = Data([
+      "schema=1",
+      "kind=runtime",
+      "state=issued",
+      "app_id=none",
+      "owner_pid=\(staleOwnerPID)",
+      "token=11111111-1111-4111-8111-111111111111",
+    ].joined(separator: "\n").appending("\n").utf8)
+    let root = try XCTUnwrap(AnchoredDirectory.open(support))
+    try root.ensurePrivateDirectory(relativePath: "Locks/WindowsMedia")
+    try root.createExclusiveRegularFile(
+      relativePath: "Locks/WindowsMedia/runtime-or-repair.lease",
+      data: staleLeaseData
+    )
+    defer { try? FileManager.default.removeItem(at: support) }
+
+    let firstSawStaleLease = DispatchSemaphore(value: 0)
+    let allowFirstEmitterToReclaim = DispatchSemaphore(value: 0)
+    let secondEmitterEntered = DispatchSemaphore(value: 0)
+    let completion = DispatchGroup()
+    let firstResult = LockedTestBox<Result<WindowsMediaRepairLease, Error>>()
+    let secondResult = LockedTestBox<Result<WindowsMediaRepairLease, Error>>()
+
+    completion.enter()
+    DispatchQueue.global().async {
+      defer { completion.leave() }
+      let result = Result {
+        try WindowsMediaRepairInterlock.withTestingStaleLeaseObservedHook({
+          firstSawStaleLease.signal()
+          XCTAssertEqual(allowFirstEmitterToReclaim.wait(timeout: .now() + 5), .success)
+        }) {
+          try WindowsMediaRepairInterlock.issueRuntimeLease(
+            ownerPID: getpid(),
+            applicationSupportURL: support
+          )
+        }
+      }
+      firstResult.store(result)
+    }
+
+    XCTAssertEqual(firstSawStaleLease.wait(timeout: .now() + 5), .success)
+    completion.enter()
+    DispatchQueue.global().async {
+      defer { completion.leave() }
+      secondEmitterEntered.signal()
+      let result = Result {
+        try WindowsMediaRepairInterlock.issueRuntimeLease(
+          ownerPID: getpid(),
+          applicationSupportURL: support
+        )
+      }
+      secondResult.store(result)
+    }
+    XCTAssertEqual(secondEmitterEntered.wait(timeout: .now() + 5), .success)
+    allowFirstEmitterToReclaim.signal()
+    XCTAssertEqual(completion.wait(timeout: .now() + 5), .success)
+
+    let capturedFirst = firstResult.load()
+    let capturedSecond = secondResult.load()
+    guard case .success(let firstLease)? = capturedFirst else {
+      return XCTFail("El primer emisor no obtuvo la única autoridad esperada")
+    }
+    guard case .failure(let secondError)? = capturedSecond else {
+      return XCTFail("El segundo emisor no debía obtener autoridad tras la recuperación")
+    }
+    XCTAssertEqual(secondError as? WindowsMediaRepairInterlockError, .leaseActive)
+
+    XCTAssertThrowsError(try WindowsMediaRepairInterlock.issueRuntimeLease(
+      ownerPID: getpid(),
+      applicationSupportURL: support
+    )) { error in
+      XCTAssertEqual(error as? WindowsMediaRepairInterlockError, .leaseActive)
+    }
+    try WindowsMediaRepairInterlock.release(
+      token: firstLease.token,
+      ownerPID: getpid(),
+      applicationSupportURL: support
+    )
+  }
+#endif
+
+  func testWindowsMediaLeaseRejectsDuplicateKeysWithoutCrashing() throws {
+    let support = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "regression-wm-duplicate-lease-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    let leaseURL = support.appendingPathComponent(
+      "Locks/WindowsMedia/runtime-or-repair.lease",
+      isDirectory: false
+    )
+    try FileManager.default.createDirectory(
+      at: leaseURL.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    try Data([
+      "schema=1",
+      "kind=repair",
+      "state=issued",
+      "app_id=347940",
+      "owner_pid=\(getpid())",
+      "token=11111111-1111-4111-8111-111111111111",
+      "token=22222222-2222-4222-8222-222222222222",
+    ].joined(separator: "\n").appending("\n").utf8).write(to: leaseURL)
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o600],
+      ofItemAtPath: leaseURL.path
+    )
+    defer { try? FileManager.default.removeItem(at: support) }
+
+    XCTAssertThrowsError(try WindowsMediaRepairInterlock.issueRuntimeLease(
+      ownerPID: getpid(),
+      applicationSupportURL: support
+    ))
+  }
+
+  func testWindowsMediaRuntimeLeaseRejectsWALCreatedAfterLaunchPrecheck() throws {
+    let support = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "regression-wm-runtime-wal-race-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: support) }
+    try WindowsMediaAnchoredPrivateFileStore.write(
+      Data("pending-wal-after-precheck".utf8),
+      to: .intent,
+      applicationSupportURL: support
+    )
+
+    XCTAssertThrowsError(try WindowsMediaRepairInterlock.issueRuntimeLease(
+      ownerPID: getpid(),
+      applicationSupportURL: support
+    )) { error in
+      XCTAssertEqual(
+        error as? WindowsMediaRepairInterlockError,
+        .pendingTransaction
+      )
+    }
+  }
+
+  func testWindowsMediaAnchoredMutatorRejectsSwappedComponentSubtree() throws {
+    let support = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "regression-wm-mutation-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    let outside = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "regression-wm-outside-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    let payload = support.appendingPathComponent("payload", isDirectory: true)
+    try FileManager.default.createDirectory(
+      at: support.appendingPathComponent("Components"),
+      withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: payload, withIntermediateDirectories: true)
+    try FileManager.default.removeItem(at: support.appendingPathComponent("Components"))
+    try FileManager.default.createSymbolicLink(
+      at: support.appendingPathComponent("Components"),
+      withDestinationURL: outside
+    )
+    defer {
+      try? FileManager.default.removeItem(at: support)
+      try? FileManager.default.removeItem(at: outside)
+    }
+
+    XCTAssertThrowsError(try WindowsMediaAnchoredLinkMutator.apply(
+      .createStage(stageName: ".1-stage-123", targetURL: payload),
+      applicationSupportURL: support,
+      authorizedPayloadURL: payload
+    ))
+    XCTAssertTrue((try FileManager.default.contentsOfDirectory(atPath: outside.path)).isEmpty)
+  }
+
+  func testWindowsMediaStoragePreparationRejectsHostileManagedSubtree() throws {
+    let support = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "regression-wm-storage-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    let outside = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "regression-wm-storage-outside-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(
+      at: support.appendingPathComponent("Components"),
+      withDestinationURL: outside
+    )
+    defer {
+      try? FileManager.default.removeItem(at: support)
+      try? FileManager.default.removeItem(at: outside)
+    }
+
+    XCTAssertThrowsError(try WindowsMediaAnchoredPrivateFileStore.prepare(
+      applicationSupportURL: support
+    ))
+    XCTAssertTrue((try FileManager.default.contentsOfDirectory(atPath: outside.path)).isEmpty)
+  }
+
+  func testAnchoredMutationCannotEscapeWhenParentIsSwappedAfterOpen() throws {
+    let support = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "regression-wm-openat-race-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    let managed = support.appendingPathComponent("Components/WindowsMedia", isDirectory: true)
+    let displaced = support.appendingPathComponent("Components/WindowsMedia-before", isDirectory: true)
+    let outside = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "regression-wm-openat-outside-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: managed, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+    defer {
+      try? FileManager.default.removeItem(at: support)
+      try? FileManager.default.removeItem(at: outside)
+    }
+    let root = try XCTUnwrap(AnchoredDirectory.open(support))
+
+    try root.createSymbolicLink(
+      relativePath: "Components/WindowsMedia/.1-stage-123",
+      target: "/trusted/payload",
+      onParentOpened: {
+        try? FileManager.default.moveItem(at: managed, to: displaced)
+        try? FileManager.default.createSymbolicLink(at: managed, withDestinationURL: outside)
+      }
+    )
+
+    XCTAssertTrue((try FileManager.default.contentsOfDirectory(atPath: outside.path)).isEmpty)
+    XCTAssertEqual(
+      try FileManager.default.destinationOfSymbolicLink(
+        atPath: displaced.appendingPathComponent(".1-stage-123").path
+      ),
+      "/trusted/payload"
+    )
+  }
+
+  func testWindowsMediaPrivateWALStoreRejectsHostileTransactionSubtree() throws {
+    let support = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "regression-wm-wal-store-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    let outside = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "regression-wm-wal-store-outside-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(
+      at: support.appendingPathComponent("Transactions"),
+      withDestinationURL: outside
+    )
+    defer {
+      try? FileManager.default.removeItem(at: support)
+      try? FileManager.default.removeItem(at: outside)
+    }
+
+    XCTAssertThrowsError(try WindowsMediaAnchoredPrivateFileStore.write(
+      Data("phase=prepared\n".utf8),
+      to: .intent,
+      applicationSupportURL: support
+    ))
+    XCTAssertTrue((try FileManager.default.contentsOfDirectory(atPath: outside.path)).isEmpty)
+  }
+
+  func testAnchoredSymbolicLinkReadRejectsConcurrentReplacement() throws {
+    let rootURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "regression-link-swap-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    let link = rootURL.appendingPathComponent("1")
+    try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: "/trusted/a")
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+    let root = try XCTUnwrap(AnchoredDirectory.open(rootURL))
+
+    XCTAssertThrowsError(try root.stableSymbolicLink(relativePath: "1") {
+      try? FileManager.default.removeItem(at: link)
+      try? FileManager.default.createSymbolicLink(
+        atPath: link.path,
+        withDestinationPath: "/trusted/b"
+      )
+    })
+  }
+
   func testProductionWindowsMediaDevelopmentDescriptorUsesCompiledManifestAndInjectedPaths() {
     let roots = ProductionDescriptorRoots()
 
@@ -65,6 +512,27 @@ final class ComponentHealthTests: XCTestCase {
         .appendingPathComponent("Components/WindowsMedia/1")
         .path
     )
+  }
+
+  func testProductionWindowsMediaCarriesByteIdenticalAuthorityInto112() {
+    let roots = ProductionDescriptorRoots()
+    let legacy = TrustedComponentCatalog.windowsMediaDescriptor(
+      applicationVersion: "1.11.0",
+      buildIdentifier: "37",
+      variant: .publicInstalled,
+      applicationBundleURL: roots.bundle,
+      applicationSupportURL: roots.applicationSupport
+    )
+    let current = TrustedComponentCatalog.windowsMediaDescriptor(
+      applicationVersion: "1.12.0",
+      buildIdentifier: "38",
+      variant: .publicInstalled,
+      applicationBundleURL: roots.bundle,
+      applicationSupportURL: roots.applicationSupport
+    )
+
+    XCTAssertEqual(current.identity.variant, .publicInstalled)
+    XCTAssertEqual(current.expectedManifestSHA256, legacy.expectedManifestSHA256)
   }
 
   func testProductionWindowsMediaCatalogDoesNotInferPublicVariantFromManifest() {
@@ -197,22 +665,22 @@ final class ComponentHealthTests: XCTestCase {
     )
 
     let descriptor = TrustedComponentCatalog.steamRuntimePrerequisitesDescriptor(
-      applicationVersion: "1.11.0",
-      buildIdentifier: "37",
+      applicationVersion: "1.12.0",
+      buildIdentifier: "38",
       variant: .publicInstalled,
       wineRootURL: root
     )
 
     XCTAssertEqual(descriptor.identity.componentID, "steam-runtime-prerequisites")
-    XCTAssertEqual(descriptor.identity.componentVersion, "1")
+    XCTAssertEqual(descriptor.identity.componentVersion, "3")
     XCTAssertEqual(descriptor.identity.variant, .publicInstalled)
-    XCTAssertEqual(descriptor.identity.buildIdentifier, "37")
+    XCTAssertEqual(descriptor.identity.buildIdentifier, "38")
     XCTAssertEqual(descriptor.payloadRootURL, root.standardizedFileURL)
     XCTAssertEqual(
       descriptor.identity,
       TrustedComponentCatalog.steamRuntimePrerequisitesDescriptor(
-        applicationVersion: "1.11.0",
-        buildIdentifier: "37",
+        applicationVersion: "1.12.0",
+        buildIdentifier: "38",
         variant: .publicInstalled,
         wineRootURL: root
       ).identity
@@ -222,6 +690,20 @@ final class ComponentHealthTests: XCTestCase {
         uniqueKeysWithValues: descriptor.files.map { ($0.relativePath, $0.expectedSHA256) }
       ),
       [
+        "bin/wine":
+          "fed13faa895c9ea5896a6497490db26674c3dca2a318e3389d8e43ba3e00f552",
+        "bin/wineserver":
+          "8d14fb9d6d9730c300ba16b5997d98218a2a40a78008d60f3a6edb719f328db3",
+        "lib/wine/x86_64-unix/wine":
+          "5636a6505e872c8d185d8db7ced2d4aa8e9057e81c4c579e4b623009f9c2857b",
+        "lib/wine/x86_64-unix/ntdll.so":
+          "66622d2832d99c37cdaa2872c5409b5f9a5dc04d1fdb9dcd426ae37f8365942e",
+        "share/wine/wine.inf":
+          "0315a55b11a456590a9368f4cb8d0011d6735cc04c9093ea583570d1352e1ee1",
+        "lib/wine/x86_64-windows/ntdll.dll":
+          "885c0421bfe30600bae9df83961b0fcbb5b9ccd1c02e7b071ce213ff2522e34a",
+        "lib/wine/i386-windows/ntdll.dll":
+          "7b580e19eb4fce14b5730cd2835c5204dc2622ce0fc4f33b68b0155864477667",
         "lib/wine/x86_64-windows/vcruntime140.dll":
           "f03a7c92ed8cda87fc0bf72a5af29962d26ca981b546b3ce0550fb57ca3ee7ff",
         "lib/wine/x86_64-windows/msvcp140.dll":
@@ -237,6 +719,68 @@ final class ComponentHealthTests: XCTestCase {
         "lib/wine/i386-windows/ucrtbase.dll":
           "935fbefeb5462924e628df486ebfdad49b70a91154c9a8a57d9aa221fc91c119",
       ]
+    )
+    XCTAssertFalse(
+      descriptor.files.contains {
+        $0.expectedSHA256
+          == "8fb847f4f71ae120609c963fc588d3ea77b0887f173858c2d462e424a2d8fd8e"
+      },
+      "el ntdll.so 1.11 con rutas GPTK genéricas no puede seguir autorizado"
+    )
+    XCTAssertEqual(
+      Dictionary(
+        uniqueKeysWithValues: descriptor.files.map { ($0.relativePath, $0.expectedPOSIXMode) }
+      ),
+      [
+        "bin/wine": 0o755,
+        "bin/wineserver": 0o755,
+        "lib/wine/x86_64-unix/wine": 0o755,
+        "lib/wine/x86_64-unix/ntdll.so": 0o755,
+        "share/wine/wine.inf": 0o644,
+        "lib/wine/x86_64-windows/ntdll.dll": 0o644,
+        "lib/wine/i386-windows/ntdll.dll": 0o644,
+        "lib/wine/x86_64-windows/vcruntime140.dll": 0o644,
+        "lib/wine/x86_64-windows/msvcp140.dll": 0o644,
+        "lib/wine/x86_64-windows/ucrtbase.dll": 0o644,
+        "lib/wine/x86_64-windows/vcruntime140_1.dll": 0o644,
+        "lib/wine/i386-windows/vcruntime140.dll": 0o644,
+        "lib/wine/i386-windows/msvcp140.dll": 0o644,
+        "lib/wine/i386-windows/ucrtbase.dll": 0o644,
+      ]
+    )
+  }
+
+  func testSteamRuntimePrerequisitesRejectsLegacy111Authority() {
+    let descriptor = TrustedComponentCatalog.steamRuntimePrerequisitesDescriptor(
+      applicationVersion: "1.11.0",
+      buildIdentifier: "37",
+      variant: .publicInstalled,
+      wineRootURL: URL(fileURLWithPath: "/Applications/Regression.app/Contents/SharedSupport/wine-root")
+    )
+
+    XCTAssertEqual(descriptor.identity.variant, .unsupported("Regression 1.11.0 (37)"))
+    XCTAssertTrue(descriptor.files.isEmpty)
+  }
+
+  func testSteamRuntimeDevelopmentVariantFailsClosedWithoutReproduciblePins() {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "development-runtime-without-authority-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    let descriptor = TrustedComponentCatalog.steamRuntimePrerequisitesDescriptor(
+      applicationVersion: "1.12.0",
+      buildIdentifier: "38",
+      variant: .development,
+      wineRootURL: root
+    )
+
+    let report = ComponentHealthService.evaluate(descriptor)
+
+    XCTAssertEqual(report.status, .unsupportedVariant)
+    XCTAssertEqual(report.recovery, .installSupportedApplicationBuild)
+    XCTAssertEqual(
+      report.issue,
+      .unsupportedVariant("Regression 1.12.0 (38): runtime de desarrollo sin PIN reproducible")
     )
   }
 
@@ -291,6 +835,27 @@ final class ComponentHealthTests: XCTestCase {
     )
   }
 
+  func testSteamRuntimeExecutableModeDriftIsRejected() throws {
+    for executablePath in [
+      "bin/wine",
+      "bin/wineserver",
+      "lib/wine/x86_64-unix/wine",
+    ] {
+      let fixture = try SteamRuntimePrerequisitesFixture()
+      defer { fixture.remove() }
+      try fixture.writeApprovedFiles()
+      try FileManager.default.setAttributes(
+        [.posixPermissions: 0o644],
+        ofItemAtPath: fixture.root.appendingPathComponent(executablePath).path
+      )
+
+      let report = ComponentHealthService.evaluate(fixture.descriptor())
+
+      XCTAssertEqual(report.status, .drifted, executablePath)
+      XCTAssertEqual(report.issue, .payloadEntryModeMismatch(executablePath))
+    }
+  }
+
   func testSteamRuntimePrerequisitesSymlinkIsRejectedWithoutReadingTarget() throws {
     let fixture = try SteamRuntimePrerequisitesFixture()
     defer { fixture.remove() }
@@ -338,7 +903,7 @@ final class ComponentHealthTests: XCTestCase {
     XCTAssertEqual(largeReport.status, .drifted)
     XCTAssertEqual(
       largeReport.issue,
-      .payloadEntryExceedsLimit("lib/wine/x86_64-windows/vcruntime140.dll")
+      .payloadEntryExceedsLimit("bin/wine")
     )
   }
 
@@ -664,6 +1229,33 @@ final class ComponentHealthTests: XCTestCase {
       unexpected.path)
   }
 
+  func testExternalLinkParentReplacementCannotRemainReady() throws {
+    let fixture = try ComponentHealthFixture()
+    defer { fixture.remove() }
+    let manifestDigest = try fixture.writePayload(["BUILD.txt": "approved"])
+    try fixture.linkExpectedPayload()
+    let parent = fixture.externalLink.deletingLastPathComponent()
+    let displaced = parent.deletingLastPathComponent().appendingPathComponent("component-before")
+    var swapped = false
+
+    let report = ComponentHealthService.evaluate(
+      fixture.descriptor(manifestSHA256: manifestDigest),
+      fileManager: .default,
+      onExternalLinkTargetRead: {
+        swapped = true
+        try? FileManager.default.moveItem(at: parent, to: displaced)
+        try? FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        try? FileManager.default.createSymbolicLink(
+          at: fixture.externalLink,
+          withDestinationURL: fixture.payload
+        )
+      }
+    )
+
+    XCTAssertTrue(swapped)
+    XCTAssertNotEqual(report.status, .ready)
+  }
+
   func testMissingBundledPayloadIsMissing() throws {
     let fixture = try ComponentHealthFixture(createPayload: false)
     defer { fixture.remove() }
@@ -801,6 +1393,9 @@ private final class ComponentHealthFixture {
 
 private final class SteamRuntimePrerequisitesFixture {
   private static let orderedPaths = [
+    "bin/wine",
+    "bin/wineserver",
+    "lib/wine/x86_64-unix/wine",
     "lib/wine/x86_64-windows/vcruntime140.dll",
     "lib/wine/x86_64-windows/msvcp140.dll",
     "lib/wine/x86_64-windows/ucrtbase.dll",
@@ -813,6 +1408,9 @@ private final class SteamRuntimePrerequisitesFixture {
   let container: URL
   let root: URL
   let contents: [String: Data] = [
+    "bin/wine": Data("wine-wrapper".utf8),
+    "bin/wineserver": Data("wineserver".utf8),
+    "lib/wine/x86_64-unix/wine": Data("wine-loader".utf8),
     "lib/wine/x86_64-windows/vcruntime140.dll": Data("x64-vcruntime".utf8),
     "lib/wine/x86_64-windows/msvcp140.dll": Data("x64-msvcp".utf8),
     "lib/wine/x86_64-windows/ucrtbase.dll": Data("x64-ucrt".utf8),
@@ -843,7 +1441,10 @@ private final class SteamRuntimePrerequisitesFixture {
       files: Self.orderedPaths.map { path in
         TrustedComponentFile(
           relativePath: path,
-          expectedSHA256: Self.sha256(contents[path]!)
+          expectedSHA256: Self.sha256(contents[path]!),
+          expectedPOSIXMode: path == "bin/wine"
+            || path == "bin/wineserver"
+            || path == "lib/wine/x86_64-unix/wine" ? 0o755 : 0o644
         )
       },
       maximumFileBytes: maximumFileBytes,
@@ -859,6 +1460,12 @@ private final class SteamRuntimePrerequisitesFixture {
         withIntermediateDirectories: true
       )
       try data.write(to: url)
+      try FileManager.default.setAttributes(
+        [.posixPermissions: path == "bin/wine"
+          || path == "bin/wineserver"
+          || path == "lib/wine/x86_64-unix/wine" ? 0o755 : 0o644],
+        ofItemAtPath: url.path
+      )
     }
   }
 

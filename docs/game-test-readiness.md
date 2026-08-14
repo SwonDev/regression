@@ -41,7 +41,7 @@ con nombre compuesto tampoco queda invisible. Esta regla complementa —no susti
 `Steam.exe`: el backend del cliente desacoplado sigue resolviéndose con sus ficheros abiertos
 mediante `lsof`, tal como exige `AGENTS.md`.
 
-## Persistencia y esquema v12
+## Persistencia de la sesión y esquema actual
 
 Una comprobación general desde el popover solo actualiza el estado visible. Cuando el usuario
 lanza un juego desde el botón de Regression y el resultado es `ready` o `warning`:
@@ -63,6 +63,25 @@ Steam puede encadenar un launcher y el binario principal para un solo App ID. El
 conserva cada uno en `run_processes`, actualiza cuál representa la sesión y espera a que terminen
 todos antes de cerrar el run. Los eventos siguen auditables y exportables, pero una pulsación del
 usuario produce una única prueba y una única posible verificación.
+
+El hito **v15** endurece esa custodia: el PID guardado en `runs` debe coincidir con la
+única fila representativa, ningún proceso puede seguir abierto y todos deben terminar antes de
+la verificación. Si la cadena cambia después, el perfecto se invalida y el blindado se desactiva
+sin eliminar el historial.
+
+El esquema actual **v17** conserva el sobre durable que precede al `spawn`. Solo autoriza un App ID y
+run canónicos cuando el preflight `preLaunch` está completo, no bloqueado y tiene como máximo 90
+segundos, la proyección de requisitos es fresca y el runtime, los componentes requeridos y el
+renderer son elegibles. El sobre guarda identidades cerradas, no comandos ni rutas. Mientras el
+run siga abierto, la telemetría puede adoptarlo sin duplicar la sesión. Tras relanzar la app, el
+run se cierra y el sobre se reconcilia para auditoría: la telemetría no lo reanuda. En ambos casos
+la certificación continúa requiriendo una verificación funcional explícita. Las políticas de
+retry/recuperación no ejecutan todavía auto-retry ni rollback.
+
+El monitor de Steam comunica por separado log ausente/ilegible, rotación, truncado, límites de
+lectura y líneas parciales o no reconocidas. Una discontinuidad abre una época nueva y no permite
+usar eventos anteriores para completar una intención reciente. Por tanto, «no apareció ningún
+evento» y «la telemetría estaba sana» nunca se tratan como la misma afirmación.
 
 Si la instantánea no puede persistirse, la intención de telemetría se cierra como fallo previo y
 el juego no se solicita. Las exportaciones incluyen `preflightSnapshots` por separado de los

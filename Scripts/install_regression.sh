@@ -5,9 +5,11 @@
 set -Eeuo pipefail
 PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
+# Ningún smoke, wineboot, instalador ni wineserver puede heredar la sesión de otro runtime.
+unset WINESERVERSOCKET
 
-VERSION="1.11.0"
-BUILD_NUMBER="37"
+VERSION="1.12.0"
+BUILD_NUMBER="38"
 REPO="SwonDev/regression"
 ASSET_NAME="Regression-${VERSION}-macos-arm64.tar.gz"
 APP_NAME="Regression.app"
@@ -45,11 +47,20 @@ GPTK_PRESERVATION_MANIFEST=""
 GPTK_PRESERVED_GENERATION=""
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
-# REGRESSION_RELEASE_AUTHORITY_V1_BEGIN
+# REGRESSION_RELEASE_AUTHORITY_V2_BEGIN
 EXPECTED_MEDIA_MANIFEST_SHA256="da8ba98d99d157f981ef3a2472dc9d74c9ce4673ef126bdd61851b9dd21dedb3"
-release_runtime_authority_v1()
+# Hashes del ensemble público derivados del builder raw sellado mediante strip,
+# saneado literal y firma ad hoc del staging.
+release_runtime_authority_v2()
 {
     cat <<'EOF'
+fed13faa895c9ea5896a6497490db26674c3dca2a318e3389d8e43ba3e00f552 bin/wine
+8d14fb9d6d9730c300ba16b5997d98218a2a40a78008d60f3a6edb719f328db3 bin/wineserver
+5636a6505e872c8d185d8db7ced2d4aa8e9057e81c4c579e4b623009f9c2857b lib/wine/x86_64-unix/wine
+66622d2832d99c37cdaa2872c5409b5f9a5dc04d1fdb9dcd426ae37f8365942e lib/wine/x86_64-unix/ntdll.so
+0315a55b11a456590a9368f4cb8d0011d6735cc04c9093ea583570d1352e1ee1 share/wine/wine.inf
+885c0421bfe30600bae9df83961b0fcbb5b9ccd1c02e7b071ce213ff2522e34a lib/wine/x86_64-windows/ntdll.dll
+7b580e19eb4fce14b5730cd2835c5204dc2622ce0fc4f33b68b0155864477667 lib/wine/i386-windows/ntdll.dll
 f03a7c92ed8cda87fc0bf72a5af29962d26ca981b546b3ce0550fb57ca3ee7ff lib/wine/x86_64-windows/vcruntime140.dll
 2a53d2db7e7b760d2b1d7ecd46b05653e11850363a10b097303d3491aaa4e94a lib/wine/x86_64-windows/msvcp140.dll
 019e4bebf86cc4642fff63bc371223280ddfb0306ff379b04fe3f4dc2311ad22 lib/wine/x86_64-windows/ucrtbase.dll
@@ -59,7 +70,7 @@ f03a7c92ed8cda87fc0bf72a5af29962d26ca981b546b3ce0550fb57ca3ee7ff lib/wine/x86_64
 935fbefeb5462924e628df486ebfdad49b70a91154c9a8a57d9aa221fc91c119 lib/wine/i386-windows/ucrtbase.dll
 EOF
 }
-# REGRESSION_RELEASE_AUTHORITY_V1_END
+# REGRESSION_RELEASE_AUTHORITY_V2_END
 
 usage() {
     sed -n '2,4p' "$0"
@@ -589,6 +600,7 @@ verify_staged_release() {
         /Applications/Regression.app/Contents/SharedSupport/wine-root/lib/wine \
         /Applications/Regression.app/Contents/SharedSupport/wine-root/share/wine \
         REGRESSION_BOOTSTRAP_REDIRECT_COUNT \
+        REGRESSION_EXTERNAL_D3DMETAL_ROUTE_COUNT \
         REGRESSION_WINDOWS_MEDIA_PROFILE \
         REGRESSION_PROCESS_DLL_ISOLATION_ROUTE_COUNT \
         compiled-repair-activations-v1.tsv
@@ -599,6 +611,13 @@ verify_staged_release() {
         }
     done
 
+    if /usr/bin/strings -a "$ntdll" \
+        | /usr/bin/grep -E 'REGRESSION_EXTERNAL_D3DMETAL_(EXECUTABLE|WINE_ROOT)' \
+            >/dev/null; then
+        fail "El runtime descargado aún acepta la ruta GPTK genérica heredada."
+        return 1
+    fi
+
     while IFS=' ' read -r expected relative; do
         actual="$(/usr/bin/shasum -a 256 "$wine_root/$relative" 2>/dev/null \
             | /usr/bin/awk '{print $1}')"
@@ -606,7 +625,7 @@ verify_staged_release() {
             fail "El redistribuible no coincide con la autoridad compilada: $relative"
             return 1
         }
-    done < <(release_runtime_authority_v1)
+    done < <(release_runtime_authority_v2)
 
     [[ -f "$media/gstreamer-1.0/libgstasf.dylib" \
         && -f "$media/gstreamer-1.0/libgstlibav.dylib" \

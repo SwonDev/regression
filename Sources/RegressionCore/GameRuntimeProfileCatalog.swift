@@ -26,7 +26,11 @@ public struct CompiledGameRuntimeProfile: Equatable, Sendable {
         self.revision = revision
         self.executable = executable
         self.requiresActiveSteamClient = requiresActiveSteamClient
-        self.configurationValues = configurationValues
+        var authoritativeConfigurationValues = configurationValues
+        authoritativeConfigurationValues["profile.id"] = identifier
+        authoritativeConfigurationValues["profile.revision"] = String(revision)
+        authoritativeConfigurationValues["profile.executable"] = executable
+        self.configurationValues = authoritativeConfigurationValues
     }
 }
 
@@ -36,7 +40,7 @@ public enum AppleGPTKVersion: String, Equatable, Sendable {
 }
 
 public enum GameRuntimeProfileCatalog {
-    public static let revision = "2026-08-09.15"
+    public static let revision = "2026-08-13.16"
 
     private static let legacyAppleGPTKVersionByAppID: [String: AppleGPTKVersion] = [
         "219990": .version3,
@@ -52,10 +56,7 @@ public enum GameRuntimeProfileCatalog {
             executable: "cross blitz.exe",
             requiresActiveSteamClient: true,
             configurationValues: [
-                "profile.id": "unity-intro-media-borderless-stability",
-                "profile.revision": "2",
                 "profile.scope": "exact-process",
-                "profile.executable": "cross blitz.exe",
                 "profile.engine.family": "unity-il2cpp",
                 "profile.repair.id": CompiledRepairRecipe.unityIntroWineGStreamerIsolation.rawValue,
                 "profile.repair.detector": "strict-unity-mf-crash-stack-v1",
@@ -77,10 +78,7 @@ public enum GameRuntimeProfileCatalog {
             revision: 1,
             executable: "forsakenisle.exe",
             configurationValues: [
-                "profile.id": "windows-media-gstreamer-autodetect",
-                "profile.revision": "1",
                 "profile.scope": "steam-game-content-tree",
-                "profile.executable": "forsakenisle.exe",
                 "profile.media.extensions": "asf,wma,wmv",
                 "profile.media.backend": "gstreamer-1.24.4",
                 "profile.media.decoder": "ffmpeg-6.1.6-lgpl",
@@ -97,10 +95,7 @@ public enum GameRuntimeProfileCatalog {
             revision: 1,
             executable: "hwr2.exe",
             configurationValues: [
-                "profile.id": "heroes-hammerwatch-2.opengl-forward-compatible",
-                "profile.revision": "1",
                 "profile.scope": "exact-process",
-                "profile.executable": "hwr2.exe",
                 "profile.runtime-root": "lib/profiles/heroes-hammerwatch-2",
                 "profile.graphics.api": "opengl",
                 "profile.opengl.forward-compatible": "1"
@@ -113,10 +108,7 @@ public enum GameRuntimeProfileCatalog {
             executable: "borderlands4.exe",
             requiresActiveSteamClient: true,
             configurationValues: [
-                "profile.id": "borderlands-4.apple-gptk-linux-uname",
-                "profile.revision": "1",
                 "profile.scope": "exact-app-process",
-                "profile.executable": "borderlands4.exe",
                 "profile.engine.family": "unreal",
                 "profile.graphics.api": "d3d12",
                 "profile.graphics.backend": "d3dmetal",
@@ -140,10 +132,7 @@ public enum GameRuntimeProfileCatalog {
             executable: "tq2-win64-shipping.exe",
             requiresActiveSteamClient: true,
             configurationValues: [
-                "profile.id": "titan-quest-2.apple-gptk-4.0b2-steam-shipping",
-                "profile.revision": "7",
                 "profile.scope": "exact-app-process",
-                "profile.executable": "tq2-win64-shipping.exe",
                 "profile.runtime-root": "components/apple-gptk/4.0b2",
                 "profile.graphics.api": "d3d12",
                 "profile.graphics.backend": "d3dmetal",
@@ -165,10 +154,7 @@ public enum GameRuntimeProfileCatalog {
             executable: "rsdragonwilds-win64-shipping.exe",
             requiresActiveSteamClient: true,
             configurationValues: [
-                "profile.id": "unreal-d3d11-dual-overlay-isolation",
-                "profile.revision": "1",
                 "profile.scope": "exact-process",
-                "profile.executable": "rsdragonwilds-win64-shipping.exe",
                 "profile.engine.family": "unreal",
                 "profile.graphics.api": "d3d11",
                 "profile.repair.id": CompiledRepairRecipe.unrealD3D11DualOverlayIsolation.rawValue,
@@ -187,10 +173,7 @@ public enum GameRuntimeProfileCatalog {
             revision: 1,
             executable: "tinkerlands.exe",
             configurationValues: [
-                "profile.id": "gamemaker-retina-fullscreen-repair",
-                "profile.revision": "1",
                 "profile.scope": "bounded-user-options",
-                "profile.executable": "tinkerlands.exe",
                 "profile.engine.family": "gamemaker",
                 "profile.repair.id": CompiledRepairRecipe.gameMakerRetinaFullscreen.rawValue,
                 "profile.repair.condition": "fullscreen=0,resolution>=6",
@@ -199,6 +182,19 @@ public enum GameRuntimeProfileCatalog {
             ]
         )
     ]
+
+    /// Basenames que deben recibir la ruta externa y verificada de D3DMetal.
+    ///
+    /// El contrato se deriva de los perfiles compilados para que el catálogo siga siendo la
+    /// única autoridad Swift; los gates comparan esta lista con el launcher y Wine.
+    public static var externalAppleGPTKRouteBasenames: [String] {
+        all.compactMap { profile in
+            guard declaredAppleGPTKVersion(in: profile) == .version4Beta2 else {
+                return nil
+            }
+            return profile.executable
+        }
+    }
 
     public static func profile(
         for appID: String,
@@ -230,13 +226,10 @@ public enum GameRuntimeProfileCatalog {
             return legacyVersion
         }
 
-        guard let profile = profile(for: normalized, backend: backend),
-              profile.configurationValues["profile.component"] == "apple-gptk"
-                || profile.configurationValues["profile.component.id"] == "apple-gptk",
-              let rawVersion = profile.configurationValues["profile.component.version"] else {
+        guard let profile = profile(for: normalized, backend: backend) else {
             return nil
         }
-        return AppleGPTKVersion(rawValue: rawVersion)
+        return declaredAppleGPTKVersion(in: profile)
     }
 
     /// La base local y el escáner de tecnologías no pueden activar esta capacidad propietaria.
@@ -246,5 +239,16 @@ public enum GameRuntimeProfileCatalog {
         backend: BackendKind
     ) -> Bool {
         requiredAppleGPTKVersion(for: appID, backend: backend) != nil
+    }
+
+    private static func declaredAppleGPTKVersion(
+        in profile: CompiledGameRuntimeProfile
+    ) -> AppleGPTKVersion? {
+        guard profile.configurationValues["profile.component"] == "apple-gptk"
+                || profile.configurationValues["profile.component.id"] == "apple-gptk",
+              let rawVersion = profile.configurationValues["profile.component.version"] else {
+            return nil
+        }
+        return AppleGPTKVersion(rawValue: rawVersion)
     }
 }

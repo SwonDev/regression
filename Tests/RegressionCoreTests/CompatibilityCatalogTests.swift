@@ -133,6 +133,7 @@ final class CompatibilityCatalogTests: XCTestCase {
             executable: "C:\\Games\\legacy.exe",
             launchMilliseconds: 100
         )
+        try await closeTrackedRun(context, processID: 770, repository: repository!)
         try await repository?.verifyRun(RunVerification(
             runID: context.id,
             verdict: .perfect,
@@ -153,6 +154,16 @@ final class CompatibilityCatalogTests: XCTestCase {
                 DROP TRIGGER IF EXISTS observations_complete_perfect_insert;
                 DROP TRIGGER IF EXISTS observations_complete_perfect_update;
                 DROP TRIGGER IF EXISTS research_case_reopens_after_verdict_correction;
+                DROP TRIGGER IF EXISTS run_verifications_perfect_requires_launch_insert;
+                DROP TRIGGER IF EXISTS run_verifications_perfect_requires_launch_update;
+                DROP TRIGGER IF EXISTS run_processes_open_invalidates_perfect_insert;
+                DROP TRIGGER IF EXISTS run_processes_open_invalidates_perfect_update;
+                DROP TRIGGER IF EXISTS run_processes_mutation_invalidates_perfect_insert;
+                DROP TRIGGER IF EXISTS run_processes_mutation_invalidates_perfect_update;
+                DROP TRIGGER IF EXISTS run_processes_mutation_invalidates_perfect_delete;
+                DROP TRIGGER IF EXISTS runs_semantic_mutation_invalidates_perfect;
+                DROP TRIGGER IF EXISTS runs_perfect_history_prevents_delete;
+                DROP TRIGGER IF EXISTS runs_verified_history_prevents_delete;
                 DROP TABLE IF EXISTS research_gate_results;
                 DROP TABLE IF EXISTS research_artifacts;
                 DROP TABLE IF EXISTS research_experiments;
@@ -212,6 +223,7 @@ final class CompatibilityCatalogTests: XCTestCase {
             executable: "C:\\Games\\certified.exe",
             launchMilliseconds: 100
         )
+        try await closeTrackedRun(context, processID: 900, repository: repository)
         try await repository.verifyRun(RunVerification(
             runID: context.id,
             verdict: .perfect,
@@ -265,6 +277,7 @@ final class CompatibilityCatalogTests: XCTestCase {
             executable: "C:\\Games\\persistent.exe",
             launchMilliseconds: 140
         )
+        try await closeTrackedRun(context, processID: 920, repository: firstRepository)
         try await firstRepository.verifyRun(RunVerification(
             runID: context.id,
             verdict: .perfect,
@@ -658,6 +671,834 @@ final class CompatibilityCatalogTests: XCTestCase {
         try await repository.close()
     }
 
+    func testPerfectVerificationRejectsReconciledRunWithOpenPrimaryProcess() async throws {
+        let directory = temporaryDirectory("perfect-reconciled-open-primary")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repository = CompatibilityRepository(
+            databaseURL: directory.appendingPathComponent("compatibility.sqlite")
+        )
+        try await repository.prepare()
+        let context = makeContext(appID: "8901", name: "Interrupted Open Process")
+        try await repository.beginRun(context)
+        try await repository.markLaunched(
+            id: context.id,
+            processID: 8_901,
+            executable: "C:\\Games\\interrupted-open.exe",
+            launchMilliseconds: 250
+        )
+        let reconciledAt = Date().addingTimeInterval(1)
+        let reconciled = try await repository.reconcileInterruptedRuns(at: reconciledAt)
+        XCTAssertEqual(reconciled, 1)
+        let processes = try await repository.runProcesses(runID: context.id)
+        let process = try XCTUnwrap(processes.first)
+        XCTAssertNil(process.endedAt)
+
+        do {
+            try await repository.verifyRun(perfectVerification(
+                runID: context.id,
+                verifiedAt: reconciledAt.addingTimeInterval(1)
+            ))
+            XCTFail("Una ejecución reconciliada con su proceso abierto no puede blindarse")
+        } catch let error as RegressionCoreError {
+            guard case .invalidEvidence = error else {
+                return XCTFail("Error inesperado: \(error)")
+            }
+        }
+        let certifications = try await repository.certifications()
+        XCTAssertNil(certifications.first { $0.appID == context.appID })
+        try await repository.close()
+    }
+
+    func testPerfectVerificationRejectsRunWithAdditionalProcessOpen() async throws {
+        let directory = temporaryDirectory("perfect-additional-process-open")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repository = CompatibilityRepository(
+            databaseURL: directory.appendingPathComponent("compatibility.sqlite")
+        )
+        try await repository.prepare()
+        let context = makeContext(appID: "8902", name: "Additional Process Open")
+        try await repository.beginRun(context)
+        let primaryStartedAt = Date()
+        try await repository.markLaunched(
+            id: context.id,
+            processID: 8_902,
+            executable: "C:\\Games\\launcher.exe",
+            startedAt: primaryStartedAt,
+            launchMilliseconds: 100
+        )
+        try await repository.markAdditionalProcessStarted(
+            id: context.id,
+            processID: 8_903,
+            executable: "C:\\Games\\game.exe",
+            startedAt: primaryStartedAt.addingTimeInterval(1)
+        )
+        try await repository.markProcessEnded(
+            id: context.id,
+            processID: 8_902,
+            endedAt: primaryStartedAt.addingTimeInterval(2),
+            exitCode: 0
+        )
+        let runEndedAt = primaryStartedAt.addingTimeInterval(3)
+        try await repository.finishRun(
+            id: context.id,
+            endedAt: runEndedAt,
+            exitCode: 0,
+            result: .unknown,
+            afterConfiguration: context.configuration,
+            delta: ConfigurationDiffer.difference(
+                before: context.configuration,
+                after: context.configuration
+            )
+        )
+
+        do {
+            try await repository.verifyRun(perfectVerification(
+                runID: context.id,
+                verifiedAt: runEndedAt.addingTimeInterval(1)
+            ))
+            XCTFail("Un proceso adicional abierto impide certificar la sesión completa")
+        } catch let error as RegressionCoreError {
+            guard case .invalidEvidence = error else {
+                return XCTFail("Error inesperado: \(error)")
+            }
+        }
+        try await repository.close()
+    }
+
+    func testPerfectVerificationRequiresTheTrackedRepresentativeProcess() async throws {
+        let directory = temporaryDirectory("perfect-non-representative-process")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("compatibility.sqlite")
+        let repository = CompatibilityRepository(databaseURL: databaseURL)
+        try await repository.prepare()
+        let context = makeContext(appID: "8907", name: "Non Representative Process")
+        let startedAt = Date()
+        try await repository.beginRun(context)
+        try await repository.markLaunched(
+            id: context.id,
+            processID: 8_907,
+            executable: "C:\\Games\\representative.exe",
+            startedAt: startedAt,
+            launchMilliseconds: 100
+        )
+        let endedAt = startedAt.addingTimeInterval(1)
+        try await repository.markProcessEnded(
+            id: context.id,
+            processID: 8_907,
+            endedAt: endedAt,
+            exitCode: 0
+        )
+        try await repository.finishRun(
+            id: context.id,
+            endedAt: endedAt,
+            exitCode: 0,
+            result: .unknown,
+            afterConfiguration: context.configuration,
+            delta: ConfigurationDiffer.difference(
+                before: context.configuration,
+                after: context.configuration
+            )
+        )
+        try mutateSQLite(databaseURL) { database in
+            try executeSQLite(database, """
+                UPDATE run_processes SET is_representative=0
+                WHERE run_id='\(context.id.uuidString)' AND process_id=8907;
+                """)
+        }
+
+        do {
+            try await repository.verifyRun(perfectVerification(
+                runID: context.id,
+                verifiedAt: endedAt.addingTimeInterval(1)
+            ))
+            XCTFail("Una fila sin autoridad representativa no puede certificar un run perfecto")
+        } catch let error as RegressionCoreError {
+            guard case .invalidEvidence = error else {
+                return XCTFail("Error inesperado: \(error)")
+            }
+        }
+        try mutateSQLite(databaseURL) { database in
+            XCTAssertThrowsError(try executeSQLite(database, """
+                INSERT INTO run_verifications(
+                    run_id, verdict, rendering, input_precision, graphics_settings,
+                    gameplay, source, notes, verified_at
+                ) VALUES(
+                    '\(context.id.uuidString)', 'perfect', 'passed', 'passed', 'passed',
+                    'passed', 'visualInspection', '', '2099-01-01T00:00:00.000Z'
+                );
+                """))
+        }
+        try await repository.close()
+    }
+
+    func testLegacyPerfectWithoutRepresentativeIsExcludedFromEveryPublicConsumer() async throws {
+        let directory = temporaryDirectory("legacy-perfect-without-representative")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("compatibility.sqlite")
+        let repository = CompatibilityRepository(databaseURL: databaseURL)
+        try await repository.prepare()
+        let context = makeContext(
+            appID: "8908",
+            name: "Legacy Representative Consumer",
+            configuration: ["backend": "regression", "provider.version": "test"]
+        )
+        try await recordClosedPerfectRun(
+            context,
+            processID: 619_821,
+            repository: repository
+        )
+        try mutateSQLite(databaseURL) { database in
+            try executeSQLite(database, """
+                DROP TRIGGER run_processes_mutation_invalidates_perfect_update;
+                UPDATE run_processes SET is_representative=0
+                WHERE run_id='\(context.id.uuidString)' AND process_id=619821;
+                """)
+        }
+
+        let health = try await repository.databaseHealth()
+        XCTAssertEqual(health.perfectEvidenceViolationCount, 1)
+        XCTAssertEqual(health.activeCertificationViolationCount, 1)
+        XCTAssertFalse(health.isHealthy)
+
+        let profiles = try await repository.compatibilityProfiles()
+        XCTAssertEqual(
+            profiles.first { $0.appID == context.appID }?.perfectRuns,
+            0
+        )
+        let engines = try await repository.engineProfiles()
+        XCTAssertFalse(engines.contains { $0.perfectRuns > 0 })
+        let certifications = try await repository.certifications()
+        XCTAssertNil(certifications.first { $0.appID == context.appID })
+        let recent = try await repository.recentRuns()
+        XCTAssertEqual(
+            recent.first { $0.id == context.id }?.verification?.verdict,
+            .invalidated
+        )
+        let details = try await repository.runDetails()
+        XCTAssertEqual(
+            details.first { $0.id == context.id }?.verification?.verdict,
+            .invalidated
+        )
+        let sealedRun = try await repository.sealedPerfectRun(
+            appID: context.appID,
+            runID: context.id
+        )
+        XCTAssertNil(sealedRun)
+        let exportURL = directory.appendingPathComponent("legacy-invalid-export.json")
+        try await repository.exportJSON(to: exportURL)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let payload = try decoder.decode(
+            CompatibilityExport.self,
+            from: Data(contentsOf: exportURL)
+        )
+        XCTAssertEqual(
+            payload.runs.first { $0.id == context.id }?.verification?.verdict,
+            .invalidated
+        )
+        try await repository.close()
+
+        let reopened = CompatibilityRepository(databaseURL: databaseURL)
+        do {
+            try await reopened.prepare()
+            XCTFail("La reapertura no debe inventar autoridad representativa")
+        } catch {}
+        try mutateSQLite(databaseURL) { database in
+            XCTAssertEqual(
+                try scalarSQLiteText(database, """
+                    SELECT verdict FROM run_verifications
+                    WHERE run_id='\(context.id.uuidString)';
+                    """),
+                VerificationVerdict.invalidated.rawValue
+            )
+            XCTAssertEqual(
+                try scalarSQLiteText(database, """
+                    SELECT CAST(is_active AS TEXT) FROM verified_game_certifications
+                    WHERE app_id='\(context.appID)' AND backend='regression';
+                    """),
+                "0"
+            )
+        }
+    }
+
+    func testPerfectVerificationAcceptsRunWhenEveryTrackedProcessIsClosed() async throws {
+        let directory = temporaryDirectory("perfect-all-processes-closed")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repository = CompatibilityRepository(
+            databaseURL: directory.appendingPathComponent("compatibility.sqlite")
+        )
+        try await repository.prepare()
+        let context = makeContext(appID: "8903", name: "All Processes Closed")
+        try await repository.beginRun(context)
+        let primaryStartedAt = Date()
+        try await repository.markLaunched(
+            id: context.id,
+            processID: 8_904,
+            executable: "C:\\Games\\launcher.exe",
+            startedAt: primaryStartedAt,
+            launchMilliseconds: 100
+        )
+        try await repository.markAdditionalProcessStarted(
+            id: context.id,
+            processID: 8_905,
+            executable: "C:\\Games\\game.exe",
+            startedAt: primaryStartedAt.addingTimeInterval(1)
+        )
+        try await repository.markProcessEnded(
+            id: context.id,
+            processID: 8_904,
+            endedAt: primaryStartedAt.addingTimeInterval(2),
+            exitCode: 0
+        )
+        try await repository.markProcessEnded(
+            id: context.id,
+            processID: 8_905,
+            endedAt: primaryStartedAt.addingTimeInterval(3),
+            exitCode: 0
+        )
+        let runEndedAt = primaryStartedAt.addingTimeInterval(4)
+        try await repository.finishRun(
+            id: context.id,
+            endedAt: runEndedAt,
+            exitCode: 0,
+            result: .unknown,
+            afterConfiguration: context.configuration,
+            delta: ConfigurationDiffer.difference(
+                before: context.configuration,
+                after: context.configuration
+            )
+        )
+
+        try await repository.verifyRun(perfectVerification(
+            runID: context.id,
+            verifiedAt: runEndedAt.addingTimeInterval(1)
+        ))
+
+        let certifications = try await repository.certifications()
+        let certification = try XCTUnwrap(
+            certifications.first { $0.appID == context.appID }
+        )
+        XCTAssertEqual(certification.sourceRunID, context.id)
+        try await repository.close()
+    }
+
+    func testDirectProcessInsertAfterPerfectInvalidatesRunCertification() async throws {
+        let directory = temporaryDirectory("perfect-late-process-insert")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("compatibility.sqlite")
+        let repository = CompatibilityRepository(databaseURL: databaseURL)
+        try await repository.prepare()
+        let context = makeContext(appID: "8904", name: "Late Process Insert")
+        try await recordClosedPerfectRun(
+            context,
+            processID: 8_906,
+            repository: repository
+        )
+        try await repository.close()
+
+        try mutateSQLite(databaseURL) { database in
+            try executeSQLite(database, """
+                INSERT INTO run_processes(
+                    run_id, process_id, executable, started_at, ended_at, exit_code,
+                    is_representative
+                ) VALUES(
+                    '\(context.id.uuidString)', 8907, 'C:\\Games\\late.exe',
+                    '2026-08-13T22:00:00.000Z', '2026-08-13T22:00:01.000Z', 0, 0
+                );
+                """)
+            XCTAssertEqual(
+                try scalarSQLiteText(database, """
+                    SELECT verdict FROM run_verifications
+                    WHERE run_id='\(context.id.uuidString)';
+                    """),
+                VerificationVerdict.invalidated.rawValue
+            )
+            XCTAssertEqual(
+                try scalarSQLiteText(database, """
+                    SELECT CAST(is_active AS TEXT) FROM verified_game_certifications
+                    WHERE app_id='\(context.appID)' AND backend='regression';
+                    """),
+                "0"
+            )
+        }
+    }
+
+    func testDirectProcessReopenAfterPerfectInvalidatesRunCertification() async throws {
+        let directory = temporaryDirectory("perfect-process-reopen")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("compatibility.sqlite")
+        let repository = CompatibilityRepository(databaseURL: databaseURL)
+        try await repository.prepare()
+        let context = makeContext(appID: "8905", name: "Reopened Process")
+        try await recordClosedPerfectRun(
+            context,
+            processID: 8_908,
+            repository: repository
+        )
+        try await repository.close()
+
+        try mutateSQLite(databaseURL) { database in
+            try executeSQLite(database, """
+                UPDATE run_processes
+                SET ended_at='2026-08-13T22:00:02.000Z', exit_code=0
+                WHERE run_id='\(context.id.uuidString)' AND process_id=8908;
+                """)
+            XCTAssertEqual(
+                try scalarSQLiteText(database, """
+                    SELECT verdict FROM run_verifications
+                    WHERE run_id='\(context.id.uuidString)';
+                    """),
+                VerificationVerdict.invalidated.rawValue
+            )
+            XCTAssertEqual(
+                try scalarSQLiteText(database, """
+                    SELECT CAST(is_active AS TEXT) FROM verified_game_certifications
+                    WHERE app_id='\(context.appID)' AND backend='regression';
+                    """),
+                "0"
+            )
+        }
+    }
+
+    func testDirectProcessDeleteAfterPerfectInvalidatesRunCertification() async throws {
+        let directory = temporaryDirectory("perfect-process-delete")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("compatibility.sqlite")
+        let repository = CompatibilityRepository(databaseURL: databaseURL)
+        try await repository.prepare()
+        let context = makeContext(appID: "8908", name: "Deleted Process")
+        try await recordClosedPerfectRun(
+            context,
+            processID: 8_913,
+            repository: repository
+        )
+        try await repository.close()
+
+        try mutateSQLite(databaseURL) { database in
+            try executeSQLite(database, """
+                DELETE FROM run_processes
+                WHERE run_id='\(context.id.uuidString)' AND process_id=8913;
+                """)
+            XCTAssertEqual(
+                try scalarSQLiteText(database, """
+                    SELECT verdict FROM run_verifications
+                    WHERE run_id='\(context.id.uuidString)';
+                    """),
+                VerificationVerdict.invalidated.rawValue
+            )
+            XCTAssertEqual(
+                try scalarSQLiteText(database, """
+                    SELECT CAST(is_active AS TEXT) FROM verified_game_certifications
+                    WHERE app_id='\(context.appID)' AND backend='regression';
+                    """),
+                "0"
+            )
+        }
+    }
+
+    func testFinishRunAfterPerfectInvalidatesExactRunEvidenceThroughPublicAPI() async throws {
+        let directory = temporaryDirectory("perfect-run-refinished")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repository = CompatibilityRepository(
+            databaseURL: directory.appendingPathComponent("compatibility.sqlite")
+        )
+        try await repository.prepare()
+        let context = makeContext(appID: "8917", name: "Refinished Perfect Run")
+        try await recordClosedPerfectRun(context, processID: 8_917, repository: repository)
+
+        try await repository.finishRun(
+            id: context.id,
+            endedAt: Date().addingTimeInterval(10),
+            exitCode: 1,
+            result: .crashed,
+            afterConfiguration: context.configuration,
+            delta: ConfigurationDiffer.difference(
+                before: context.configuration,
+                after: context.configuration
+            )
+        )
+
+        let storedDetails = try await repository.runDetails()
+        let detail = try XCTUnwrap(storedDetails.first { $0.id == context.id })
+        XCTAssertEqual(detail.verification?.verdict, .invalidated)
+        let certifications = try await repository.certifications(activeOnly: false)
+        let certification = try XCTUnwrap(
+            certifications.first { $0.appID == context.appID && $0.backend == .regression }
+        )
+        XCTAssertFalse(certification.isActive)
+        XCTAssertNil(certification.sourceRunID)
+        let profiles = try await repository.compatibilityProfiles()
+        XCTAssertEqual(profiles.first { $0.appID == context.appID }?.perfectRuns, 0)
+        try await repository.close()
+        try mutateSQLite(directory.appendingPathComponent("compatibility.sqlite")) { database in
+            XCTAssertThrowsError(try executeSQLite(database, """
+                DELETE FROM runs WHERE id='\(context.id.uuidString)';
+                """))
+            XCTAssertEqual(
+                try scalarSQLiteText(database, """
+                    SELECT CAST(COUNT(*) AS TEXT) FROM runs
+                    WHERE id='\(context.id.uuidString)';
+                    """),
+                "1"
+            )
+        }
+    }
+
+    func testPerfectRunDeleteIsBlockedToPreserveEvidenceHistory() async throws {
+        let directory = temporaryDirectory("perfect-run-delete-history")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("compatibility.sqlite")
+        let repository = CompatibilityRepository(databaseURL: databaseURL)
+        try await repository.prepare()
+        let context = makeContext(appID: "8918", name: "Preserved Perfect Run")
+        try await recordClosedPerfectRun(context, processID: 8_918, repository: repository)
+        try await repository.close()
+
+        try mutateSQLite(databaseURL) { database in
+            XCTAssertThrowsError(try executeSQLite(database, """
+                DELETE FROM runs WHERE id='\(context.id.uuidString)';
+                """))
+            XCTAssertEqual(
+                try scalarSQLiteText(database, """
+                    SELECT verdict FROM run_verifications
+                    WHERE run_id='\(context.id.uuidString)';
+                    """),
+                VerificationVerdict.perfect.rawValue
+            )
+            XCTAssertEqual(
+                try scalarSQLiteText(database, """
+                    SELECT CAST(is_active AS TEXT) FROM verified_game_certifications
+                    WHERE app_id='\(context.appID)' AND backend='regression';
+                    """),
+                "1"
+            )
+        }
+    }
+
+    func testDirectRunConfigurationMutationInvalidatesPerfectEvidence() async throws {
+        let directory = temporaryDirectory("perfect-run-configuration-mutation")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("compatibility.sqlite")
+        let repository = CompatibilityRepository(databaseURL: databaseURL)
+        try await repository.prepare()
+        let context = makeContext(appID: "8920", name: "Mutated Perfect Configuration")
+        try await recordClosedPerfectRun(context, processID: 8_920, repository: repository)
+        try await repository.close()
+
+        try mutateSQLite(databaseURL) { database in
+            try executeSQLite(database, """
+                UPDATE runs SET after_configuration_fingerprint=NULL
+                WHERE id='\(context.id.uuidString)';
+                """)
+            XCTAssertEqual(
+                try scalarSQLiteText(database, """
+                    SELECT verdict FROM run_verifications
+                    WHERE run_id='\(context.id.uuidString)';
+                    """),
+                VerificationVerdict.invalidated.rawValue
+            )
+            XCTAssertEqual(
+                try scalarSQLiteText(database, """
+                    SELECT CAST(is_active AS TEXT) FROM verified_game_certifications
+                    WHERE app_id='\(context.appID)' AND backend='regression';
+                    """),
+                "0"
+            )
+        }
+    }
+
+    func testTrackedProcessJoiningAfterPerfectInvalidatesEveryRunConsumer() async throws {
+        let directory = temporaryDirectory("perfect-late-tracked-process")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repository = CompatibilityRepository(
+            databaseURL: directory.appendingPathComponent("compatibility.sqlite")
+        )
+        try await repository.prepare()
+        let context = makeContext(appID: "8907", name: "Late Tracked Process")
+        try await recordClosedPerfectRun(
+            context,
+            processID: 8_911,
+            repository: repository
+        )
+        let initialEngines = try await repository.engineProfiles()
+        let engineFingerprint = try XCTUnwrap(
+            initialEngines.first { $0.perfectRuns == 1 }?.fingerprint
+        )
+        let initialHealth = try await repository.databaseHealth()
+
+        try await repository.markAdditionalProcessStarted(
+            id: context.id,
+            processID: 8_912,
+            executable: "C:\\Games\\late-child.exe",
+            startedAt: Date().addingTimeInterval(1)
+        )
+
+        let details = try await repository.runDetails()
+        let detail = try XCTUnwrap(details.first { $0.id == context.id })
+        XCTAssertEqual(detail.verification?.verdict, .invalidated)
+        let certifications = try await repository.certifications()
+        XCTAssertNil(certifications.first { $0.appID == context.appID })
+        let profiles = try await repository.compatibilityProfiles()
+        XCTAssertEqual(
+            profiles.first { $0.appID == context.appID }?.perfectRuns,
+            0
+        )
+        let engines = try await repository.engineProfiles()
+        XCTAssertEqual(
+            engines.first { $0.fingerprint == engineFingerprint }?.perfectRuns,
+            0
+        )
+        let health = try await repository.databaseHealth()
+        XCTAssertEqual(health.certificationCount, initialHealth.certificationCount - 1)
+        XCTAssertTrue(health.isHealthy)
+        try await repository.close()
+    }
+
+    func testLateRunProcessDoesNotInvalidateNewerHistoricalObservationCertification() async throws {
+        let directory = temporaryDirectory("perfect-observation-survives-late-process")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("compatibility.sqlite")
+        let repository = CompatibilityRepository(databaseURL: databaseURL)
+        try await repository.prepare()
+        let context = makeContext(appID: "8906", name: "Historical Observation")
+        try await recordClosedPerfectRun(
+            context,
+            processID: 8_909,
+            repository: repository
+        )
+        let observation = CompatibilityObservation(
+            appID: context.appID,
+            gameName: context.gameName,
+            backend: .regression,
+            providerVersion: "historical",
+            verdict: .perfect,
+            rendering: .passed,
+            inputPrecision: .passed,
+            graphicsSettings: .passed,
+            gameplay: .passed,
+            configurationFingerprint: context.configurationFingerprint,
+            configuration: context.configuration,
+            source: .imported,
+            notes: "Evidencia histórica independiente",
+            observedAt: Date().addingTimeInterval(60)
+        )
+        try await repository.recordObservation(observation)
+        try await repository.close()
+
+        try mutateSQLite(databaseURL) { database in
+            try executeSQLite(database, """
+                INSERT INTO run_processes(
+                    run_id, process_id, executable, started_at, is_representative
+                ) VALUES(
+                    '\(context.id.uuidString)', 8910, 'C:\\Games\\late.exe',
+                    '2026-08-13T22:00:00.000Z', 0
+                );
+                """)
+            XCTAssertEqual(
+                try scalarSQLiteText(database, """
+                    SELECT source_observation_id FROM verified_game_certifications
+                    WHERE app_id='\(context.appID)' AND backend='regression' AND is_active=1;
+                    """),
+                observation.id.uuidString
+            )
+        }
+    }
+
+    func testClosedProcessCertificationTriggersRemainIdempotentOnCurrentSchema() async throws {
+        let directory = temporaryDirectory("perfect-trigger-idempotence")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("compatibility.sqlite")
+        for _ in 0..<2 {
+            let repository = CompatibilityRepository(databaseURL: databaseURL)
+            try await repository.prepare()
+            try await repository.close()
+        }
+        try mutateSQLite(databaseURL) { database in
+            for trigger in [
+                "run_verifications_perfect_requires_launch_insert",
+                "run_verifications_perfect_requires_launch_update",
+                "run_processes_mutation_invalidates_perfect_insert",
+                "run_processes_mutation_invalidates_perfect_update",
+                "run_processes_mutation_invalidates_perfect_delete",
+                "runs_semantic_mutation_invalidates_perfect",
+                "runs_verified_history_prevents_delete",
+                "repair_attempt_evidence_guard_insert",
+                "repair_attempt_evidence_guard_update",
+            ] {
+                XCTAssertEqual(
+                    try scalarSQLiteText(database, """
+                        SELECT CAST(COUNT(*) AS TEXT) FROM sqlite_master
+                        WHERE type='trigger' AND name='\(trigger)';
+                        """),
+                    "1"
+                )
+            }
+            XCTAssertEqual(
+                try scalarSQLiteText(database, "PRAGMA user_version;"),
+                String(CompatibilityRepository.currentSchemaVersion)
+            )
+        }
+    }
+
+    func testPerfectVerificationMustFollowLatestTrackedProcessEnd() async throws {
+        let directory = temporaryDirectory("perfect-after-latest-process-end")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repository = CompatibilityRepository(
+            databaseURL: directory.appendingPathComponent("compatibility.sqlite")
+        )
+        try await repository.prepare()
+        let context = makeContext(appID: "8909", name: "Late Process End")
+        let startedAt = Date()
+        try await repository.beginRun(context)
+        try await repository.markLaunched(
+            id: context.id,
+            processID: 8_914,
+            executable: "C:\\Games\\late-end.exe",
+            startedAt: startedAt,
+            launchMilliseconds: 100
+        )
+        let runEndedAt = startedAt.addingTimeInterval(2)
+        let processEndedAt = startedAt.addingTimeInterval(4)
+        try await repository.markProcessEnded(
+            id: context.id,
+            processID: 8_914,
+            endedAt: processEndedAt,
+            exitCode: 0
+        )
+        try await repository.finishRun(
+            id: context.id,
+            endedAt: runEndedAt,
+            exitCode: 0,
+            result: .unknown,
+            afterConfiguration: context.configuration,
+            delta: ConfigurationDiffer.difference(
+                before: context.configuration,
+                after: context.configuration
+            )
+        )
+
+        do {
+            try await repository.verifyRun(perfectVerification(
+                runID: context.id,
+                verifiedAt: startedAt.addingTimeInterval(3)
+            ))
+            XCTFail("Perfecto no puede preceder al cierre del último proceso rastreado")
+        } catch let error as RegressionCoreError {
+            guard case .invalidEvidence = error else {
+                return XCTFail("Error inesperado: \(error)")
+            }
+        }
+        try await repository.verifyRun(perfectVerification(
+            runID: context.id,
+            verifiedAt: processEndedAt.addingTimeInterval(1)
+        ))
+        try await repository.close()
+    }
+
+    func testDatabaseHealthCountsSemanticPerfectAndCertificationViolations() async throws {
+        let directory = temporaryDirectory("perfect-semantic-health")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("compatibility.sqlite")
+        let repository = CompatibilityRepository(databaseURL: databaseURL)
+        try await repository.prepare()
+        let context = makeContext(appID: "8910", name: "Semantic Health")
+        try await recordClosedPerfectRun(
+            context,
+            processID: 8_915,
+            repository: repository
+        )
+
+        try mutateSQLite(databaseURL) { database in
+            try executeSQLite(database, """
+                DROP TRIGGER run_processes_mutation_invalidates_perfect_insert;
+                INSERT INTO run_processes(
+                    run_id, process_id, executable, started_at, ended_at, exit_code,
+                    is_representative
+                ) VALUES(
+                    '\(context.id.uuidString)', 8916, 'C:\\Games\\future.exe',
+                    '2099-01-01T00:00:00.000Z', '2099-01-01T00:00:01.000Z', 0, 0
+                );
+                """)
+        }
+        let health = try await repository.databaseHealth()
+        XCTAssertEqual(health.perfectEvidenceViolationCount, 1)
+        XCTAssertEqual(health.activeCertificationViolationCount, 1)
+        XCTAssertFalse(health.isHealthy)
+        try await repository.close()
+    }
+
+    func testDatabaseHealthCertificationPredicateRequiresCanonicalLaunchedRun() async throws {
+        let directory = temporaryDirectory("perfect-canonical-certification-health")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("compatibility.sqlite")
+        let repository = CompatibilityRepository(databaseURL: databaseURL)
+        try await repository.prepare()
+        let context = makeContext(appID: "8919", name: "Canonical Certification Health")
+        try await recordClosedPerfectRun(context, processID: 8_919, repository: repository)
+
+        try mutateSQLite(databaseURL) { database in
+            try executeSQLite(database, """
+                DROP TRIGGER runs_semantic_mutation_invalidates_perfect;
+                UPDATE runs SET process_id=NULL WHERE id='\(context.id.uuidString)';
+                """)
+        }
+        let health = try await repository.databaseHealth()
+        XCTAssertEqual(health.perfectEvidenceViolationCount, 1)
+        XCTAssertEqual(health.activeCertificationViolationCount, 1)
+        XCTAssertFalse(health.isHealthy)
+        try await repository.close()
+    }
+
+    func testClosedProcessTriggerInstallationRollsBackOnIntermediateFailure() async throws {
+        let directory = temporaryDirectory("perfect-trigger-install-rollback")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("compatibility.sqlite")
+        let repository = CompatibilityRepository(databaseURL: databaseURL)
+        try await repository.prepare()
+
+        var originalInsertGuard: String?
+        try mutateSQLite(databaseURL) { database in
+            originalInsertGuard = try scalarSQLiteText(database, """
+                SELECT sql FROM sqlite_master
+                WHERE type='trigger'
+                  AND name='run_verifications_perfect_requires_launch_insert';
+                """)
+        }
+
+        do {
+            try await repository.installClosedProcessCertificationGuardsForTesting("""
+                DROP TRIGGER run_verifications_perfect_requires_launch_insert;
+                CREATE TRIGGER run_verifications_perfect_requires_launch_insert
+                BEFORE INSERT ON run_verifications
+                BEGIN
+                    SELECT 1;
+                END;
+                INVALID SQL AFTER A SUCCESSFUL DROP AND CREATE;
+                """)
+            XCTFail("El error SQL intermedio debía abortar la instalación de triggers")
+        } catch {}
+        try await repository.close()
+
+        try mutateSQLite(databaseURL) { database in
+            XCTAssertEqual(
+                try scalarSQLiteText(database, """
+                    SELECT sql FROM sqlite_master
+                    WHERE type='trigger'
+                      AND name='run_verifications_perfect_requires_launch_insert';
+                    """),
+                originalInsertGuard
+            )
+            XCTAssertEqual(
+                try scalarSQLiteText(database, """
+                    SELECT CAST(COUNT(*) AS TEXT) FROM sqlite_master
+                    WHERE type='trigger'
+                      AND name='run_processes_mutation_invalidates_perfect_insert';
+                    """),
+                "1"
+            )
+        }
+    }
+
     func testPerfectRunCanBeReconciledWithItsCompiledRuntimeProfile() async throws {
         let directory = temporaryDirectory("compiled-profile-reconciliation")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -679,6 +1520,12 @@ final class CompatibilityCatalogTests: XCTestCase {
             launchMilliseconds: 100
         )
         let endedAt = Date(timeIntervalSince1970: 2_000.0006)
+        try await repository.markProcessEnded(
+            id: context.id,
+            processID: 619_820,
+            endedAt: endedAt,
+            exitCode: 0
+        )
         try await repository.finishRun(
             id: context.id,
             endedAt: endedAt,
@@ -739,6 +1586,21 @@ final class CompatibilityCatalogTests: XCTestCase {
         XCTAssertEqual(certification.sourceRunID, context.id)
         XCTAssertEqual(certification.configurationFingerprint, first.configurationFingerprint)
         XCTAssertEqual(certification.engineFingerprint, first.engineFingerprint)
+        try mutateSQLite(directory.appendingPathComponent("compatibility.sqlite")) { database in
+            try executeSQLite(database, """
+                DROP TRIGGER run_processes_mutation_invalidates_perfect_update;
+                UPDATE run_processes SET is_representative=0
+                WHERE run_id='\(context.id.uuidString)' AND process_id=619820;
+                """)
+        }
+        do {
+            _ = try await repository.reconcileCompiledRuntimeProfile(runID: context.id)
+            XCTFail("La reconciliación no puede reutilizar un perfecto sin representante")
+        } catch let error as RegressionCoreError {
+            guard case .invalidEvidence = error else {
+                return XCTFail("Error inesperado: \(error)")
+            }
+        }
         try await repository.close()
     }
 
@@ -838,6 +1700,12 @@ final class CompatibilityCatalogTests: XCTestCase {
             processID: 421,
             executable: #"C:\Games\legacy.exe"#,
             launchMilliseconds: 100
+        )
+        try await repository.markProcessEnded(
+            id: legacyRun.id,
+            processID: 421,
+            endedAt: Date(),
+            exitCode: 0
         )
         try await repository.finishRun(
             id: legacyRun.id,
@@ -1322,6 +2190,7 @@ final class CompatibilityCatalogTests: XCTestCase {
             executable: "C:\\Games\\passed.exe",
             launchMilliseconds: 100
         )
+        try await closeTrackedRun(context, processID: 9_530, repository: repository)
         try await repository.verifyRun(RunVerification(
             runID: context.id,
             verdict: .perfect,
@@ -1537,6 +2406,7 @@ final class CompatibilityCatalogTests: XCTestCase {
             executable: "C:\\Games\\engine-one.exe",
             launchMilliseconds: 100
         )
+        try await closeTrackedRun(first, processID: 1001, repository: repository)
         try await repository.verifyRun(RunVerification(
             runID: first.id,
             verdict: .perfect,
@@ -1584,6 +2454,82 @@ final class CompatibilityCatalogTests: XCTestCase {
             ),
             configuration: configuration,
             configurationFingerprint: ConfigurationCollector.fingerprint(configuration)
+        )
+    }
+
+    private func perfectVerification(runID: UUID, verifiedAt: Date) -> RunVerification {
+        RunVerification(
+            runID: runID,
+            verdict: .perfect,
+            rendering: .passed,
+            inputPrecision: .passed,
+            graphicsSettings: .passed,
+            gameplay: .passed,
+            source: .visualInspection,
+            verifiedAt: verifiedAt
+        )
+    }
+
+    private func recordClosedPerfectRun(
+        _ context: RunContext,
+        processID: Int32,
+        repository: CompatibilityRepository
+    ) async throws {
+        let startedAt = Date()
+        try await repository.beginRun(context)
+        try await repository.markLaunched(
+            id: context.id,
+            processID: processID,
+            executable: "C:\\Games\\closed.exe",
+            startedAt: startedAt,
+            launchMilliseconds: 100
+        )
+        let endedAt = startedAt.addingTimeInterval(1)
+        try await repository.markProcessEnded(
+            id: context.id,
+            processID: processID,
+            endedAt: endedAt,
+            exitCode: 0
+        )
+        try await repository.finishRun(
+            id: context.id,
+            endedAt: endedAt,
+            exitCode: 0,
+            result: .unknown,
+            afterConfiguration: context.configuration,
+            delta: ConfigurationDiffer.difference(
+                before: context.configuration,
+                after: context.configuration
+            )
+        )
+        try await repository.verifyRun(perfectVerification(
+            runID: context.id,
+            verifiedAt: endedAt.addingTimeInterval(1)
+        ))
+    }
+
+    private func closeTrackedRun(
+        _ context: RunContext,
+        processID: Int32,
+        repository: CompatibilityRepository
+    ) async throws {
+        let endedAt = Date()
+        try await repository.markProcessEnded(
+            id: context.id,
+            processID: processID,
+            endedAt: endedAt,
+            exitCode: 0
+        )
+        try await repository.finishRun(
+            id: context.id,
+            endedAt: endedAt,
+            exitCode: 0,
+            result: .unknown,
+            afterConfiguration: context.configuration,
+            delta: ConfigurationDiffer.difference(
+                before: context.configuration,
+                after: context.configuration
+            )
         )
     }
 

@@ -1,6 +1,6 @@
 # Plataforma local de compatibilidad y aprendizaje
 
-Fecha de contrato: 13 de agosto de 2026. Esquema SQLite actual: **v14**.
+Fecha de contrato: 14 de agosto de 2026. Esquema SQLite actual: **v17**.
 
 Esta capa conserva evidencia reproducible de cada ejecución de Regression. No consulta servicios
 de compatibilidad de terceros ni altera el motor, la botella o la configuración de un juego. La
@@ -41,6 +41,7 @@ integridad en cada apertura.
 | Requisitos y reparación | `game_runtime_requirements`, `repair_receipts` | Requisitos declarativos y recibos de recetas permitidas; nunca comandos aprendidos. |
 | Expedientes de I+D | `compatibility_research_cases`, `research_hypotheses`, `research_experiments`, `research_gate_results`, `research_artifacts` | Hipótesis falsables, pruebas de una variable, puertas funcionales y referencias privadas con huella. |
 | Preparación de pruebas | `run_preflight_reports` | Diagnóstico saneado, fase temporal, latencia y firma lógica del entorno asociado a cada lanzamiento. |
+| Autoridad de lanzamiento | `launch_envelopes`, `launch_envelope_events`, `launch_envelope_receipts` | Intención durable anterior al `spawn`, transiciones auditables y recibos sin comandos ni autoridad de certificación. |
 | Migraciones | `schema_migrations` + `PRAGMA user_version` | Evolución atómica y auditable. |
 
 Dos triggers de inserción/actualización protegen tanto ejecuciones como observaciones: SQLite
@@ -51,6 +52,71 @@ puede degradar silenciosamente el contrato.
 Una ejecución debe haber recibido un PID real y haber salido de `preparing` antes de aceptar un
 veredicto perfecto. La migración v6 anula como `invalidated` cualquier marca heredada que incumpla
 esa regla; el evento original se conserva para auditoría, pero no crea perfil verde ni blindado.
+
+## Custodia de procesos y perfectos v15
+
+El esquema v15 hace que la cadena de procesos forme parte de la evidencia, no sea solo
+telemetría auxiliar. Para que un veredicto `perfect` sea público deben cumplirse simultáneamente:
+
+1. `runs.process_id` existe, el run no sigue en `preparing` y tiene `ended_at`;
+2. existe una única fila `run_processes` representativa con ese mismo PID;
+3. ningún proceso del run permanece abierto;
+4. ningún proceso terminó después de `run_verifications.verified_at`;
+5. la verificación se registró después del cierre del run.
+
+Los triggers de inserción, actualización y borrado de `run_processes` vuelven a evaluar ese sello.
+Si aparece un proceso tardío, cambia el representante o se reabre un cierre, la verificación se
+invalida y la certificación se desactiva. No se borra ningún evento: los lectores públicos
+presentan como `invalidated` cualquier perfecto legacy incoherente y la exportación conserva la
+causa auditable.
+
+## Salud de la telemetría
+
+`SteamLogReadOutcome` y `TelemetryPollOutcome` conservan incidencias tipadas. El monitor distingue
+log ausente o ilegible, sustitución, truncado, línea pendiente abandonada, exceso de formato no
+reconocido y límite de lectura. Una incidencia persistente continúa visible aunque no sea nueva;
+la recuperación se emite por separado.
+
+La lectura es incremental y acotada: hasta 512 KiB por pasada, 256 KiB de línea pendiente y ocho
+logs monitorizados. La rotación o reescritura cambia la época del log, descarta el fragmento
+ambiguo y no permite que eventos de la época anterior consuman una intención o sesión nueva. El
+coordinador ignora además eventos anteriores a la fecha verificable del run. Estas incidencias
+explican por qué falta evidencia; no crean por sí mismas un crash, un éxito o una reparación.
+
+## Autoridad de lanzamiento v17
+
+La v17 conserva el sobre introducido por v16 y cierra su recuperación de proceso. La intención vincula un
+run y App ID canónicos al backend Regression, al preflight completo y no bloqueado de los últimos
+90 segundos, a la generación fresca del inventario de requisitos y a identidades cerradas de
+componentes sellados o perfiles compilados. También exige que el runtime, Windows Media cuando
+corresponda y el renderer elegido hayan superado sus autoridades respectivas. El sobre es
+deliberadamente inerte: no contiene ejecutables, rutas, DLLs, argumentos ni comandos que SQLite
+pudiera convertir en código.
+
+Sus fases distinguen intención durable, autorización, proceso iniciado, espera de telemetría,
+espera de verificación, finalización, fallo anterior al `spawn` y rollback. SQLite valida las
+transiciones persistidas y la coherencia de los recibos. La ruta operativa prepara y guarda el
+sobre, autoriza el `spawn` y adopta el mismo run en telemetría mientras continúa abierto —por
+ejemplo, al pasar de un lanzamiento CLI a la app activa—. Tras relanzar Regression, el arranque
+cierra y reconcilia el run interrumpido para auditoría; no reanuda su telemetría como si la sesión
+siguiera viva. El sobre avanza a `awaitingVerification` al cerrar una sesión viva y solo se
+completa después de una verificación explícita. Por eso ni un evento, ni un recibo, ni un código
+de salida pueden crear `Verificado perfecto`.
+
+El límite vuelve a comprobar el preflight sellado en la transacción del boundary y no admite más
+de 90 segundos. Si `Process.run()` rechaza síncronamente el ejecutable después del marker, el run,
+su evento, el receipt y el envelope terminan atómicamente como `failedBeforeSpawn`. En el arranque,
+una sesión con proceso representativo cerrado conserva su resultado y espera verificación; un
+fallo confirmado sin PID termina como pre-spawn; la evidencia ambigua queda en
+`rollbackPending` hasta una recuperación explícita que la registra como `rolledBack`.
+
+`retryDecision` y `recoveryDecision` son por ahora políticas puras, cubiertas por tests, no un
+ejecutor. Expresan que solo una receta y versión compiladas, originadas en Regression y todavía sin
+retry podrían optar a un reintento, y distinguen rollback de reconciliación según la fase. No hay
+un caller que ejecute de forma segura ese auto-retry o rollback, verifique su resultado y emita el
+recibo correspondiente. Ambas mutaciones automáticas permanecen bloqueadas hasta integrar ese
+ejecutor y su verificador. Steam observado, una receta no permitida, una fase incompatible o el
+límite agotado requieren siempre un gesto nuevo del usuario.
 
 Una certificación creada desde una verificación local guarda su ejecución u observación de origen,
 el fingerprint completo de configuración y el fingerprint normalizado del motor. Al corregir el
@@ -149,6 +215,12 @@ Steam se distinguen como `processStartBoundary`. El historial anterior no se fus
 La v13 incorpora el ciclo durable de reparaciones compiladas, con estado y recibos recuperables.
 La v14 reconstruye el subgrafo de I+D para que el baseline operativo sea Regression y conserva los
 valores antiguos exclusivamente por compatibilidad de lectura del historial.
+La v15 reinstala atómicamente los guards de promoción de I+D y exige que toda evidencia perfecta
+de un run conserve su PID exacto en una fila `run_processes` marcada como representativa. Los
+lectores públicos degradan a `invalidated` cualquier perfecto legacy que ya no cumpla ese sello.
+La v17 mantiene la autoridad durable de lanzamiento por App ID. Migra desde v16 sin reinterpretar
+perfectos ni recibos anteriores, sustituye transaccionalmente el guard de transición y vuelve a
+validar la integridad completa antes de confirmar `PRAGMA user_version=17`.
 
 Comprobaciones:
 
@@ -173,7 +245,15 @@ canónica. Este override existe para diagnóstico y CI, no para dividir el histo
 ## Gates de esta capa
 
 - Migración desde un esquema legado con backup privado.
+- Migración v16→v17 con custodia perfecta intacta y sustitución transaccional del guard de spawn;
+  la autoridad existente permanece intacta hasta crear nueva evidencia o recuperarla explícitamente.
 - Rechazo de perfectos incompletos en Swift y SQLite.
+- Rechazo de sobres con App ID/backend/preflight/requisitos no coincidentes, transiciones ilegales
+  o recibos incompatibles.
+- Adopción operativa del run para telemetría, avance a espera de verificación y cierre solo tras
+  verificación explícita.
+- Política pura de recuperación/retry probada sin presentar auto-retry o rollback como integrados;
+  su futura ejecución deberá demostrar receta compilada, verificación y recibo durable.
 - Alta y desactivación reversible de un blindado local ligado a evidencia/configuración/motor.
 - Persistencia del blindado manual tras reapertura y presencia con procedencia exacta en JSON.
 - Rechazo Swift/SQLite de promociones sin aislamiento, rollback, matriz y medición.

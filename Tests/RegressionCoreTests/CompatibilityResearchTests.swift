@@ -60,6 +60,24 @@ final class CompatibilityResearchTests: XCTestCase {
             executable: "C:\\Games\\research.exe",
             launchMilliseconds: 120
         )
+        let endedAt = Date()
+        try await repository.markProcessEnded(
+            id: context.id,
+            processID: 5_010,
+            endedAt: endedAt,
+            exitCode: 0
+        )
+        try await repository.finishRun(
+            id: context.id,
+            endedAt: endedAt,
+            exitCode: 0,
+            result: .unknown,
+            afterConfiguration: context.configuration,
+            delta: ConfigurationDiffer.difference(
+                before: context.configuration,
+                after: context.configuration
+            )
+        )
         try await repository.verifyRun(RunVerification(
             runID: context.id,
             verdict: .perfect,
@@ -114,6 +132,35 @@ final class CompatibilityResearchTests: XCTestCase {
             experimentID: experiment.id
         )
         XCTAssertTrue(complete.isEligible, complete.blockers.joined(separator: " "))
+
+        try mutateSQLite(databaseURL) { database in
+            try executeSQLite(database, """
+                DROP TRIGGER run_processes_mutation_invalidates_perfect_update;
+                UPDATE run_processes SET is_representative=0
+                WHERE run_id='\(context.id.uuidString)' AND process_id=5010;
+                """)
+        }
+        let withoutRepresentative = try await repository.researchCompletionDecision(
+            caseID: researchCase.id,
+            experimentID: experiment.id
+        )
+        XCTAssertFalse(withoutRepresentative.isEligible)
+        XCTAssertTrue(
+            withoutRepresentative.blockers.contains { $0.contains("blindado perfecto") }
+        )
+        XCTAssertThrowsError(try mutateSQLite(databaseURL) { database in
+            try executeSQLite(database, """
+                UPDATE research_experiments
+                SET state='passed', candidate_engine_fingerprint='candidate'
+                WHERE id='\(experiment.id.uuidString)';
+                """)
+        })
+        try mutateSQLite(databaseURL) { database in
+            try executeSQLite(database, """
+                UPDATE run_processes SET is_representative=1
+                WHERE run_id='\(context.id.uuidString)' AND process_id=5010;
+                """)
+        }
         try await repository.completeResearchCase(
             caseID: researchCase.id,
             experimentID: experiment.id,
@@ -170,13 +217,12 @@ final class CompatibilityResearchTests: XCTestCase {
         XCTAssertEqual(payload.researchCases.count, 1)
         XCTAssertEqual(payload.researchExperiments.count, 1)
 
-        try await repository.verifyRun(RunVerification(
-            runID: context.id,
-            verdict: .failed,
-            rendering: .failed,
-            source: .visualInspection,
-            notes: "La confirmación se corrigió"
-        ))
+        try await repository.markAdditionalProcessStarted(
+            id: context.id,
+            processID: 5_011,
+            executable: "C:\\Games\\research-child.exe",
+            startedAt: endedAt.addingTimeInterval(2)
+        )
         let reopenedCases = try await repository.researchCases()
         let reopened = try XCTUnwrap(reopenedCases.first { $0.id == researchCase.id })
         XCTAssertEqual(reopened.state, .investigating)
@@ -429,6 +475,48 @@ final class CompatibilityResearchTests: XCTestCase {
         try await migrated.close()
     }
 
+    func testVersionFourteenReinstallsRepresentativeResearchGuardAtomically() async throws {
+        let directory = temporaryDirectory("research-v14-guard-upgrade")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("compatibility.sqlite")
+        let repository = CompatibilityRepository(databaseURL: databaseURL)
+        try await repository.prepare()
+        try await repository.close()
+
+        try mutateSQLite(databaseURL) { database in
+            try executeSQLite(database, """
+                DROP TRIGGER research_experiment_pass_guard_update;
+                CREATE TRIGGER research_experiment_pass_guard_update
+                BEFORE UPDATE OF state ON research_experiments
+                WHEN NEW.state='passed' AND NEW.run_id IS NULL
+                BEGIN
+                    SELECT RAISE(ABORT, 'stale v14 guard');
+                END;
+                DELETE FROM schema_migrations WHERE version=15;
+                PRAGMA user_version=14;
+                """)
+        }
+
+        let migrated = CompatibilityRepository(databaseURL: databaseURL)
+        try await migrated.prepare()
+        let health = try await migrated.databaseHealth()
+        XCTAssertEqual(health.schemaVersion, CompatibilityRepository.currentSchemaVersion)
+        XCTAssertTrue(health.isHealthy)
+        try mutateSQLite(databaseURL) { database in
+            let triggerSQL = try XCTUnwrap(scalarSQLiteText(database, """
+                SELECT sql FROM sqlite_master
+                WHERE type='trigger' AND name='research_experiment_pass_guard_update';
+                """))
+            XCTAssertTrue(triggerSQL.contains("canonical.is_representative=1"))
+            XCTAssertFalse(triggerSQL.contains("stale v14 guard"))
+            XCTAssertEqual(
+                try scalarSQLiteText(database, "PRAGMA user_version;"),
+                String(CompatibilityRepository.currentSchemaVersion)
+            )
+        }
+        try await migrated.close()
+    }
+
     private func makeContext(appID: String, name: String) -> RunContext {
         let configuration = [
             "backend": "regression",
@@ -500,5 +588,19 @@ final class CompatibilityResearchTests: XCTestCase {
                 NSLocalizedDescriptionKey: message
             ])
         }
+    }
+
+    private func scalarSQLiteText(_ database: OpaquePointer, _ sql: String) throws -> String? {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else {
+            throw NSError(domain: "SQLiteTest", code: 2)
+        }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW,
+              let value = sqlite3_column_text(statement, 0) else {
+            return nil
+        }
+        return String(cString: value)
     }
 }

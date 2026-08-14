@@ -237,10 +237,59 @@ enum RuntimeModuleCatalog {
         protectedModules.first { $0.id == id }
     }
 
+    static func expectedSHA256(
+        moduleID: String,
+        location: RuntimeModuleExpectedLocation
+    ) -> String? {
+        switch (moduleID, location) {
+        case ("dxvk.d3d9", .bottleSystem32):
+            "ff2062e17cfb5d4a0e4259e01fb264bb53e33fa093816e60c6e5a8f1e201b0eb"
+        case ("dxmt.d3d10core", .bottleSystem32):
+            "0b97d99a61eeeefefc4451d49477d31dc8c6e50ecca7651003655ac67f72aef4"
+        case ("dxmt.d3d10core", .wineRootWindows64):
+            "87ed91e86f1f4620f5229b7a0d4f1f8c5436a56088e8d4692201fe0c7d5b0deb"
+        case ("dxmt.d3d11", .bottleSystem32),
+             ("dxmt.d3d11", .wineRootWindows64):
+            "e6209af3a04947504af1f12b4533eded103687841197cff45a92d1a5f916c0a8"
+        case ("dxmt.dxgi", .bottleSystem32),
+             ("dxmt.dxgi", .wineRootWindows64):
+            "25f74dafc3ebaf77ddc5a7b32d933853462c303a2636399860e80937cda82941"
+        default:
+            nil
+        }
+    }
+
+    static func appleGPTKModules(version: AppleGPTKVersion) -> [RuntimeModuleDescriptor] {
+        if version == .version4Beta2 {
+            return protectedModules.filter { $0.id.hasPrefix("apple-gptk.") }
+        }
+        return [
+            localGPTKModule(id: "apple-gptk.atidxx64", fileName: "atidxx64.dll", version: version),
+            localGPTKModule(id: "apple-gptk.d3d11", fileName: "d3d11.dll", version: version),
+            localGPTKModule(id: "apple-gptk.d3d12", fileName: "d3d12.dll", version: version),
+            localGPTKModule(id: "apple-gptk.dxgi", fileName: "dxgi.dll", version: version),
+            localGPTKModule(id: "apple-gptk.nvapi64", fileName: "nvapi64.dll", version: version),
+            localGPTKModule(id: "apple-gptk.nvngx", fileName: "nvngx.dll", version: version),
+            localGPTKModule(
+                id: "apple-gptk.d3dmetal",
+                fileName: "D3DMetal",
+                relativePath: "external/D3DMetal.framework/Versions/A/D3DMetal",
+                version: version
+            ),
+            localGPTKModule(
+                id: "apple-gptk.libd3dshared",
+                fileName: "libd3dshared.dylib",
+                relativePath: "external/libd3dshared.dylib",
+                version: version
+            ),
+        ]
+    }
+
     private static func localGPTKModule(
         id: String,
         fileName: String,
-        relativePath: String? = nil
+        relativePath: String? = nil,
+        version: AppleGPTKVersion = .version4Beta2
     ) -> RuntimeModuleDescriptor {
         RuntimeModuleDescriptor(
             id: id,
@@ -249,13 +298,13 @@ enum RuntimeModuleCatalog {
             expectedLocations: [
                 .localUserComponent(
                     relativePath: relativePath
-                        ?? "AppleGPTK/4.0b2/wine/x86_64-windows/\(fileName)"
+                        ?? "AppleGPTK/\(version.rawValue)/wine/x86_64-windows/\(fileName)"
                 )
             ],
             overridePolicy: .forbidden,
             scope: .perProcess,
             architecture: .x86_64,
-            variant: "4.0b2",
+            variant: version.rawValue,
             provenance: appleGPTK
         )
     }

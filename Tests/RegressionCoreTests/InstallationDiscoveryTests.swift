@@ -18,7 +18,8 @@ final class InstallationDiscoveryTests: XCTestCase {
         let discovery = InstallationDiscovery(
             runner: runner,
             homeDirectoryURL: fixture.home,
-            applicationRoots: [fixture.applications]
+            applicationRoots: [fixture.applications],
+            regressionComponentHealthProvider: { _ in readyRuntimeReport() }
         )
 
         let snapshot = await discovery.discover(regressionApplicationURL: regressionApp)
@@ -28,6 +29,36 @@ final class InstallationDiscoveryTests: XCTestCase {
         XCTAssertEqual(snapshot.regression.health, .ready)
         let invocationCount = await runner.invocationCount()
         XCTAssertEqual(invocationCount, 0)
+    }
+
+    func testDiscoveryFailsClosedWhenSealedRuntimeAuthorityIsUnavailable() async throws {
+        let fixture = try DiscoveryFixture()
+        defer { fixture.remove() }
+        let regressionApp = try fixture.createRegressionApp()
+        let discovery = InstallationDiscovery(
+            runner: StubDiscoveryRunner(),
+            homeDirectoryURL: fixture.home
+        )
+
+        let snapshot = await discovery.discover(regressionApplicationURL: regressionApp)
+
+        XCTAssertEqual(snapshot.regression.health, .damaged)
+        XCTAssertTrue(snapshot.regression.healthDetail.contains("runtime sellado"))
+    }
+
+    func testDiscoveryRejectsReadyReportFromStaleRuntimeContract() async throws {
+        let fixture = try DiscoveryFixture()
+        defer { fixture.remove() }
+        let regressionApp = try fixture.createRegressionApp()
+        let discovery = InstallationDiscovery(
+            runner: StubDiscoveryRunner(),
+            homeDirectoryURL: fixture.home,
+            regressionComponentHealthProvider: { _ in staleReadyRuntimeReport() }
+        )
+
+        let snapshot = await discovery.discover(regressionApplicationURL: regressionApp)
+
+        XCTAssertEqual(snapshot.regression.health, .damaged)
     }
 
     func testDiscoveryExplainsMissingCrossOverAndKeepsRegressionHealth() async throws {
@@ -46,6 +77,32 @@ final class InstallationDiscoveryTests: XCTestCase {
         XCTAssertNil(snapshot.crossOverIssue)
         XCTAssertEqual(snapshot.regression.health, .missing)
     }
+}
+
+private func readyRuntimeReport() -> ComponentHealthReport {
+    ComponentHealthReport(
+        identity: ComponentIdentity(
+            componentID: TrustedComponentCatalog.steamRuntimePrerequisitesComponentID,
+            componentVersion: TrustedComponentCatalog.steamRuntimePrerequisitesComponentVersion,
+            variant: .publicInstalled,
+            buildIdentifier: TrustedComponentCatalog.supportedBuildIdentifier
+        ),
+        status: .ready,
+        recovery: .none
+    )
+}
+
+private func staleReadyRuntimeReport() -> ComponentHealthReport {
+    ComponentHealthReport(
+        identity: ComponentIdentity(
+            componentID: TrustedComponentCatalog.steamRuntimePrerequisitesComponentID,
+            componentVersion: "1",
+            variant: .publicInstalled,
+            buildIdentifier: TrustedComponentCatalog.supportedBuildIdentifier
+        ),
+        status: .ready,
+        recovery: .none
+    )
 }
 
 private actor StubDiscoveryRunner: ProcessRunning {

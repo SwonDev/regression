@@ -343,6 +343,47 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
     instaladas. La puerta final es `build/verify-canonical-installation.sh`: Spotlight,
     LaunchServices y las carpetas de aplicaciones deben resolver únicamente la canónica. Ver
     `docs/canonical-installation.md`.
+44. **Un perfecto v15 pertenece al proceso representativo exacto y a una sesión ya cerrada.** El
+    `runs.process_id` debe coincidir con la única fila `run_processes.is_representative=1`; el run
+    debe haber terminado y la verificación debe ser posterior a ese cierre. Ningún proceso
+    rastreado puede seguir abierto ni terminar después de la verificación. Insertar, cambiar o
+    borrar después la cadena de procesos invalida el perfecto y desactiva su certificación sin
+    borrar la historia. Los lectores degradan los perfectos legacy incoherentes a `invalidated`.
+45. **La telemetría degradada es estado visible, no ausencia de eventos.** El monitor conserva
+    incidencias tipadas de log ausente/ilegible, rotación, truncado, línea parcial descartada,
+    formato inesperado y límite de lectura. Tras una discontinuidad abre una nueva época y no
+    consume eventos anteriores para una intención nueva. Las lecturas y estados están acotados;
+    recuperar el monitor resuelve la incidencia, pero nunca inventa procesos ni resultados.
+46. **Windows Media se repara por contenido, App ID y lease exclusivo.** El inventario parte del
+    `appmanifest_<APP_ID>.acf` exacto, abre el árbol de juego de forma anclada, no sigue symlinks y
+    respeta profundidad 7, 4096 entradas y 512 KiB de metadatos. Solo una proyección fresca con
+    WMA/WMV/ASF, el componente sellado reparable y Steam en reposo autoriza la receta compilada.
+    El instalador exige App ID canónico y lease, reconcilia su WAL, usa backup/rollback/recibo
+    durable y vuelve a verificar; nunca reparar globalmente al abrir Steam ni ejecutar una URL,
+    ruta o comando aprendido desde SQLite.
+47. **El catálogo compilado gobierna la identidad de los perfiles.** `identifier`, `revision` y
+    `executable` proceden de `GameRuntimeProfileCatalog` y sobrescriben metadatos contradictorios.
+    Las rutas GPTK externas se derivan por índice de ese catálogo; las variables genéricas legacy
+    no tienen autoridad. El informe de capacidad debe demostrar el conjunto completo DXMT/DXVK o
+    D3DMetal y, para este último, la versión GPTK exacta autorizada antes de declarar una ruta
+    efectiva.
+48. **El runtime público 1.12 se autoriza como conjunto sellado.** Antes de lanzar deben coincidir
+    hashes y permisos compilados del wrapper `bin/wine`, `bin/wineserver`, loader Unix,
+    `ntdll.so`, `wine.inf`, ambas `ntdll.dll` PE y VC++/UCRT x86+x64. El launcher usa rutas
+    absolutas al Wine y al `WINESERVER` del runtime sellado, restablece `PATH` exactamente a
+    `/usr/bin:/bin:/usr/sbin:/sbin` y elimina cualquier `WINESERVERSOCKET` heredado. Conserva así
+    las utilidades canónicas de macOS sin aceptar Wine, wineserver ni un `PATH` hostil del entorno.
+    El runtime de desarrollo permanece fail-closed mientras no exista un PIN reproducible
+    separado; no medir el payload vivo para autorizarlo.
+49. **Todo lanzamiento por App ID obtiene autoridad durable v17 antes del `spawn`.** El sobre
+    vincula run, App ID, backend Regression, preflight completo y reciente, generación fresca de
+    requisitos e identidades cerradas de componentes/perfiles; nunca contiene comandos, rutas,
+    DLLs o argumentos arbitrarios. La adopción durable de telemetría y el paso a verificación
+    explícita están integrados. Las decisiones puras de retry/recuperación no son un ejecutor:
+    auto-retry y rollback automáticos permanecen bloqueados hasta conectar una receta compilada,
+    verificador y recibo durable. Steam observado, una receta desconocida o el límite agotado
+    exige gesto explícito; cerrar telemetría o emitir un recibo nunca certifica render, entrada,
+    opciones ni gameplay.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 
@@ -451,14 +492,20 @@ validación de su fila pasa entera con capturas, (3) hay backup del estado nuevo
 (4) README/AGENTS reflejan el cambio. Si solo cumples el punto 1, has arreglado una cosa y
 quizá roto otra — que es exactamente lo que este protocolo existe para evitar.
 
-## Estado rápido (2026-08-13)
+## Estado rápido (2026-08-14)
+
+- **Contrato de este corte**: el código fuente y los empaquetadores convergen en Regression
+  **1.12.0 (38)** y SQLite **v17**. **v1.12.0 (38)** es la release estable actual y
+  **v1.11.0 (37)** el baseline histórico; sus verificadores `public-1.11` se conservan como
+  gates de transición, no como versión vigente. Toda release futura debe verificar el asset
+  exacto y completar su matriz antes de publicarse.
 
 - **Arquitectura operativa actual**: app nativa `LSUIElement` en barra de menús, Regression como
   único backend, una botella propia y una sola biblioteca física de juegos dentro de ella. La
   transferencia desde la ubicación heredada usa un WAL durable, renombres exclusivos, validación
   funcional y rollback antes de finalizar; no copia juegos ni deja enlaces heredados. El lanzador propio está en
   `Regression.app/Contents/MacOS/regression-engine`.
-- **Aprendizaje local**: SQLite v14 normalizada en
+- **Aprendizaje local**: SQLite v17 normalizada en
   `~/Library/Application Support/Regression/Compatibility/compatibility.sqlite`; registra
   sistema, comandos saneados, componentes, backend gráfico, configuración de juego y deltas.
   La identidad de motor excluye `gameconfig.*`, de modo que una resolución distinta no crea un
@@ -475,7 +522,10 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
   fingerprintan y se enlazan al run exacto sin convertir el entorno limpio en compatibilidad.
   `run_processes` evita duplicar una misma prueba cuando Steam encadena launcher y ejecutable
   principal; los lanzamientos desde el propio cliente también quedan diagnosticados, con fase y
-  latencia explícitas para no falsificar una observación posterior como previa.
+  latencia explícitas para no falsificar una observación posterior como previa. El perfecto
+  exige el PID representativo exacto y todos los procesos cerrados antes de verificar; cualquier
+  mutación posterior de esa cadena lo invalida. El monitor de Steam emite incidencias tipadas y
+  acotadas ante rotación, truncado, lectura parcial o formato inesperado, en lugar de silenciarlas.
 - **Evolución tecnológica**: el inventario local registra baseline, última versión oficial
   revisada, licencia/distribución y política de Wine, GPTK/D3DMetal, DXMT, DXVK, MoltenVK,
   vkd3d y Rosetta. Las tablas de candidatos, métricas, requisitos y recibos no aplican

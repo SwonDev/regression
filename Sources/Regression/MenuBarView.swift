@@ -3,9 +3,30 @@ import RegressionCore
 import SwiftUI
 
 struct MenuBarView: View {
+  private enum FocusTarget: Hashable {
+    case primaryAction
+    case gameSearch
+    case custodyEligible
+  }
+
   private enum ComponentSlot {
     case steamRuntime
     case windowsMedia
+  }
+
+  /// Solo asigna Return a una acción secundaria cuando la pantalla no expone ningún CTA global
+  /// que ya sea la acción por defecto. Evita que custodia y Steam compitan en estado elegible.
+  private struct DefaultActionWhenGlobalCTAUnavailable: ViewModifier {
+    let isEnabled: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+      if isEnabled {
+        content.keyboardShortcut(.defaultAction)
+      } else {
+        content
+      }
+    }
   }
 
   private static let gamePageSize = 24
@@ -21,6 +42,9 @@ struct MenuBarView: View {
   @State private var gameSearchText = ""
   @State private var visibleGameCount = Self.gamePageSize
   @State private var visibleCertificationCount = Self.certificationPageSize
+  @State private var expandedGameTimelineAppIDs: Set<String> = []
+  @FocusState private var focusedControl: FocusTarget?
+  @AccessibilityFocusState private var accessibilityFocusedControl: FocusTarget?
 
   init(model: RegressionAppModel) {
     self.model = model
@@ -28,11 +52,27 @@ struct MenuBarView: View {
       _maintenanceIsExpanded = State(
         initialValue: RegressionVisualFixtureState.requested?.expandsMaintenance == true
       )
+      _expandedGameTimelineAppIDs = State(
+        initialValue: RegressionVisualFixtureState.requested == .launchTimeline
+          ? Set(model.games.prefix(1).map(\.appID))
+          : []
+      )
     #endif
   }
 
+  #if DEBUG
+  private var visualFixtureDefaultFocus: FocusTarget {
+    switch RegressionVisualFixtureFocus.requested {
+    case .gameSearch: .gameSearch
+    case .custodyEligible: .custodyEligible
+    case .primaryAction, nil: .primaryAction
+    }
+  }
+  #endif
+
   var body: some View {
-    ScrollView {
+    ScrollViewReader { scrollProxy in
+      ScrollView {
       VStack(alignment: .leading, spacing: 14) {
         operationalHeader
         primaryActions
@@ -46,21 +86,52 @@ struct MenuBarView: View {
       .padding(16)
       .regressionFont(.callout)
       .controlSize(dynamicTypeSize.isAccessibilitySize ? .large : .regular)
-    }
-    .frame(width: 390, height: 620)
-    .onChange(of: model.steamRuntimePrerequisitesHealth?.status) { _, status in
-      if let status, status != .ready {
-        maintenanceIsExpanded = true
       }
-    }
-    .onChange(of: model.windowsMediaHealth?.status) { _, status in
-      if let status, status != .ready {
-        maintenanceIsExpanded = true
+      .frame(width: 390, height: 620)
+      .accessibilityIdentifier("regression.menu-root")
+      #if DEBUG
+      .defaultFocus(
+        $focusedControl,
+        visualFixtureDefaultFocus
+      )
+      #endif
+      .onAppear {
+      #if DEBUG
+        if let fixtureFocus = RegressionVisualFixtureFocus.requested {
+          // El host AppKit todavía no tiene first responder durante el primer layout. Diferir
+          // un turno convierte el foco declarado en foco real de teclado y de accesibilidad.
+          DispatchQueue.main.async {
+            switch fixtureFocus {
+            case .primaryAction:
+              focusedControl = .primaryAction
+              accessibilityFocusedControl = .primaryAction
+            case .gameSearch:
+              focusedControl = .gameSearch
+              accessibilityFocusedControl = .gameSearch
+            case .custodyEligible:
+              focusedControl = .custodyEligible
+              accessibilityFocusedControl = .custodyEligible
+            }
+          }
+        }
+        if let fixture = RegressionVisualFixtureState.requested,
+           fixture == .launchTimeline || RegressionVisualFixtureScroll.requested == .game,
+           let game = model.games.first {
+          DispatchQueue.main.async {
+            scrollProxy.scrollTo("game-\(game.appID)", anchor: .center)
+          }
+        }
+      #endif
       }
-    }
-    .onChange(of: model.appleGPTKState) { _, state in
-      if state != .ready {
-        maintenanceIsExpanded = true
+      .onChange(of: model.steamRuntimePrerequisitesHealth?.status) { _, status in
+        if let status, status != .ready {
+          maintenanceIsExpanded = true
+        }
+      }
+      .onChange(of: model.windowsMediaHealth?.status) { _, status in
+        if let status, status != .ready {
+          maintenanceIsExpanded = true
+        }
       }
     }
     .sheet(item: $model.appleGPTKLicenseReview) { review in
@@ -142,7 +213,7 @@ struct MenuBarView: View {
             .fixedSize(horizontal: false, vertical: true)
             .padding(.top, 4)
         }
-      } else if model.steamRuntimeBlocksLaunch || appleGPTKNeedsAttention {
+      } else if model.steamRuntimeBlocksLaunch {
         Text(operationalBlockingDetail)
           .regressionFont(.callout)
           .foregroundStyle(.regressionSecondary)
@@ -164,19 +235,29 @@ struct MenuBarView: View {
         }
         .buttonStyle(.borderedProminent)
         .regressionAccessibleControl()
+        .focusable()
+        .focused($focusedControl, equals: .primaryAction)
+        .accessibilityFocused($accessibilityFocusedControl, equals: .primaryAction)
+        .accessibilityIdentifier("regression.primary-action")
+        .keyboardShortcut(.defaultAction)
         .disabled(model.operation.isBusy)
         .accessibilityHint("Aplica la recuperación recomendada antes de volver a iniciar Steam")
       } else if model.steamRuntimeBlocksLaunch {
-        Button("Reparar Regression") {
-          Task { await model.repairRegressionInstallation() }
+        Button(model.hasVerifiedNewerRegressionRelease ? "Actualizar y reparar" : "Reparar Regression") {
+          Task { await model.repairSteamRuntime() }
         }
         .buttonStyle(.borderedProminent)
         .regressionAccessibleControl()
+        .focusable()
+        .focused($focusedControl, equals: .primaryAction)
+        .accessibilityFocused($accessibilityFocusedControl, equals: .primaryAction)
+        .accessibilityIdentifier("regression.primary-action")
+        .keyboardShortcut(.defaultAction)
         .accessibilityHint(
-          "Restaura VC++ y UCRT desde la release oficial sin borrar la botella ni los juegos"
+          model.hasVerifiedNewerRegressionRelease
+            ? "Instala la nueva release oficial y restaura VC++ y UCRT sin borrar la botella ni los juegos"
+            : "Restaura VC++ y UCRT desde la release oficial sin borrar la botella ni los juegos"
         )
-      } else if appleGPTKNeedsAttention {
-        appleGPTKPrimaryAction
       } else if model.protectedAppleGPTKAuthorizationState == .authorizing {
         HStack(spacing: 8) {
           ProgressView()
@@ -190,6 +271,11 @@ struct MenuBarView: View {
         .accessibilityLabel("Autorizando Apple GPTK 3.0")
       } else {
         Button {
+          #if DEBUG
+          if model.recordVisualFixturePrimaryActionIfNeeded() {
+            return
+          }
+          #endif
           Task { await model.startSteam() }
         } label: {
           Label(
@@ -201,6 +287,11 @@ struct MenuBarView: View {
         }
         .buttonStyle(.borderedProminent)
         .regressionAccessibleControl()
+        .focusable()
+        .focused($focusedControl, equals: .primaryAction)
+        .accessibilityFocused($accessibilityFocusedControl, equals: .primaryAction)
+        .accessibilityIdentifier("regression.primary-action")
+        .keyboardShortcut(.defaultAction)
         .disabled(
           model.operation.isBusy
             || model.libraryIndependenceState.blocksNormalOperations
@@ -239,6 +330,7 @@ struct MenuBarView: View {
           Image(systemName: "power")
         }
         .buttonStyle(.bordered)
+        .regressionAccessibleControl()
         .accessibilityLabel("Cerrar Steam")
         .accessibilityHint("Solicita un cierre normal de la instancia activa de Steam")
         .help("Cerrar Steam…")
@@ -309,12 +401,22 @@ struct MenuBarView: View {
             .foregroundStyle(.regressionSecondary)
         }
 
+        if let notice = model.physicalLibraryCustodyAssessmentNotice {
+          Label(notice, systemImage: "info.circle")
+            .regressionFont(.caption)
+            .foregroundStyle(.regressionSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityElement(children: .combine)
+        }
+
         libraryIndependenceActions
       }
       .accessibilityElement(children: .contain)
       .accessibilityLabel("Independencia de la biblioteca")
       .accessibilityValue(model.libraryIndependenceState.accessibilityValue)
-      .accessibilityAddTraits(.updatesFrequently)
+      .accessibilityAddTraits(
+        model.libraryIndependenceState.isBusy ? .updatesFrequently : []
+      )
     }
   }
 
@@ -323,12 +425,25 @@ struct MenuBarView: View {
     switch model.libraryIndependenceState {
     case .eligible:
       Button("Revisar y trasladar…") {
+        #if DEBUG
+        if model.recordVisualFixtureCustodyActionIfNeeded() {
+          return
+        }
+        #endif
         Task { await model.startPhysicalLibraryCustodyMigration() }
       }
       .buttonStyle(.borderedProminent)
       .regressionAccessibleControl()
+      .focusable()
+      .focused($focusedControl, equals: .custodyEligible)
+      .accessibilityFocused($accessibilityFocusedControl, equals: .custodyEligible)
+      .accessibilityIdentifier("regression.custody-eligible")
       .disabled(model.operation.isBusy)
-      .keyboardShortcut(.defaultAction)
+      .modifier(
+        DefaultActionWhenGlobalCTAUnavailable(
+          isEnabled: model.protectedAppleGPTKAuthorizationState == .authorizing
+        )
+      )
       .accessibilityHint(
         "Confirma un traslado sin copia que dejará la instalación heredada sin juegos"
       )
@@ -399,13 +514,13 @@ struct MenuBarView: View {
         .foregroundStyle(.regressionSecondary)
     case .error:
       if model.failure == nil {
-        Button("Crear o reparar biblioteca propia") {
+        Button("Comprobar biblioteca propia") {
           Task { await model.assessPhysicalLibraryCustody() }
         }
         .buttonStyle(.borderedProminent)
         .regressionAccessibleControl()
         .accessibilityHint(
-          "Crea o adopta la carpeta física de juegos de Regression y vuelve a verificar su identidad"
+          "Comprueba la identidad de la biblioteca sin mover, crear ni reparar archivos"
         )
       }
     case .independent:
@@ -464,8 +579,12 @@ struct MenuBarView: View {
                   .foregroundStyle(.regressionSecondary)
               )
               .textFieldStyle(.roundedBorder)
+              .focusable()
               .accessibilityLabel("Buscar juegos instalados")
               .accessibilityHint("Filtra por nombre o Steam App ID")
+              .focused($focusedControl, equals: .gameSearch)
+              .accessibilityFocused($accessibilityFocusedControl, equals: .gameSearch)
+              .accessibilityIdentifier("regression.game-search")
               .onChange(of: gameSearchText) { _, _ in
                 visibleGameCount = Self.gamePageSize
               }
@@ -535,7 +654,7 @@ struct MenuBarView: View {
     HStack(alignment: .top, spacing: 10) {
       VStack(alignment: .leading, spacing: 2) {
         Text(game.name)
-          .lineLimit(2)
+          .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
           .fixedSize(horizontal: false, vertical: true)
         Text("App ID \(game.appID)")
           .regressionFont(.caption.monospacedDigit())
@@ -554,6 +673,31 @@ struct MenuBarView: View {
           )
           .accessibilityElement(children: .combine)
         }
+        if let issue = model.gameLaunchIssue(for: game) {
+          VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
+              Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .accessibilityHidden(true)
+              Text(issue.title)
+                .foregroundStyle(Color.primary)
+            }
+            .regressionFont(.caption.weight(.semibold))
+            Text(issue.message)
+              .regressionFont(.caption2)
+              .foregroundStyle(.regressionSecondary)
+              .fixedSize(horizontal: false, vertical: true)
+            Button(recoveryTitle(issue.recovery)) {
+              Task { await model.recover(issue.recovery) }
+            }
+            .regressionFont(.caption)
+            .accessibilityHint("Resuelve únicamente el requisito de \(game.name)")
+          }
+          .padding(.top, 3)
+          .accessibilityElement(children: .contain)
+          .accessibilityLabel("Requisito de lanzamiento de \(game.name)")
+        }
+        gameLaunchTimeline(for: game)
       }
       Spacer(minLength: 8)
       Button {
@@ -571,6 +715,7 @@ struct MenuBarView: View {
         model.operation.isBusy
           || model.failure != nil
           || model.steamRuntimeBlocksLaunch
+          || model.gameLaunchIssue(for: game) != nil
           || (
             model.libraryIndependenceState.blocksNormalOperations
               && !model.libraryIndependenceState.allowsValidationGameLaunch
@@ -579,6 +724,64 @@ struct MenuBarView: View {
       .padding(.top, 2)
     }
     .padding(.vertical, 7)
+    .id("game-\(game.appID)")
+  }
+
+  @ViewBuilder
+  private func gameLaunchTimeline(for game: SteamGame) -> some View {
+    if let timeline = model.launchTimeline(for: game),
+       let latest = timeline.latestEnvelope {
+      let isExpanded = expandedGameTimelineAppIDs.contains(game.appID)
+      Button {
+        if isExpanded {
+          expandedGameTimelineAppIDs.remove(game.appID)
+        } else {
+          expandedGameTimelineAppIDs.insert(game.appID)
+        }
+      } label: {
+        Label {
+          Text("Lanzamiento: \(launchEnvelopePhaseTitle(latest.intent.phase))")
+        } icon: {
+          Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+        }
+      }
+      .buttonStyle(.plain)
+      .regressionFont(.caption2)
+      .foregroundStyle(.regressionSecondary)
+      .frame(minHeight: 32, alignment: .leading)
+      .accessibilityValue(isExpanded ? "Expandido" : "Contraído")
+      .accessibilityHint("Muestra el registro, sus recibos y las reparaciones ya registradas")
+
+      if isExpanded {
+        VStack(alignment: .leading, spacing: 5) {
+          ForEach(timeline.envelopes) { envelope in
+            VStack(alignment: .leading, spacing: 2) {
+              Text("Registro de lanzamiento · \(launchEnvelopePhaseTitle(envelope.intent.phase))")
+                .regressionFont(.caption2.weight(.medium))
+              Text(launchEventSummary(envelope.events))
+                .regressionFont(.caption2)
+                .foregroundStyle(.regressionSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+              if let receipt = envelope.receipts.last {
+                Text("Recibo: \(launchReceiptTitle(receipt.result)) · no certifica funcionamiento")
+                  .regressionFont(.caption2)
+                  .foregroundStyle(.regressionSecondary)
+                  .fixedSize(horizontal: false, vertical: true)
+              }
+            }
+          }
+          ForEach(timeline.repairAttempts) { attempt in
+            Text("Reparación \(repairRecipeTitle(attempt.recipe)) · \(repairAttemptStateTitle(attempt.state))")
+              .regressionFont(.caption2)
+              .foregroundStyle(.regressionSecondary)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+        }
+        .padding(.top, 2)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Historial local de lanzamiento de \(game.name)")
+      }
+    }
   }
 
   private var dataSection: some View {
@@ -659,14 +862,14 @@ struct MenuBarView: View {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
               Text(technology.displayName)
                 .regressionFont(.caption)
-                .lineLimit(1)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
               Spacer()
               Text(
                 "\(technology.stableVersion ?? "sin baseline") → \(technology.latestKnownVersion ?? "por revisar")"
               )
               .regressionFont(.caption2.monospacedDigit())
               .foregroundStyle(.regressionSecondary)
-              .lineLimit(1)
+              .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
             }
           }
 
@@ -755,7 +958,9 @@ struct MenuBarView: View {
       ForEach(Array(model.recentRuns.prefix(5))) { run in
         HStack(spacing: 8) {
           VStack(alignment: .leading, spacing: 1) {
-            Text(run.gameName).lineLimit(1)
+            Text(run.gameName)
+              .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+              .fixedSize(horizontal: false, vertical: true)
             Text(run.startedAt.formatted(date: .abbreviated, time: .shortened))
             .regressionFont(.caption)
             .foregroundStyle(.regressionSecondary)
@@ -947,7 +1152,7 @@ struct MenuBarView: View {
       VStack(alignment: .leading, spacing: 1) {
         Text(certification.gameName)
           .regressionFont(.callout)
-          .lineLimit(1)
+          .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
         Text(certificationSourceText(certification))
           .regressionFont(.caption2)
           .foregroundStyle(.regressionSecondary)
@@ -1137,6 +1342,9 @@ struct MenuBarView: View {
     if model.steamRuntimeBlocksLaunch {
       return "Reinstala la release verificada para restaurar VC++ y UCRT"
     }
+    if let issue = model.gameLaunchIssue(for: game) {
+      return "Resuelve el requisito de este juego: \(issue.title)"
+    }
     return "Solicita a Steam que abra el juego con Regression"
   }
 
@@ -1147,6 +1355,9 @@ struct MenuBarView: View {
     if model.steamRuntimeBlocksLaunch {
       return "No disponible hasta verificar VC++ y UCRT"
     }
+    if let issue = model.gameLaunchIssue(for: game) {
+      return "No disponible hasta resolver: \(issue.title)"
+    }
     return model.libraryIndependenceState.blocksNormalOperations
       && !model.libraryIndependenceState.allowsValidationGameLaunch
       ? "No disponible durante el traslado o su validación"
@@ -1154,7 +1365,7 @@ struct MenuBarView: View {
   }
 
   private var statusBadgeTitle: String {
-    if model.failure == nil, model.steamRuntimeBlocksLaunch || appleGPTKNeedsAttention {
+    if model.failure == nil, model.steamRuntimeBlocksLaunch {
       return "Atención"
     }
     return switch model.operation {
@@ -1166,7 +1377,7 @@ struct MenuBarView: View {
   }
 
   private var statusBadgeSymbol: String {
-    if model.failure == nil, model.steamRuntimeBlocksLaunch || appleGPTKNeedsAttention {
+    if model.failure == nil, model.steamRuntimeBlocksLaunch {
       return "exclamationmark"
     }
     return switch model.operation {
@@ -1178,7 +1389,7 @@ struct MenuBarView: View {
   }
 
   private var statusColor: Color {
-    if model.failure == nil, model.steamRuntimeBlocksLaunch || appleGPTKNeedsAttention {
+    if model.failure == nil, model.steamRuntimeBlocksLaunch {
       return .red
     }
     return switch model.operation {
@@ -1211,25 +1422,26 @@ struct MenuBarView: View {
   private var libraryIndependenceDetail: String {
     switch model.libraryIndependenceState {
     case .eligible:
-      "Los juegos se trasladarán a la botella propia de Regression. No se copiarán 110 GB y la instalación anterior quedará sin juegos. Las botellas no se compartirán."
+      let observedSize = model.physicalLibraryCustodySizeDescription.map { " (\($0) observados)" } ?? ""
+      return "Los juegos\(observedSize) se trasladarán a la botella propia de Regression sin copiar archivos. La instalación anterior quedará sin juegos y las botellas no se compartirán."
     case .preparing:
-      "Se están inventariando manifiestos, rutas e identidad del volumen. Todavía no se ha movido ningún juego."
+      return "Se están inventariando manifiestos, rutas e identidad del volumen. Todavía no se ha movido ningún juego."
     case .preCutover:
-      "Steam está cerrado y el traslado puede hacerse mediante un renombrado en el mismo volumen, sin duplicar los juegos."
+      return "Steam está cerrado y el traslado puede hacerse mediante un renombrado en el mismo volumen, sin duplicar los juegos."
     case .cutover:
-      "Regression está tomando custodia de la única carpeta física de juegos. Ninguna otra instalación conservará una copia ni un enlace."
+      return "Regression está tomando custodia de la única carpeta física de juegos. Ninguna otra instalación conservará una copia ni un enlace."
     case .verifying:
-      "La carpeta ya está en Regression. Se comprueban el mismo inode, los manifiestos y el inventario estructural."
+      return "La carpeta ya está en Regression. Se comprueban el mismo inode, los manifiestos y el inventario estructural."
     case .pendingValidation:
-      "Los archivos ya pertenecen a Regression. Abre Steam desde esta tarjeta para validar tienda, biblioteca y un juego antes de finalizar."
+      return "Los archivos ya pertenecen a Regression. Abre Steam desde esta tarjeta para validar tienda, biblioteca y un juego antes de finalizar."
     case .validating:
-      "Steam se ejecuta exclusivamente con Regression. Comprueba la tienda, la biblioteca y un juego protegido; después confirma el resultado."
+      return "Steam se ejecuta exclusivamente con Regression. Comprueba la tienda, la biblioteca y un juego protegido; después confirma el resultado."
     case .rollingBack:
-      "La validación no se ha aceptado. Regression restaura la ubicación anterior sin crear una segunda biblioteca."
-    case let .error(detail):
-      detail
+      return "La validación no se ha aceptado. Regression restaura la ubicación anterior sin crear una segunda biblioteca."
+    case let .error(_, detail):
+      return detail
     case .independent:
-      "La biblioteca física vive en la botella de Regression y su ejecución se ha validado. Todo se gestiona de forma independiente."
+      return "La biblioteca física vive en la botella de Regression y su ejecución se ha validado. Todo se gestiona de forma independiente."
     }
   }
 
@@ -1260,17 +1472,6 @@ struct MenuBarView: View {
     if model.failure == nil, model.steamRuntimeBlocksLaunch {
       return "Runtime incompleto"
     }
-    if model.failure == nil, appleGPTKNeedsAttention {
-      return switch model.appleGPTKState {
-      case .verifying: "Verificando Apple GPTK"
-      case .installing: "Instalando Apple GPTK"
-      case .requiresLicense: "Licencia de Apple pendiente"
-      case .requiresSelection: "Selecciona el DMG oficial"
-      case .requiresDownload: "Apple GPTK no está preparado"
-      case .unsupported, .failed: "Apple GPTK necesita atención"
-      case .ready: model.statusTitle
-      }
-    }
     return switch model.operation {
     case .ready: "Motor preparado"
     case .running: model.statusTitle
@@ -1279,58 +1480,8 @@ struct MenuBarView: View {
     }
   }
 
-  private var appleGPTKNeedsAttention: Bool {
-    model.appleGPTKState != .ready
-  }
-
   private var operationalBlockingDetail: String {
-    model.steamRuntimeBlocksLaunch ? steamRuntimeOperationalDetail : appleGPTKSummary
-  }
-
-  @ViewBuilder
-  private var appleGPTKPrimaryAction: some View {
-    switch model.appleGPTKState {
-    case .requiresDownload:
-      HStack(spacing: 8) {
-        Button("Descargar GPTK…") { model.openOfficialAppleGPTKDownload() }
-          .buttonStyle(.borderedProminent)
-          .regressionAccessibleControl()
-        openSteamWithoutAppleGPTKButton
-      }
-    case .requiresSelection:
-      HStack(spacing: 8) {
-        Button("Seleccionar DMG…") { model.beginSelectAndInspectAppleGPTKDMG() }
-          .buttonStyle(.borderedProminent)
-          .regressionAccessibleControl()
-        openSteamWithoutAppleGPTKButton
-      }
-    case .requiresLicense:
-      HStack(spacing: 8) {
-        Button("Revisar licencia…") { model.presentAppleGPTKLicenseReview() }
-          .buttonStyle(.borderedProminent)
-          .regressionAccessibleControl()
-        openSteamWithoutAppleGPTKButton
-      }
-    case .failed:
-      Button("Comprobar Apple GPTK") { Task { await model.refreshAppleGPTKStatus() } }
-        .buttonStyle(.borderedProminent)
-        .regressionAccessibleControl()
-    case .verifying, .installing:
-      ProgressView().controlSize(.small).accessibilityLabel(appleGPTKSummary)
-    case .unsupported:
-      Button("Ver requisitos") { model.openOfficialAppleGPTKDownload() }
-        .regressionAccessibleControl()
-    case .ready:
-      EmptyView()
-    }
-  }
-
-  private var openSteamWithoutAppleGPTKButton: some View {
-    Button("Abrir Steam") { Task { await model.startSteam() } }
-      .regressionAccessibleControl()
-      .accessibilityHint(
-        "Abre Steam; los juegos que exigen Apple GPTK seguirán bloqueados hasta completar la preparación"
-      )
+    steamRuntimeOperationalDetail
   }
 
   private var steamRuntimeOperationalDetail: String {
@@ -1680,21 +1831,14 @@ struct MenuBarView: View {
       switch (slot, report.recovery) {
       case (.windowsMedia, .createExternalLink),
            (.windowsMedia, .restoreExternalLinkAfterBackup):
-        Button("Reparar componente") {
-          Task { await model.repairWindowsMediaComponent() }
-        }
-        .regressionAccessibleControl()
-        .disabled(
-          model.operation.isBusy
-            || model.windowsMediaHealthIsRefreshing
-            || model.runningState.activeBackend != nil
+        Label(
+          "Se reparará solo al iniciar un juego con evidencia local que requiera Windows Media.",
+          systemImage: "gamecontroller"
         )
-        .accessibilityHint("Crea un backup y restaura el enlace al componente verificado")
-        .help(
-          model.runningState.activeBackend == nil
-            ? "Reparar el enlace local con backup y verificación final"
-            : "Cierra Steam y los juegos antes de reparar Windows Media"
-        )
+        .regressionFont(.caption2)
+        .foregroundStyle(.regressionSecondary)
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityElement(children: .combine)
       default:
         Button("Reparar Regression") {
           Task { await model.repairRegressionInstallation() }
@@ -1770,6 +1914,61 @@ struct MenuBarView: View {
       return verdict.displayName
     }
     return run.result == .crashed ? "Cierre inesperado" : "Pendiente de verificación"
+  }
+
+  private func launchEnvelopePhaseTitle(_ phase: LaunchEnvelopePhase) -> String {
+    switch phase {
+    case .intentDurable: "intención registrada"
+    case .spawnAuthorized: "inicio autorizado"
+    case .spawnStarted: "inicio observado"
+    case .awaitingTelemetry: "esperando telemetría"
+    case .awaitingVerification: "esperando verificación"
+    case .completed: "verificación registrada"
+    case .failedBeforeSpawn: "no inició"
+    case .rollbackPending: "rollback pendiente"
+    case .rolledBack: "rollback terminado"
+    }
+  }
+
+  private func launchEventSummary(_ events: [LaunchEnvelopeEvent]) -> String {
+    guard !events.isEmpty else { return "Sin eventos adicionales registrados." }
+    return events.map { launchEnvelopePhaseTitle($0.phase) }.joined(separator: " → ")
+  }
+
+  private func launchReceiptTitle(_ receipt: LaunchEnvelopeReceiptResult) -> String {
+    switch receipt {
+    case .awaitingTelemetry: "telemetría pendiente"
+    case .verificationRecorded: "verificación registrada"
+    case .failedBeforeSpawn: "inicio no completado"
+    case .rolledBack: "rollback registrado"
+    }
+  }
+
+  private func repairRecipeTitle(_ recipe: CompiledRepairRecipe) -> String {
+    switch recipe {
+    case .unrealD3D11DualOverlayIsolation: "Aislamiento de doble overlay de Unreal"
+    case .unityIntroWineGStreamerIsolation: "Aislamiento de vídeo de inicio de Unity"
+    case .unityExclusiveFullscreenBorderless: "Pantalla completa sin bordes de Unity"
+    case .gameMakerRetinaFullscreen: "Pantalla completa Retina de GameMaker"
+    }
+  }
+
+  private func repairAttemptStateTitle(_ state: RepairAttemptState) -> String {
+    switch state {
+    case .detected: "detectada"
+    case .planned: "planificada"
+    case .appliedAwaitingRelaunch: "aplicada; espera relanzamiento"
+    case .relaunching: "relanzando"
+    case .awaitingVerification: "espera verificación"
+    case .verified: "verificada"
+    case .acceptedWithIssues: "aceptada con incidencias"
+    case .failed: "fallida"
+    case .rollbackPending: "restauración pendiente"
+    case .rollbackFailed: "restauración fallida"
+    case .rolledBack: "restaurada"
+    case .blocked: "bloqueada"
+    case .legacyAppliedUnverified: "aplicación anterior sin verificar"
+    }
   }
 
 }

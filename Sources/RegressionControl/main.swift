@@ -53,12 +53,281 @@ enum RegressionControl {
         )
 
         switch command {
+        case "durable-sync":
+            let paths = Array(arguments.dropFirst())
+            guard !paths.isEmpty else {
+                throw RegressionCoreError.invalidEvidence(
+                    "durable-sync requiere al menos una ruta administrada"
+                )
+            }
+            let managedRoot = support.standardizedFileURL.path + "/"
+            for path in paths {
+                let url = URL(fileURLWithPath: path).standardizedFileURL
+                guard url.path.hasPrefix(managedRoot) else {
+                    throw RegressionCoreError.invalidEvidence(
+                        "durable-sync solo acepta rutas bajo Application Support de Regression"
+                    )
+                }
+                let descriptor = try anchoredDescriptor(forAbsolutePath: url.path)
+                defer { Darwin.close(descriptor) }
+                guard Darwin.fsync(descriptor) == 0 else {
+                    throw RegressionCoreError.invalidEvidence(
+                        "no se pudo sincronizar una ruta administrada"
+                    )
+                }
+            }
+
         case "unreal-bootstrap-routes":
             let routes = try UnrealBootstrapRouteDetector.routes(
                 in: installations.regression.steamRootURL
             )
             for route in routes {
                 print("\(route.bootstrapExecutable)\t\(route.shippingURL.path)")
+            }
+
+        case "windows-media-repair-plan":
+            guard arguments.count == 4,
+                  let appID = SteamAppID.normalized(arguments[1]),
+                  appID == arguments[1],
+                  arguments[2] == "--owner-pid",
+                  let ownerPID = Int32(arguments[3]),
+                  ownerPID == getppid(),
+                  let authorization = WindowsMediaComponentRepairAuthorization(
+                    explicitAppID: appID
+                  ) else {
+                throw RegressionCoreError.invalidEvidence(
+                    "windows-media-repair-plan requiere un Steam App ID canónico"
+                )
+            }
+            try await repository.prepare()
+            let projection = try await GameTechnologyEvidenceScanner.refreshProjection(
+                appID: appID,
+                steamRootURL: installations.regression.steamRootURL,
+                repository: repository
+            )
+            let applicationBundle = Bundle(url: applicationURL) ?? .main
+            let version = applicationBundle.object(
+                forInfoDictionaryKey: "CFBundleShortVersionString"
+            ) as? String ?? "desconocida"
+            let build = applicationBundle.object(
+                forInfoDictionaryKey: "CFBundleVersion"
+            ) as? String ?? "desconocido"
+            let variant: ComponentArtifactVariant = applicationURL.standardizedFileURL.path
+                == "/Applications/Regression.app"
+                ? .publicInstalled : .development
+            let health = ComponentHealthService.evaluate(
+                TrustedComponentCatalog.windowsMediaDescriptor(
+                    applicationVersion: version,
+                    buildIdentifier: build,
+                    variant: variant,
+                    applicationBundleURL: applicationURL,
+                    applicationSupportURL: support
+                )
+            )
+            let runtime = await coordinator.runningState()
+            switch WindowsMediaComponentRepairPlanner.plan(
+                projection: projection,
+                health: health,
+                authorization: authorization,
+                runtimeIsIdle: runtime.activeBackend == nil
+            ) {
+            case .notRequired:
+                print("REGRESSION_WINDOWS_MEDIA_PLAN=not-required")
+            case .repair:
+                let lease = try WindowsMediaRepairInterlock.issueRepairLease(
+                    appID: appID,
+                    ownerPID: ownerPID,
+                    applicationSupportURL: support,
+                    runtimeIsIdle: runtime.activeBackend == nil
+                )
+                print("REGRESSION_WINDOWS_MEDIA_PLAN=repair")
+                print("REGRESSION_WINDOWS_MEDIA_LEASE=\(lease.token)")
+            case .blocked(let blocker):
+                print("REGRESSION_WINDOWS_MEDIA_PLAN=blocked")
+                print("REGRESSION_WINDOWS_MEDIA_BLOCKER=\(blocker.rawValue)")
+            }
+
+        case "windows-media-pending-recovery-app-id":
+            guard arguments.count == 3, arguments[1] == "--owner-pid",
+                  let ownerPID = Int32(arguments[2]), ownerPID == getppid() else {
+                throw RegressionCoreError.invalidEvidence("consulta WAL Windows Media no válida")
+            }
+            let intentURL = support.appendingPathComponent(
+                "Transactions/WindowsMedia/1-link-repair.intent",
+                isDirectory: false
+            )
+            let intentExists = FileManager.default.fileExists(atPath: intentURL.path)
+                || (try? FileManager.default.destinationOfSymbolicLink(atPath: intentURL.path)) != nil
+            guard intentExists else {
+                print("REGRESSION_WINDOWS_MEDIA_PENDING_APP_ID=none")
+                break
+            }
+            guard let text = String(
+                data: try WindowsMediaAnchoredPrivateFileStore.read(
+                    .intent,
+                    applicationSupportURL: support
+                ),
+                encoding: .utf8
+            ) else {
+                throw RegressionCoreError.invalidEvidence("WAL Windows Media no legible")
+            }
+            var fields: [String: String] = [:]
+            for line in text.split(separator: "\n") {
+                guard let separator = line.firstIndex(of: "=") else {
+                    throw RegressionCoreError.invalidEvidence("WAL Windows Media malformado")
+                }
+                let key = String(line[..<separator])
+                guard fields[key] == nil else {
+                    throw RegressionCoreError.invalidEvidence("WAL Windows Media ambiguo")
+                }
+                fields[key] = String(line[line.index(after: separator)...])
+            }
+            guard fields.count == 11,
+                  fields["schema"] == "1",
+                  fields["kind"] == "trusted-component-link-repair-intent",
+                  fields["component_id"] == TrustedComponentCatalog.windowsMediaComponentID,
+                  fields["component_version"] == TrustedComponentCatalog.windowsMediaComponentVersion,
+                  let rawAppID = fields["app_id"],
+                  let appID = SteamAppID.normalized(rawAppID), appID == rawAppID else {
+                throw RegressionCoreError.invalidEvidence("WAL Windows Media sin autoridad cerrada")
+            }
+            print("REGRESSION_WINDOWS_MEDIA_PENDING_APP_ID=\(appID)")
+
+        case "consume-windows-media-repair-lease":
+            guard arguments.count == 6,
+                  let appID = SteamAppID.normalized(arguments[1]), appID == arguments[1],
+                  UUID(uuidString: arguments[2]) != nil,
+                  arguments[3] == "--owner-pid",
+                  let ownerPID = Int32(arguments[4]),
+                  arguments[5] == "--revalidate-idle" else {
+                throw RegressionCoreError.invalidEvidence("lease Windows Media no válida")
+            }
+            let runtime = await coordinator.runningState()
+            try WindowsMediaRepairInterlock.consumeRepairLease(
+                appID: appID,
+                token: arguments[2],
+                ownerPID: ownerPID,
+                applicationSupportURL: support,
+                runtimeIsIdle: runtime.activeBackend == nil
+            )
+
+        case "release-windows-media-lease":
+            guard arguments.count == 5,
+                  UUID(uuidString: arguments[1]) != nil,
+                  arguments[2] == "--owner-pid",
+                  let ownerPID = Int32(arguments[3]),
+                  arguments[4] == "--consumed" else {
+                throw RegressionCoreError.invalidEvidence("lease Windows Media no válida")
+            }
+            try WindowsMediaRepairInterlock.release(
+                token: arguments[1],
+                ownerPID: ownerPID,
+                applicationSupportURL: support
+            )
+
+        case "acquire-windows-media-runtime-lease":
+            guard arguments.count == 3, arguments[1] == "--owner-pid",
+                  let ownerPID = Int32(arguments[2]), ownerPID == getppid() else {
+                throw RegressionCoreError.invalidEvidence("interlock de runtime no válido")
+            }
+            let lease = try WindowsMediaRepairInterlock.issueRuntimeLease(
+                ownerPID: ownerPID,
+                applicationSupportURL: support
+            )
+            print("REGRESSION_WINDOWS_MEDIA_RUNTIME_LEASE=\(lease.token)")
+
+        case "windows-media-anchored-link":
+            let authorizationStart = arguments.count - 6
+            guard authorizationStart >= 2,
+                  arguments[authorizationStart] == "--app-id",
+                  arguments[authorizationStart + 2] == "--lease-token",
+                  arguments[authorizationStart + 4] == "--owner-pid",
+                  let appID = SteamAppID.normalized(arguments[authorizationStart + 1]),
+                  appID == arguments[authorizationStart + 1],
+                  UUID(uuidString: arguments[authorizationStart + 3]) != nil,
+                  let ownerPID = Int32(arguments[authorizationStart + 5]) else {
+                throw RegressionCoreError.invalidEvidence("mutación anclada Windows Media no válida")
+            }
+            let operationArguments = Array(arguments[1..<authorizationStart])
+            let runtime = await coordinator.runningState()
+            try WindowsMediaRepairInterlock.consumeRepairLease(
+                appID: appID,
+                token: arguments[authorizationStart + 3],
+                ownerPID: ownerPID,
+                applicationSupportURL: support,
+                runtimeIsIdle: runtime.activeBackend == nil
+            )
+            let payload = applicationURL.appendingPathComponent(
+                "Contents/SharedSupport/components/windows-media/1",
+                isDirectory: true
+            )
+            let mutation: WindowsMediaAnchoredLinkMutation
+            switch (operationArguments.first, Array(operationArguments.dropFirst())) {
+            case ("create-stage", let values) where values.count == 1:
+                mutation = .createStage(stageName: values[0], targetURL: payload)
+            case ("backup-current", let values) where values.count == 1:
+                mutation = .backupCurrent(backupName: values[0])
+            case ("commit-stage", let values) where values.count == 1:
+                mutation = .commitStage(stageName: values[0])
+            case ("restore-backup", let values) where values.count == 1:
+                mutation = .restoreBackup(backupName: values[0])
+            case ("remove-stage", let values) where values.count == 1:
+                mutation = .removeStage(stageName: values[0])
+            case ("remove-current", let values) where values.isEmpty:
+                mutation = .removeCurrent
+            default:
+                throw RegressionCoreError.invalidEvidence("mutación anclada Windows Media no válida")
+            }
+            try WindowsMediaAnchoredLinkMutator.apply(
+                mutation,
+                applicationSupportURL: support,
+                authorizedPayloadURL: payload
+            )
+
+        case "windows-media-private-file":
+            let authorizationStart = arguments.count - 6
+            guard authorizationStart == 3,
+                  arguments[authorizationStart] == "--app-id",
+                  arguments[authorizationStart + 2] == "--lease-token",
+                  arguments[authorizationStart + 4] == "--owner-pid",
+                  let appID = SteamAppID.normalized(arguments[authorizationStart + 1]),
+                  appID == arguments[authorizationStart + 1],
+                  UUID(uuidString: arguments[authorizationStart + 3]) != nil,
+                  let ownerPID = Int32(arguments[authorizationStart + 5]),
+                  let file = WindowsMediaAnchoredPrivateFile(rawValue: arguments[2]) else {
+                throw RegressionCoreError.invalidEvidence("fichero privado Windows Media no válido")
+            }
+            let runtime = await coordinator.runningState()
+            try WindowsMediaRepairInterlock.consumeRepairLease(
+                appID: appID,
+                token: arguments[authorizationStart + 3],
+                ownerPID: ownerPID,
+                applicationSupportURL: support,
+                runtimeIsIdle: runtime.activeBackend == nil
+            )
+            switch arguments[1] {
+            case "prepare":
+                try WindowsMediaAnchoredPrivateFileStore.prepare(
+                    applicationSupportURL: support
+                )
+            case "read":
+                FileHandle.standardOutput.write(try WindowsMediaAnchoredPrivateFileStore.read(
+                    file,
+                    applicationSupportURL: support
+                ))
+            case "write":
+                try WindowsMediaAnchoredPrivateFileStore.write(
+                    FileHandle.standardInput.readDataToEndOfFile(),
+                    to: file,
+                    applicationSupportURL: support
+                )
+            case "remove":
+                try WindowsMediaAnchoredPrivateFileStore.remove(
+                    file,
+                    applicationSupportURL: support
+                )
+            default:
+                throw RegressionCoreError.invalidEvidence("operación privada Windows Media no válida")
             }
 
         case "status":
@@ -222,11 +491,102 @@ enum RegressionControl {
             guard report.status != .blocked else {
                 throw RegressionCoreError.testEnvironmentBlocked(report.blockingSummary)
             }
-            _ = try await coordinator.launchSteam(
-                backend: backend,
-                installations: installations,
-                appID: appID
+            let game = SteamManifestParser.games(
+                in: installations.regression.steamRootURL,
+                backend: .regression
+            ).first(where: { $0.appID == appID }) ?? SteamGame(
+                appID: appID,
+                name: SteamGameName.placeholder(for: appID),
+                installDirectory: "juego-no-detectado-\(appID)",
+                manifestURL: installations.regression.steamRootURL.appendingPathComponent(
+                    "steamapps/appmanifest_\(appID).acf"
+                ),
+                sourceBackend: .regression
             )
+            let launchContext = regressionLaunchContext(
+                appID: appID,
+                game: game,
+                installation: installations.regression,
+                applicationURL: applicationURL
+            )
+            try await repository.beginRun(launchContext)
+            var envelopeID: UUID?
+            var launchSubmitted = false
+            do {
+                try await repository.recordPreflight(report, forRunID: launchContext.id)
+                let requirementProjection = try await GameTechnologyEvidenceScanner.refreshProjection(
+                    appID: appID,
+                    steamRootURL: installations.regression.steamRootURL,
+                    repository: repository
+                )
+                let componentHealth = regressionLaunchComponentHealth(
+                    installation: installations.regression,
+                    applicationURL: applicationURL,
+                    applicationSupportURL: support
+                )
+                try RendererLaunchGate.validate(
+                    installation: installations.regression,
+                    appID: appID
+                )
+                let envelope = try LaunchEnvelopeService().prepare(
+                    LaunchEnvelopeRequest(
+                        appID: appID,
+                        backend: backend,
+                        runID: launchContext.id,
+                        preflight: report,
+                        requirements: requirementProjection,
+                        componentHealth: componentHealth,
+                        rendererIsEligible: true
+                    )
+                )
+                try await repository.recordLaunchEnvelope(envelope)
+                envelopeID = envelope.id
+                try await repository.authorizeLaunchEnvelopeSpawn(id: envelope.id)
+                let spawnAuthority = try await repository.gameLaunchSpawnAuthority(for: envelope.id)
+                _ = try await coordinator.launchGame(
+                    backend: backend,
+                    installations: installations,
+                    spawnAuthority: spawnAuthority
+                )
+                launchSubmitted = true
+                try await repository.advanceLaunchEnvelopeWithReceipt(
+                    id: envelope.id,
+                    to: .awaitingTelemetry,
+                    result: .awaitingTelemetry
+                )
+            } catch {
+                var durablePreSpawnClosed = false
+                if let envelopeID {
+                    durablePreSpawnClosed = try await reconcileFailedLaunchEnvelope(
+                        id: envelopeID,
+                        repository: repository
+                    )
+                }
+                let spawnStarted = if let envelopeID,
+                    let envelope = try? await repository.launchEnvelope(id: envelopeID) {
+                    switch envelope.phase {
+                    case .spawnStarted, .awaitingTelemetry, .awaitingVerification, .completed,
+                         .rollbackPending, .rolledBack:
+                        true
+                    case .intentDurable, .spawnAuthorized, .failedBeforeSpawn:
+                        false
+                    }
+                } else {
+                    false
+                }
+                if !launchSubmitted && !spawnStarted && envelopeID == nil {
+                    try? await repository.failRunBeforeLaunch(
+                        id: launchContext.id,
+                        reason: error.localizedDescription
+                    )
+                }
+                if envelopeID != nil, !durablePreSpawnClosed, !spawnStarted {
+                    throw RegressionCoreError.database(
+                        "El lanzamiento falló y no se pudo cerrar atómicamente su envelope; se conserva para recuperación: \(error.localizedDescription)"
+                    )
+                }
+                throw error
+            }
             print("Solicitud enviada para App ID", appID, "con", backend.displayName)
 
         case "preflight":
@@ -719,6 +1079,10 @@ enum RegressionControl {
             print("Puertas de validación:", health.researchGateCount)
             print("Evidencias de I+D:", health.researchArtifactCount)
             print("Diagnósticos previos:", health.preflightReportCount)
+            print("Envelopes de lanzamiento:", health.launchEnvelopeCount ?? 0)
+            print("Eventos de envelope:", health.launchEnvelopeEventCount ?? 0)
+            print("Recibos de envelope:", health.launchEnvelopeReceiptCount ?? 0)
+            print("Violaciones de envelope:", health.launchEnvelopeViolationCount ?? 0)
             if let backup = await repository.lastMigrationBackup() {
                 print("Backup de migración:", PrivacySanitizer.normalizedPath(backup.path))
             }
@@ -738,7 +1102,7 @@ enum RegressionControl {
                 note = "Verificación visual local"
             }
             let evidence = VerificationEvidence.manualDefault(for: verdict)
-            try await repository.verifyRun(RunVerification(
+            _ = try await repository.verifyRunAndCompleteEnvelope(RunVerification(
                 runID: runID,
                 verdict: verdict,
                 rendering: evidence.rendering,
@@ -824,6 +1188,125 @@ enum RegressionControl {
         default:
             print("Uso: regressionctl [status | library-status | migrate-library --confirm-single-library --confirm-crossover-games-removed | validate-library APP_ID --run RUN_ID | rollback-library --confirm-rollback | unreal-bootstrap-routes | preflight [APP_ID] [--backend regression] | launch APP_ID [--backend regression] | switch regression | runs | processes [RUN_ID] | profiles | engines | certifications | technologies | candidates | optimization | requirements | repair-receipts | research | research-protocol | research-open | research-hypothesis | research-stage | research-attach-run | research-gate | research-artifact | research-finish | research-pause | research-complete | database | verify RUN_ID perfect|playable|failed [--note TEXTO] | observe APP_ID perfect|playable|failed --backend regression --name NOMBRE [--note TEXTO] | observations | export RUTA]")
             exit(64)
+        }
+    }
+
+    private static func anchoredDescriptor(forAbsolutePath path: String) throws -> Int32 {
+        let components = Array(URL(fileURLWithPath: path).pathComponents.dropFirst())
+        guard !components.isEmpty,
+              components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
+            throw RegressionCoreError.invalidEvidence(
+                "no se pudo abrir una ruta para persistencia durable"
+            )
+        }
+        var descriptor = Darwin.open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard descriptor >= 0 else {
+            throw RegressionCoreError.invalidEvidence(
+                "no se pudo abrir una ruta para persistencia durable"
+            )
+        }
+        for (index, component) in components.enumerated() {
+            let isFinal = index == components.index(before: components.endIndex)
+            let flags = O_RDONLY | O_NOFOLLOW | O_CLOEXEC | (isFinal ? 0 : O_DIRECTORY)
+            let next = component.withCString { Darwin.openat(descriptor, $0, flags) }
+            guard next >= 0 else {
+                Darwin.close(descriptor)
+                throw RegressionCoreError.invalidEvidence(
+                    "no se pudo abrir una ruta para persistencia durable"
+                )
+            }
+            Darwin.close(descriptor)
+            descriptor = next
+        }
+        return descriptor
+    }
+
+    private static func regressionLaunchContext(
+        appID: String,
+        game: SteamGame,
+        installation: RegressionInstallation,
+        applicationURL: URL
+    ) -> RunContext {
+        let bundle = Bundle(url: applicationURL) ?? .main
+        let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString")
+            as? String ?? "desconocida"
+        let configuration = ConfigurationCollector.snapshot(
+            bottleURL: installation.bottleURL,
+            backend: .regression,
+            providerVersion: version,
+            game: game,
+            steamRootURL: installation.steamRootURL
+        )
+        return RunContext(
+            appID: appID,
+            gameName: game.name,
+            backend: .regression,
+            bottleName: "Steam",
+            providerVersion: version,
+            command: "regression-engine",
+            arguments: ["-applaunch", appID],
+            system: SystemSnapshot(
+                macOSVersion: ProcessInfo.processInfo.operatingSystemVersionString,
+                architecture: SystemInformation.architecture,
+                deviceModel: SystemInformation.deviceModel(),
+                displayWidth: 0,
+                displayHeight: 0,
+                displayScale: 1
+            ),
+            configuration: configuration,
+            configurationFingerprint: ConfigurationCollector.fingerprint(configuration)
+        )
+    }
+
+    private static func regressionLaunchComponentHealth(
+        installation: RegressionInstallation,
+        applicationURL: URL,
+        applicationSupportURL: URL
+    ) -> LaunchEnvelopeComponentHealth {
+        let bundle = Bundle(url: applicationURL) ?? .main
+        let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString")
+            as? String ?? "desconocida"
+        let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion")
+            as? String ?? "desconocida"
+        let variant: ComponentArtifactVariant = applicationURL.standardizedFileURL.path
+            == "/Applications/Regression.app" ? .publicInstalled : .development
+        let windowsMedia = ComponentHealthService.evaluate(
+            TrustedComponentCatalog.windowsMediaDescriptor(
+                applicationVersion: version,
+                buildIdentifier: build,
+                variant: variant,
+                applicationBundleURL: applicationURL,
+                applicationSupportURL: applicationSupportURL
+            )
+        )
+        return LaunchEnvelopeComponentHealth(
+            runtime: RegressionLaunchComponentGate.evaluate(installation: installation),
+            windowsMedia: windowsMedia
+        )
+    }
+
+    /// Nunca convierte una excepción de CLI en una ejecución verificada. Si Steam ya recibió la
+    /// solicitud, el envelope permanece pendiente de telemetría; si no, se cierra como fallo
+    /// previo al spawn y deja un recibo explícito.
+    private static func reconcileFailedLaunchEnvelope(
+        id: UUID,
+        repository: CompatibilityRepository
+    ) async throws -> Bool {
+        guard let envelope = try await repository.launchEnvelope(id: id) else { return false }
+        switch envelope.phase {
+        case .intentDurable, .spawnAuthorized:
+            try await repository.failLaunchEnvelopeBeforeSpawn(id: id)
+            return true
+        case .spawnStarted:
+            try await repository.advanceLaunchEnvelopeWithReceipt(
+                id: id,
+                to: .awaitingTelemetry,
+                result: .awaitingTelemetry
+            )
+            return false
+        case .awaitingTelemetry, .awaitingVerification, .completed, .failedBeforeSpawn,
+             .rollbackPending, .rolledBack:
+            return envelope.phase == .failedBeforeSpawn
         }
     }
 

@@ -116,9 +116,14 @@ public enum RegressionLaunchComponentGate {
     public static func requireReady(_ report: ComponentHealthReport) throws {
         guard report.identity.componentID
                 == TrustedComponentCatalog.steamRuntimePrerequisitesComponentID,
+              report.identity.componentVersion
+                == TrustedComponentCatalog.steamRuntimePrerequisitesComponentVersion,
+              report.identity.buildIdentifier
+                == TrustedComponentCatalog.supportedBuildIdentifier,
+              report.identity.variant == .publicInstalled,
               report.status == .ready else {
             throw RegressionCoreError.unsafeLibraryState(
-                "El runtime sellado de VC++/UCRT no supera ComponentHealth; "
+                "El runtime sellado de Wine/VC++/UCRT no supera ComponentHealth; "
                     + "Regression no abrirá Steam ni juegos"
             )
         }
@@ -133,6 +138,8 @@ public actor BackendCoordinator {
     private let custodyInterlock: (any PhysicalLibraryCustodyInterlocking)?
     private let regressionComponentHealthProvider:
         @Sendable (RegressionInstallation) -> ComponentHealthReport
+    private let rendererLaunchValidator:
+        @Sendable (RegressionInstallation, String?) throws -> Void
 
     public init(
         processRunner: any ProcessRunning,
@@ -147,6 +154,7 @@ public actor BackendCoordinator {
         self.logDirectoryURL = logDirectoryURL
         self.custodyInterlock = custodyInterlock
         self.regressionComponentHealthProvider = RegressionLaunchComponentGate.evaluate
+        self.rendererLaunchValidator = RendererLaunchGate.validate
     }
 
     init(
@@ -157,7 +165,11 @@ public actor BackendCoordinator {
         custodyInterlock: (any PhysicalLibraryCustodyInterlocking)? = nil,
         regressionComponentHealthProvider: @escaping @Sendable (
             RegressionInstallation
-        ) -> ComponentHealthReport
+        ) -> ComponentHealthReport,
+        rendererLaunchValidator: @escaping @Sendable (
+            RegressionInstallation,
+            String?
+        ) throws -> Void = RendererLaunchGate.validate
     ) {
         self.processRunner = processRunner
         self.processLauncher = processLauncher
@@ -165,21 +177,63 @@ public actor BackendCoordinator {
         self.logDirectoryURL = logDirectoryURL
         self.custodyInterlock = custodyInterlock
         self.regressionComponentHealthProvider = regressionComponentHealthProvider
+        self.rendererLaunchValidator = rendererLaunchValidator
     }
 
     public func runningState() async -> RunningBackendState {
         await inspector.runningBackends()
     }
 
-    public func launchSteam(
+    /// Abre solo Steam. Esta superficie no acepta App ID ni autoridad de spawn de juego: usarla
+    /// para un juego impediría registrar el envelope durable obligatorio.
+    public func launchSteamGeneral(
         backend: BackendKind,
         installations: InstallationSnapshot,
-        appID: String? = nil,
         custodyValidationLease: PhysicalLibraryCustodyValidationLease? = nil
     ) async throws -> BackendLaunch {
+        try await launchSteam(
+            backend: backend,
+            installations: installations,
+            normalizedAppID: nil,
+            custodyValidationLease: custodyValidationLease,
+            gameLaunchAuthority: nil
+        )
+    }
+
+    /// Lanza un App ID únicamente con una capacidad opaca nacida de un envelope autorizado.
+    /// No hay sobrecarga pública que admita un `String` App ID y un callback opcional.
+    package func launchGame(
+        backend: BackendKind,
+        installations: InstallationSnapshot,
+        spawnAuthority: CompatibilityRepository.GameLaunchSpawnAuthority,
+        custodyValidationLease: PhysicalLibraryCustodyValidationLease? = nil
+    ) async throws -> BackendLaunch {
+        let normalizedAppID = try spawnAuthority.appIDForBoundGameLaunch()
+        return try await launchSteam(
+            backend: backend,
+            installations: installations,
+            normalizedAppID: normalizedAppID,
+            custodyValidationLease: custodyValidationLease,
+            gameLaunchAuthority: spawnAuthority
+        )
+    }
+
+    private func launchSteam(
+        backend: BackendKind,
+        installations: InstallationSnapshot,
+        normalizedAppID: String?,
+        custodyValidationLease: PhysicalLibraryCustodyValidationLease?,
+        gameLaunchAuthority: CompatibilityRepository.GameLaunchSpawnAuthority?
+    ) async throws -> BackendLaunch {
         try requireRegressionBackend(backend)
+        if normalizedAppID == nil, gameLaunchAuthority != nil {
+            throw RegressionCoreError.invalidEvidence("Steam general no admite autoridad de juego")
+        }
         if backend == .regression {
-            try validateRegressionLaunchComponents(installations.regression)
+            try validateRegressionLaunchComponents(
+                installations.regression,
+                appID: normalizedAppID
+            )
             try CompiledRepairActivationStore.validateLaunchSafety(
                 in: installations.regression.bottleURL
             )
@@ -189,11 +243,27 @@ public actor BackendCoordinator {
             custodyValidationLease: custodyValidationLease
         )
         defer { custodyPermit?.release() }
-        let processLaunchAuthority = ProcessLaunchAuthority(
+        let bootstrapProcessLaunchAuthority = ProcessLaunchAuthority(
             regressionInstallation: backend == .regression ? installations.regression : nil,
             custodyPermit: custodyPermit,
-            regressionComponentHealthProvider: regressionComponentHealthProvider
+            normalizedAppID: nil,
+            regressionComponentHealthProvider: regressionComponentHealthProvider,
+            rendererLaunchValidator: rendererLaunchValidator,
+            gameLaunchAuthority: nil
         )
+        let gameProcessLaunchAuthority: ProcessLaunchAuthority?
+        if let normalizedAppID, let gameLaunchAuthority {
+            gameProcessLaunchAuthority = ProcessLaunchAuthority(
+                regressionInstallation: backend == .regression ? installations.regression : nil,
+                custodyPermit: custodyPermit,
+                normalizedAppID: normalizedAppID,
+                regressionComponentHealthProvider: regressionComponentHealthProvider,
+                rendererLaunchValidator: rendererLaunchValidator,
+                gameLaunchAuthority: gameLaunchAuthority
+            )
+        } else {
+            gameProcessLaunchAuthority = nil
+        }
         let running = await inspector.runningBackends()
         if running.hasConflict {
             throw RegressionCoreError.backendConflict
@@ -201,7 +271,7 @@ public actor BackendCoordinator {
         if let active = running.activeBackend, active != backend {
             throw RegressionCoreError.backendAlreadyRunning(active)
         }
-        if appID == nil, running.activeBackend == backend {
+        if normalizedAppID == nil, running.activeBackend == backend {
             throw RegressionCoreError.backendAlreadyRunning(backend)
         }
         let launchIntent = try await custodyInterlock?.registerPhysicalLibraryLaunchIntent(
@@ -215,10 +285,7 @@ public actor BackendCoordinator {
         }
 
         let steamArguments: [String]
-        if let appID {
-            guard let normalized = SteamAppID.normalized(appID) else {
-                throw RegressionCoreError.launchFailed("El Steam App ID no es válido")
-            }
+        if let normalized = normalizedAppID {
             let needsBootstrap = backend == .regression
                 && running.activeBackend == nil
                 && GameRuntimeProfileCatalog.profile(
@@ -233,7 +300,7 @@ public actor BackendCoordinator {
                 installations: installations,
                 custodyValidationLease: custodyValidationLease,
                 launchIntent: launchIntent,
-                processLaunchAuthority: processLaunchAuthority
+                processLaunchAuthority: bootstrapProcessLaunchAuthority
             )
             steamArguments = ["-applaunch", normalized]
         } else {
@@ -249,7 +316,10 @@ public actor BackendCoordinator {
             throw RegressionCoreError.launcherMissing(command.executableURL)
         }
         if backend == .regression {
-            try validateRegressionLaunchComponents(installations.regression)
+            try validateRegressionLaunchComponents(
+                installations.regression,
+                appID: normalizedAppID
+            )
             try CompiledRepairActivationStore.validateLaunchSafety(
                 in: installations.regression.bottleURL
             )
@@ -260,7 +330,7 @@ public actor BackendCoordinator {
             executableURL: command.executableURL,
             arguments: command.arguments,
             logDirectoryURL: logDirectoryURL,
-            authority: processLaunchAuthority
+            authority: gameProcessLaunchAuthority ?? bootstrapProcessLaunchAuthority
         )
         if let launchIntent {
             try await custodyInterlock?.attachPhysicalLibraryLaunch(launch, to: launchIntent)
@@ -304,7 +374,10 @@ public actor BackendCoordinator {
             backend,
             custodyValidationLease: custodyValidationLease
         )
-        try validateRegressionLaunchComponents(installations.regression)
+        try validateRegressionLaunchComponents(
+            installations.regression,
+            appID: appID
+        )
         try CompiledRepairActivationStore.validateLaunchSafety(
             in: installations.regression.bottleURL
         )
@@ -436,7 +509,7 @@ public actor BackendCoordinator {
                 custodyValidationLease: custodyValidationLease
             )
         }
-        return try await launchSteam(
+        return try await launchSteamGeneral(
             backend: target,
             installations: installations,
             custodyValidationLease: custodyValidationLease
@@ -469,11 +542,13 @@ public actor BackendCoordinator {
     }
 
     private func validateRegressionLaunchComponents(
-        _ installation: RegressionInstallation
+        _ installation: RegressionInstallation,
+        appID: String?
     ) throws {
         try RegressionLaunchComponentGate.requireReady(
             regressionComponentHealthProvider(installation)
         )
+        try rendererLaunchValidator(installation, appID)
     }
 
     /// Los diagnósticos de solo lectura siguen disponibles durante una transacción, pero jamás

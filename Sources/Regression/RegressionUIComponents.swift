@@ -377,6 +377,27 @@ struct RegressionStatusBadge: View {
   }
 }
 
+/// La fase forma parte del estado, no del texto de error. Así VoiceOver, fixtures y acciones de
+/// recuperación pueden explicar qué tramo de custodia se detuvo sin intentar inferirlo de una
+/// cadena localizada o de un diario privado.
+enum LibraryCustodyFailurePhase: String, Equatable {
+  case assessment
+  case transfer
+  case validation
+  case rollback
+  case reconciliation
+
+  var accessibilityLabel: String {
+    switch self {
+    case .assessment: "evaluación"
+    case .transfer: "traslado"
+    case .validation: "validación"
+    case .rollback: "restauración"
+    case .reconciliation: "reconciliación"
+    }
+  }
+}
+
 enum LibraryIndependenceState: Equatable {
   case eligible
   case preparing
@@ -386,7 +407,7 @@ enum LibraryIndependenceState: Equatable {
   case pendingValidation
   case validating
   case rollingBack
-  case error(String)
+  case error(phase: LibraryCustodyFailurePhase, detail: String)
   case independent
 
   var isBusy: Bool {
@@ -438,7 +459,7 @@ enum LibraryIndependenceState: Equatable {
     case .pendingValidation: "Esperando validación con Steam"
     case .validating: "Validando Steam y juegos con Regression"
     case .rollingBack: "Restaurando el estado anterior"
-    case .error: "Necesita atención"
+    case let .error(phase, _): "Necesita atención durante \(phase.accessibilityLabel)"
     case .independent: "Independencia validada"
     }
   }
@@ -492,8 +513,8 @@ struct RegressionCustodyProgress: View {
       Text(title)
         .regressionFont(.caption2.weight(index == activeStage ? .semibold : .regular))
         .foregroundStyle(index <= activeStage ? Color.primary : Color.regressionSecondary)
-        .lineLimit(1)
-        .fixedSize(horizontal: true, vertical: false)
+        .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+        .fixedSize(horizontal: false, vertical: true)
     } icon: {
       Image(systemName: symbol(for: index))
         .foregroundStyle(color(for: index))
@@ -502,10 +523,17 @@ struct RegressionCustodyProgress: View {
 
   private var activeStage: Int {
     switch state {
-    case .eligible, .preparing, .preCutover, .error: 0
+    case .eligible, .preparing, .preCutover: 0
     case .cutover: 1
     case .verifying, .rollingBack: 2
     case .pendingValidation, .validating, .independent: 3
+    case let .error(phase, _):
+      switch phase {
+      case .assessment, .reconciliation: 0
+      case .transfer: 1
+      case .rollback: 2
+      case .validation: 3
+      }
     }
   }
 

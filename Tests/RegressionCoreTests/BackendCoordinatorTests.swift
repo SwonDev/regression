@@ -28,7 +28,7 @@ final class BackendCoordinatorTests: XCTestCase {
         )
 
         do {
-            _ = try await coordinator.launchSteam(
+            _ = try await coordinator.launchSteamGeneral(
                 backend: .regression,
                 installations: installations(regressionBottleURL: bottle)
             )
@@ -63,7 +63,7 @@ final class BackendCoordinatorTests: XCTestCase {
         )
 
         do {
-            _ = try await coordinator.launchSteam(
+            _ = try await coordinator.launchSteamGeneral(
                 backend: .regression,
                 installations: installations(regressionBottleURL: bottle)
             )
@@ -92,7 +92,7 @@ final class BackendCoordinatorTests: XCTestCase {
             )
 
             do {
-                _ = try await coordinator.launchSteam(
+                _ = try await coordinator.launchSteamGeneral(
                     backend: backend,
                     installations: installations()
                 )
@@ -125,7 +125,7 @@ final class BackendCoordinatorTests: XCTestCase {
         )
 
         do {
-            _ = try await coordinator.launchSteam(
+            _ = try await coordinator.launchSteamGeneral(
                 backend: .crossOver,
                 installations: installations()
             )
@@ -149,7 +149,7 @@ final class BackendCoordinatorTests: XCTestCase {
         )
 
         do {
-            _ = try await coordinator.launchSteam(
+            _ = try await coordinator.launchSteamGeneral(
                 backend: .crossOver,
                 installations: installations()
             )
@@ -197,7 +197,7 @@ final class BackendCoordinatorTests: XCTestCase {
             )
         )
 
-        _ = try await coordinator.launchSteam(
+        _ = try await coordinator.launchSteamGeneral(
             backend: .regression,
             installations: installations()
         )
@@ -223,7 +223,7 @@ final class BackendCoordinatorTests: XCTestCase {
             custodyInterlock: interlock
         )
 
-        _ = try await coordinator.launchSteam(
+        _ = try await coordinator.launchSteamGeneral(
             backend: .regression,
             installations: installations()
         )
@@ -242,7 +242,7 @@ final class BackendCoordinatorTests: XCTestCase {
             )
         )
         do {
-            _ = try await coordinator.launchSteam(
+            _ = try await coordinator.launchSteamGeneral(
                 backend: .crossOver,
                 installations: self.installations()
             )
@@ -379,7 +379,7 @@ final class BackendCoordinatorTests: XCTestCase {
         )
 
         do {
-            _ = try await coordinator.launchSteam(
+            _ = try await coordinator.launchSteamGeneral(
                 backend: .regression,
                 installations: installations()
             )
@@ -393,6 +393,38 @@ final class BackendCoordinatorTests: XCTestCase {
         }
     }
 
+    func testSealedRuntimeGateRejectsReadyReportFromStaleContract() {
+        let staleReport = ComponentHealthReport(
+            identity: ComponentIdentity(
+                componentID: TrustedComponentCatalog.steamRuntimePrerequisitesComponentID,
+                componentVersion: "1",
+                variant: .publicInstalled,
+                buildIdentifier: TrustedComponentCatalog.supportedBuildIdentifier
+            ),
+            status: .ready,
+            recovery: .none
+        )
+
+        XCTAssertThrowsError(try RegressionLaunchComponentGate.requireReady(staleReport))
+    }
+
+    func testSealedRuntimeGateRejectsFabricatedReadyDevelopmentVariant() {
+        let fabricatedDevelopmentReport = ComponentHealthReport(
+            identity: ComponentIdentity(
+                componentID: TrustedComponentCatalog.steamRuntimePrerequisitesComponentID,
+                componentVersion: TrustedComponentCatalog.steamRuntimePrerequisitesComponentVersion,
+                variant: .development,
+                buildIdentifier: TrustedComponentCatalog.supportedBuildIdentifier
+            ),
+            status: .ready,
+            recovery: .none
+        )
+
+        XCTAssertThrowsError(
+            try RegressionLaunchComponentGate.requireReady(fabricatedDevelopmentReport)
+        )
+    }
+
     func testConflictPreventsLaunchingAnotherSteam() async throws {
         let inspector = StubProcessInspector(states: [
             RunningBackendState(crossOverPIDs: [10], regressionPIDs: [20]),
@@ -401,7 +433,7 @@ final class BackendCoordinatorTests: XCTestCase {
         let coordinator = coordinator(inspector: inspector, launcher: launcher)
 
         do {
-            _ = try await coordinator.launchSteam(
+            _ = try await coordinator.launchSteamGeneral(
                 backend: .regression,
                 installations: installations()
             )
@@ -421,15 +453,44 @@ final class BackendCoordinatorTests: XCTestCase {
         let launcher = StubProcessLauncher()
         let coordinator = coordinator(inspector: inspector, launcher: launcher)
 
-        _ = try await coordinator.launchSteam(
+        _ = try await coordinator.launchGame(
             backend: .regression,
             installations: installations(),
-            appID: "000219990"
+            spawnAuthority: .testing(appID: "219990")
         )
 
         let commands = await launcher.commands()
         XCTAssertEqual(commands.count, 1)
         XCTAssertEqual(commands.first?.arguments, ["-applaunch", "219990"])
+    }
+
+    func testBoundGameAuthorityLaunchesItsOwnAppIDExactlyOnce() async throws {
+        let inspector = StubProcessInspector(states: [
+            RunningBackendState(regressionPIDs: [20]),
+        ])
+        let launcher = StubProcessLauncher()
+        let coordinator = coordinator(inspector: inspector, launcher: launcher)
+        let authority = CompatibilityRepository.GameLaunchSpawnAuthority.testing(appID: "219990")
+
+        _ = try await coordinator.launchGame(
+            backend: .regression,
+            installations: installations(),
+            spawnAuthority: authority
+        )
+
+        do {
+            _ = try await coordinator.launchGame(
+                backend: .regression,
+                installations: self.installations(),
+                spawnAuthority: authority
+            )
+            XCTFail("La misma autoridad no puede abrir un segundo proceso")
+        } catch {
+            // esperado: la capacidad one-shot ya se consumió antes del primer spawn.
+        }
+        let commands = await launcher.commands()
+        XCTAssertEqual(commands.count, 1)
+        XCTAssertEqual(commands[0].arguments, ["-applaunch", "219990"])
     }
 
     func testTitanQuest2StartsSteamBeforeItsUnifiedAppLaunchRoute() async throws {
@@ -440,10 +501,10 @@ final class BackendCoordinatorTests: XCTestCase {
         let launcher = StubProcessLauncher()
         let coordinator = coordinator(inspector: inspector, launcher: launcher)
 
-        _ = try await coordinator.launchSteam(
+        _ = try await coordinator.launchGame(
             backend: .regression,
             installations: installations(),
-            appID: "1154030"
+            spawnAuthority: .testing(appID: "1154030")
         )
 
         let commands = await launcher.commands()
@@ -472,10 +533,10 @@ final class BackendCoordinatorTests: XCTestCase {
         let coordinator = coordinator(inspector: inspector, launcher: launcher)
         let snapshot = installations(regressionBottleURL: temporaryRoot)
         let launchTask = Task {
-            try await coordinator.launchSteam(
+            try await coordinator.launchGame(
                 backend: .regression,
                 installations: snapshot,
-                appID: "1154030"
+                spawnAuthority: .testing(appID: "1154030")
             )
         }
 
@@ -501,10 +562,10 @@ final class BackendCoordinatorTests: XCTestCase {
         let launcher = StubProcessLauncher()
         let coordinator = coordinator(inspector: inspector, launcher: launcher)
 
-        _ = try await coordinator.launchSteam(
+        _ = try await coordinator.launchGame(
             backend: .regression,
             installations: installations(),
-            appID: "219990"
+            spawnAuthority: .testing(appID: "219990")
         )
 
         let commands = await launcher.commands()
@@ -551,7 +612,7 @@ final class BackendCoordinatorTests: XCTestCase {
         let damaged = installations(crossOverHealth: .damaged)
 
         do {
-            _ = try await coordinator.launchSteam(
+            _ = try await coordinator.launchSteamGeneral(
                 backend: .crossOver,
                 installations: damaged
             )
@@ -570,7 +631,11 @@ final class BackendCoordinatorTests: XCTestCase {
         custodyInterlock: (any PhysicalLibraryCustodyInterlocking)? = nil,
         componentHealthProvider: @escaping @Sendable (RegressionInstallation) -> ComponentHealthReport = {
             _ in testComponentHealth(status: .ready)
-        }
+        },
+        rendererLaunchValidator: @escaping @Sendable (
+            RegressionInstallation,
+            String?
+        ) throws -> Void = { _, _ in }
     ) -> BackendCoordinator {
         BackendCoordinator(
             processRunner: StubProcessRunner(),
@@ -578,7 +643,8 @@ final class BackendCoordinatorTests: XCTestCase {
             inspector: inspector,
             logDirectoryURL: FileManager.default.temporaryDirectory,
             custodyInterlock: custodyInterlock,
-            regressionComponentHealthProvider: componentHealthProvider
+            regressionComponentHealthProvider: componentHealthProvider,
+            rendererLaunchValidator: rendererLaunchValidator
         )
     }
 
@@ -647,7 +713,7 @@ private func testComponentHealth(status: ComponentHealthStatus) -> ComponentHeal
         identity: ComponentIdentity(
             componentID: TrustedComponentCatalog.steamRuntimePrerequisitesComponentID,
             componentVersion: TrustedComponentCatalog.steamRuntimePrerequisitesComponentVersion,
-            variant: .development,
+            variant: .publicInstalled,
             buildIdentifier: TrustedComponentCatalog.supportedBuildIdentifier
         ),
         status: status,
