@@ -6,6 +6,7 @@ WINE_SOURCE="${REGRESSION_WINE_SOURCE:-$ROOT/sources-26.3.0/wine}"
 
 PATCHES=(
     "$ROOT/patches/wine-26.3.0-winemac-cxpresent-consumer.patch"
+    "$ROOT/patches/wine-26.3.0-winemac-explorer-dockless.patch"
     "$ROOT/patches/wine-26.3.0-per-process-graphics-routing.patch"
     "$ROOT/patches/wine-26.3.0-device-notification-invalid-handle.patch"
     "$ROOT/patches/wine-26.3.0-tq2-steam-startup-image.patch"

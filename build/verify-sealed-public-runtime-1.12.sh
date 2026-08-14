@@ -37,7 +37,7 @@ verify_raw_runtime_file \
     48ae6acb327148f3d8f02afcc93d8f8e61ab333b1dec752918244e58828cf5c9 \
     loader/wine
 verify_raw_runtime_file \
-    a8543b9f7ca817eb9555cc4bd1c21943409f27107ea8289f04ae985c92732619 \
+    ff2a734999bf918507c90de4e910a740b6c4da2e05d0d028733eff82fb0239f2 \
     dlls/ntdll/ntdll.so
 
 NTDLL="$PUBLIC_BUILD/dlls/ntdll/ntdll.so"

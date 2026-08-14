@@ -7,8 +7,8 @@ MACOS_DIR="$APP/Contents/MacOS"
 PLIST="$APP/Contents/Info.plist"
 RESOURCES_DIR="$APP/Contents/Resources"
 STATE_ICON_DIR="$ROOT/assets/menubar/states"
-VERSION="1.12.2"
-BUILD_NUMBER="40"
+VERSION="1.12.3"
+BUILD_NUMBER="41"
 BACKUP_ROOT="$ROOT/backups/native-packaging"
 COMPATIBILITY_ROOT="${REGRESSION_COMPATIBILITY_ROOT:-$HOME/Library/Application Support/Regression/Compatibility}"
 COMPATIBILITY_DB="$COMPATIBILITY_ROOT/compatibility.sqlite"
@@ -219,8 +219,8 @@ fi
 verify_prepackage_state
 
 cd "$ROOT"
-swift build -c release --product Regression
-swift build -c release --product regressionctl
+swift build -c release -Xswiftc -warnings-as-errors --product Regression
+swift build -c release -Xswiftc -warnings-as-errors --product regressionctl
 BUILD_DIR="$(swift build -c release --show-bin-path)"
 BINARY="$BUILD_DIR/Regression"
 CONTROL_BINARY="$BUILD_DIR/regressionctl"

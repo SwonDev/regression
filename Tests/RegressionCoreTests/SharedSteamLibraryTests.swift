@@ -179,6 +179,63 @@ final class SharedSteamLibraryTests: XCTestCase {
         XCTAssertEqual(assessment.inventory.regularFileCount, 1)
     }
 
+    func testLegacyReceiptSurvivesDeviceRenumberingAcrossReboot() async throws {
+        let fixture = try CustodyFixture()
+        defer { fixture.remove() }
+        try FileManager.default.removeItem(at: fixture.crossOverSteamApps)
+        let volumeIdentity = "stable-volume-identity"
+        let manager = SharedSteamLibraryManager(
+            backupRootURL: fixture.backupRoot,
+            volumeIdentityProvider: { _ in volumeIdentity }
+        )
+        let initialized = await manager.assessPhysicalCustody(
+            regression: fixture.regression,
+            legacyIdentity: fixture.legacyIdentity,
+            runningState: .init()
+        )
+        XCTAssertEqual(initialized.status, .independent)
+        let originalIdentity = try fixture.identity(at: fixture.regressionSteamApps)
+
+        for receiptURL in [fixture.receipt, fixture.receiptMirror] {
+            let data = try Data(contentsOf: receiptURL)
+            var receipt = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: data) as? [String: Any]
+            )
+            var identity = try XCTUnwrap(receipt["identity"] as? [String: Any])
+            identity["device"] = NSNumber(value: originalIdentity[0] + 1)
+            receipt["identity"] = identity
+            receipt["schemaVersion"] = 2
+            receipt.removeValue(forKey: "destinationVolumeIdentity")
+            try JSONSerialization.data(
+                withJSONObject: receipt,
+                options: [.prettyPrinted, .sortedKeys]
+            ).write(to: receiptURL)
+        }
+
+        let restarted = SharedSteamLibraryManager(
+            backupRootURL: fixture.backupRoot,
+            volumeIdentityProvider: { _ in volumeIdentity }
+        )
+        let snapshot = await restarted.currentPhysicalLibraryCustodyInterlock()
+
+        XCTAssertEqual(snapshot.status, .independent)
+        XCTAssertEqual(snapshot.mutationPolicy, .unrestricted)
+        XCTAssertEqual(try fixture.identity(at: fixture.regressionSteamApps), originalIdentity)
+        let launchPermit = try await restarted.acquirePhysicalLibraryCustodyMutationPermit(
+            backend: .regression,
+            validationLease: nil
+        )
+        launchPermit.release()
+        for receiptURL in [fixture.receipt, fixture.receiptMirror] {
+            let receipt = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: Data(contentsOf: receiptURL))
+                    as? [String: Any]
+            )
+            XCTAssertEqual(receipt["schemaVersion"] as? Int, 3)
+            XCTAssertEqual(receipt["destinationVolumeIdentity"] as? String, volumeIdentity)
+        }
+    }
+
     func testFreshIndependentLibraryDoesNotDependOnFutureCrossOverInstallation() async throws {
         let fixture = try CustodyFixture()
         defer { fixture.remove() }
@@ -1438,6 +1495,7 @@ private final class CustodyFixture {
 
     var journal: URL { backupRoot.appendingPathComponent("physical-custody-journal.json") }
     var receipt: URL { backupRoot.appendingPathComponent("physical-custody-receipt.json") }
+    var receiptMirror: URL { backupRoot.appendingPathComponent("physical-custody-receipt.mirror.json") }
 
     func makeSharedLayout(relativeLink: Bool = false) throws {
         if pathExists(regressionSteamApps) { try FileManager.default.removeItem(at: regressionSteamApps) }

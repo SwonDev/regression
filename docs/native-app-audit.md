@@ -5,7 +5,7 @@
 > propios y no contiene red, CLI ni backend de CodeWeavers. Las menciones posteriores a CrossOver
 > se conservan únicamente como evidencia fechada de aquella etapa; no son instrucciones vigentes.
 
-> **Adenda actual, 14 de agosto de 2026.** El código fuente prepara Regression **1.12.2 (40)** y
+> **Adenda actual, 14 de agosto de 2026.** El código fuente prepara Regression **1.12.3 (41)** y
 > SQLite **v17**; **v1.11.0 (37)** sigue siendo el baseline publicado. El hito v15 exige un proceso
 > representativo exacto y todos los PID cerrados antes de aceptar un perfecto, propaga la salud
 > tipada y acotada del monitor de Steam y autoriza Windows Media solo para un App ID con evidencia

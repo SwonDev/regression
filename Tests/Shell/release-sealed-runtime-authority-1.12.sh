@@ -74,7 +74,7 @@ for pin in \
     668a88221884f4e62f3d40bed4a125a45e2e745c1d56610f8e3a33273a219299 \
     173c4926f53d0551d85ee6efe48e641867230a27bda7fc6a226ac484012d13fb \
     48ae6acb327148f3d8f02afcc93d8f8e61ab333b1dec752918244e58828cf5c9 \
-    a8543b9f7ca817eb9555cc4bd1c21943409f27107ea8289f04ae985c92732619
+    ff2a734999bf918507c90de4e910a740b6c4da2e05d0d028733eff82fb0239f2
 do
     /usr/bin/grep -Fq "$pin" "$VERIFIER" \
         || fail "falta el PIN raw 1.12 del builder sellado: $pin"

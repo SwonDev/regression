@@ -39,7 +39,7 @@ latest_migration="$(/usr/bin/sed -nE \
     || fail "currentSchemaVersion=$current_schema no coincide con la última migración=$latest_migration"
 
 for file in README.md AGENTS.md CLAUDE.md docs/README.md; do
-    require_literal "$file" '1.12.2 (40)'
+    require_literal "$file" '1.12.3 (41)'
     require_literal "$file" 'v1.11.0 (37)'
 done
 
@@ -82,5 +82,5 @@ require_absent README.md 'puede reintentarse automáticamente una sola vez'
 require_absent docs/runtime-evolution.md 'antes del relanzamiento se revierte la reparación'
 require_absent docs/game-test-readiness.md 'Una interrupción conserva la fase para una futura decisión segura'
 
-printf 'PASS: documentación coherente con 1.12.2 (40), SQLite v%s y baseline v1.11.0.\n' \
+printf 'PASS: documentación coherente con 1.12.3 (41), SQLite v%s y baseline v1.11.0.\n' \
     "$current_schema"

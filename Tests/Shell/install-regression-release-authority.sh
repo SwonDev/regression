@@ -48,7 +48,7 @@ for script in "$INSTALLER" "$VERIFIER"; do
         'fed13faa895c9ea5896a6497490db26674c3dca2a318e3389d8e43ba3e00f552 bin/wine' \
         '8d14fb9d6d9730c300ba16b5997d98218a2a40a78008d60f3a6edb719f328db3 bin/wineserver' \
         '5636a6505e872c8d185d8db7ced2d4aa8e9057e81c4c579e4b623009f9c2857b lib/wine/x86_64-unix/wine' \
-        'f17cebf085a0a746224e61b4fc49341f7a0cec48741c5f12d1cc84a4dcd0ba5d lib/wine/x86_64-unix/ntdll.so' \
+        '687717fa95835146dfe4b45c6a29d7a82fb37742810fdb4213908dd3176b82e9 lib/wine/x86_64-unix/ntdll.so' \
         '0315a55b11a456590a9368f4cb8d0011d6735cc04c9093ea583570d1352e1ee1 share/wine/wine.inf' \
         '885c0421bfe30600bae9df83961b0fcbb5b9ccd1c02e7b071ce213ff2522e34a lib/wine/x86_64-windows/ntdll.dll' \
         '7b580e19eb4fce14b5730cd2835c5204dc2622ce0fc4f33b68b0155864477667 lib/wine/i386-windows/ntdll.dll'
@@ -63,7 +63,7 @@ for script in "$INSTALLER" "$VERIFIER"; do
         668a88221884f4e62f3d40bed4a125a45e2e745c1d56610f8e3a33273a219299 \
         173c4926f53d0551d85ee6efe48e641867230a27bda7fc6a226ac484012d13fb \
         48ae6acb327148f3d8f02afcc93d8f8e61ab333b1dec752918244e58828cf5c9 \
-        a8543b9f7ca817eb9555cc4bd1c21943409f27107ea8289f04ae985c92732619 \
+        ff2a734999bf918507c90de4e910a740b6c4da2e05d0d028733eff82fb0239f2 \
         f3ccf2a487d8999659a1e641b043b916487851c1540362a0a983cdf0fd0bb8cc
     do
         ! /usr/bin/grep -Fq "$pre_sign_hash" "$script" \
@@ -74,10 +74,10 @@ for script in "$INSTALLER" "$VERIFIER"; do
     /usr/bin/grep -Fq 'REGRESSION_EXTERNAL_D3DMETAL_(EXECUTABLE|WINE_ROOT)' "$script" \
         || fail "la ruta GPTK genérica heredada no se rechaza en $script"
 done
-/usr/bin/grep -Fq 'VERSION="1.12.2"' "$INSTALLER" \
-    || fail "el instalador no declara Regression 1.12.2"
-/usr/bin/grep -Fq 'BUILD_NUMBER="40"' "$INSTALLER" \
-    || fail "el instalador no declara el build 40"
+/usr/bin/grep -Fq 'VERSION="1.12.3"' "$INSTALLER" \
+    || fail "el instalador no declara Regression 1.12.3"
+/usr/bin/grep -Fq 'BUILD_NUMBER="41"' "$INSTALLER" \
+    || fail "el instalador no declara el build 41"
 /usr/bin/grep -Fq 'PATH="/usr/bin:/bin:/usr/sbin:/sbin"' "$INSTALLER" \
     || fail "el instalador público permite sustituir comandos de confianza mediante PATH"
 installer_preamble="$WORK_DIR/installer-preamble.sh"
@@ -106,7 +106,7 @@ runtime_authority_accepts()
         | /usr/bin/grep -Fxq "$expected_hash $expected_path"
 }
 runtime_authority_accepts \
-    f17cebf085a0a746224e61b4fc49341f7a0cec48741c5f12d1cc84a4dcd0ba5d \
+    687717fa95835146dfe4b45c6a29d7a82fb37742810fdb4213908dd3176b82e9 \
     lib/wine/x86_64-unix/ntdll.so \
     || fail "ntdll.so post-firma no supera la autoridad pública"
 if runtime_authority_accepts \

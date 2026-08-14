@@ -172,7 +172,7 @@ verify_hash 05a7beaed4494a4f5f53d3f626a82fffc3b70146436a908b7048a0632a49e1a8 "$A
 
 # Los módulos globales de Steam se protegen antes de construir o instalar el
 # perfil. Los perfiles solo pueden cambiar el router ntdll y sus directorios por proceso.
-verify_hash 4723d219a704ce6fe5a42bfe3340840083582c38f3436e0e614a205c0214f382 "$GLOBAL_WINEMAC_SO"
+verify_hash e2d3d63343702678441b4e28d9278f433fae543c460dd2e651ca1e399695e577 "$GLOBAL_WINEMAC_SO"
 verify_hash da91ec701a18e97c0c3cd943d383ef996092c11d74983876fd44c90b03d5e5b1 "$GLOBAL_WINEMAC_DRV"
 verify_hash 44b1379db1b9e3472d1746830eddd88718dbbc761de2e406d45b8be198593ef3 "$GLOBAL_NTDLL_PE64"
 verify_hash 3d2b085b1dce4db5615a2a95d96860b644e1bfd4c907d0a68d177d02bd2010e8 "$GLOBAL_NTDLL_PE32"
@@ -285,7 +285,7 @@ else
 fi
 
 verify_hash adb97ddb229a7e20b1cac89b88ba81cfd9c9871c801b97dc50a596f0c5e2f113 "$GLOBAL_NTDLL"
-verify_hash 4723d219a704ce6fe5a42bfe3340840083582c38f3436e0e614a205c0214f382 "$GLOBAL_WINEMAC_SO"
+verify_hash e2d3d63343702678441b4e28d9278f433fae543c460dd2e651ca1e399695e577 "$GLOBAL_WINEMAC_SO"
 verify_hash da91ec701a18e97c0c3cd943d383ef996092c11d74983876fd44c90b03d5e5b1 "$GLOBAL_WINEMAC_DRV"
 verify_hash 44b1379db1b9e3472d1746830eddd88718dbbc761de2e406d45b8be198593ef3 "$GLOBAL_NTDLL_PE64"
 verify_hash 3d2b085b1dce4db5615a2a95d96860b644e1bfd4c907d0a68d177d02bd2010e8 "$GLOBAL_NTDLL_PE32"

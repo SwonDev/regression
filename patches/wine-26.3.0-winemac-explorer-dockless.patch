@@ -1,0 +1,9 @@
+--- a/dlls/winemac.drv/cocoa_app.m
++++ b/dlls/winemac.drv/cocoa_app.m
+@@ -311,5 +311,6 @@
+                 dispatch_once(&onceToken, ^{
+                     blacklistedProcesses = [@[
+                         @"GOG Galaxy Notifications Renderer.exe",  /* Hack 24141 */
++                        @"explorer.exe",  /* Regression: the Wine desktop shell must remain a Dock-less helper. */
+                     ] retain];
+                 });

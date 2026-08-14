@@ -605,8 +605,8 @@ final class ComponentHealthTests: XCTestCase {
       applicationSupportURL: roots.applicationSupport
     )
     let current = TrustedComponentCatalog.windowsMediaDescriptor(
-      applicationVersion: "1.12.2",
-      buildIdentifier: "40",
+      applicationVersion: "1.12.3",
+      buildIdentifier: "41",
       variant: .publicInstalled,
       applicationBundleURL: roots.bundle,
       applicationSupportURL: roots.applicationSupport
@@ -746,8 +746,8 @@ final class ComponentHealthTests: XCTestCase {
     )
 
     let descriptor = TrustedComponentCatalog.steamRuntimePrerequisitesDescriptor(
-      applicationVersion: "1.12.2",
-      buildIdentifier: "40",
+      applicationVersion: "1.12.3",
+      buildIdentifier: "41",
       variant: .publicInstalled,
       wineRootURL: root
     )
@@ -755,13 +755,13 @@ final class ComponentHealthTests: XCTestCase {
     XCTAssertEqual(descriptor.identity.componentID, "steam-runtime-prerequisites")
     XCTAssertEqual(descriptor.identity.componentVersion, "3")
     XCTAssertEqual(descriptor.identity.variant, .publicInstalled)
-    XCTAssertEqual(descriptor.identity.buildIdentifier, "40")
+    XCTAssertEqual(descriptor.identity.buildIdentifier, "41")
     XCTAssertEqual(descriptor.payloadRootURL, root.standardizedFileURL)
     XCTAssertEqual(
       descriptor.identity,
       TrustedComponentCatalog.steamRuntimePrerequisitesDescriptor(
-        applicationVersion: "1.12.2",
-        buildIdentifier: "40",
+        applicationVersion: "1.12.3",
+        buildIdentifier: "41",
         variant: .publicInstalled,
         wineRootURL: root
       ).identity
@@ -778,7 +778,7 @@ final class ComponentHealthTests: XCTestCase {
         "lib/wine/x86_64-unix/wine":
           "5636a6505e872c8d185d8db7ced2d4aa8e9057e81c4c579e4b623009f9c2857b",
         "lib/wine/x86_64-unix/ntdll.so":
-          "f17cebf085a0a746224e61b4fc49341f7a0cec48741c5f12d1cc84a4dcd0ba5d",
+          "687717fa95835146dfe4b45c6a29d7a82fb37742810fdb4213908dd3176b82e9",
         "share/wine/wine.inf":
           "0315a55b11a456590a9368f4cb8d0011d6735cc04c9093ea583570d1352e1ee1",
         "lib/wine/x86_64-windows/ntdll.dll":
@@ -849,8 +849,8 @@ final class ComponentHealthTests: XCTestCase {
       isDirectory: true
     )
     let descriptor = TrustedComponentCatalog.steamRuntimePrerequisitesDescriptor(
-      applicationVersion: "1.12.2",
-      buildIdentifier: "40",
+      applicationVersion: "1.12.3",
+      buildIdentifier: "41",
       variant: .development,
       wineRootURL: root
     )
@@ -861,7 +861,7 @@ final class ComponentHealthTests: XCTestCase {
     XCTAssertEqual(report.recovery, .installSupportedApplicationBuild)
     XCTAssertEqual(
       report.issue,
-      .unsupportedVariant("Regression 1.12.2 (40): runtime de desarrollo sin PIN reproducible")
+      .unsupportedVariant("Regression 1.12.3 (41): runtime de desarrollo sin PIN reproducible")
     )
   }
 

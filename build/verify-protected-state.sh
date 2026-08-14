@@ -264,7 +264,7 @@ verify_release_1_12_development_runtime_authority()
         "668a88221884f4e62f3d40bed4a125a45e2e745c1d56610f8e3a33273a219299:tools/wine/wine:bin/wine"
         "173c4926f53d0551d85ee6efe48e641867230a27bda7fc6a226ac484012d13fb:server/wineserver:bin/wineserver"
         "48ae6acb327148f3d8f02afcc93d8f8e61ab333b1dec752918244e58828cf5c9:loader/wine:lib/wine/x86_64-unix/wine"
-        "a8543b9f7ca817eb9555cc4bd1c21943409f27107ea8289f04ae985c92732619:dlls/ntdll/ntdll.so:lib/wine/x86_64-unix/ntdll.so"
+        "ff2a734999bf918507c90de4e910a740b6c4da2e05d0d028733eff82fb0239f2:dlls/ntdll/ntdll.so:lib/wine/x86_64-unix/ntdll.so"
     )
 
     [[ -d "$runtime_build" && ! -L "$runtime_build" ]] || {
@@ -472,7 +472,7 @@ else
 fi
 verify_transition_hash 44b1379db1b9e3472d1746830eddd88718dbbc761de2e406d45b8be198593ef3 885c0421bfe30600bae9df83961b0fcbb5b9ccd1c02e7b071ce213ff2522e34a "Contents/SharedSupport/wine-root/lib/wine/x86_64-windows/ntdll.dll"
 verify_transition_hash 3d2b085b1dce4db5615a2a95d96860b644e1bfd4c907d0a68d177d02bd2010e8 7b580e19eb4fce14b5730cd2835c5204dc2622ce0fc4f33b68b0155864477667 "Contents/SharedSupport/wine-root/lib/wine/i386-windows/ntdll.dll"
-verify_transition_hash 4723d219a704ce6fe5a42bfe3340840083582c38f3436e0e614a205c0214f382 978c2fe766d06db1d52abd86f96674988caee93ac587951a951f994032e1fb46 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/winemac.so"
+verify_transition_hash e2d3d63343702678441b4e28d9278f433fae543c460dd2e651ca1e399695e577 978c2fe766d06db1d52abd86f96674988caee93ac587951a951f994032e1fb46 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/winemac.so"
 verify_transition_hash da91ec701a18e97c0c3cd943d383ef996092c11d74983876fd44c90b03d5e5b1 e921d454fbc67a40addb2e8e8e795f9d5274062b731c31a6280403850be687eb "Contents/SharedSupport/wine-root/lib/wine/x86_64-windows/winemac.drv"
 verify_transition_hash aaf38489b18bfeb967b7e6298510b46973ed79f516441b7fd74c95a3cf6b15ec 972000e02f63be8f84d414108d2f6aa5edd8e924111d1d58a07b8fa1b1c91060 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/winemetal.so"
 verify_hash 87ed91e86f1f4620f5229b7a0d4f1f8c5436a56088e8d4692201fe0c7d5b0deb "Contents/SharedSupport/wine-root/lib/wine/x86_64-windows/d3d10core.dll"

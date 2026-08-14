@@ -47,8 +47,8 @@ mantiene rollback hasta que Steam y un juego se validan de forma explícita.
 > termina correctamente no se marca como compatible por sí solo.
 
 > [!NOTE]
-> El contrato del código fuente de esta rama es **Regression 1.12.2 (40)** y SQLite **v17**.
-> **v1.12.2 (40)** corrige la instalación fresca de DXMT/Windows Media y reinicia Steam de forma segura tras autorizar GPTK 3. **v1.11.0 (37)** permanece como baseline
+> El contrato del código fuente de esta rama es **Regression 1.12.3 (41)** y SQLite **v17**.
+> **v1.12.3 (41)** conserva las correcciones de instalación fresca, GPTK 3 y reinicio seguro de Steam, hace durable la custodia de la biblioteca frente a la renumeración de volúmenes tras reiniciar macOS y mantiene el shell `explorer.exe` de Wine como auxiliar sin icono en el Dock. **v1.11.0 (37)** permanece como baseline
 > histórico verificable y como origen autorizado de la migración. La instalación de arriba
 > siempre descarga la última release publicada.
 
@@ -268,7 +268,7 @@ visual está en [`DESIGN.md`](DESIGN.md).
 
 ## Desarrollo
 
-Este checkout corresponde a la release **1.12.2 (40)**. Los helpers que nombran `public-1.11`
+Este checkout corresponde a la release **1.12.3 (41)**. Los helpers que nombran `public-1.11`
 son puertas históricas para comprobar la transición desde el asset anterior; no definen la
 versión estable actual.
 

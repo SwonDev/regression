@@ -22,7 +22,7 @@ release_runtime_authority_v2()
 fed13faa895c9ea5896a6497490db26674c3dca2a318e3389d8e43ba3e00f552 bin/wine
 8d14fb9d6d9730c300ba16b5997d98218a2a40a78008d60f3a6edb719f328db3 bin/wineserver
 5636a6505e872c8d185d8db7ced2d4aa8e9057e81c4c579e4b623009f9c2857b lib/wine/x86_64-unix/wine
-f17cebf085a0a746224e61b4fc49341f7a0cec48741c5f12d1cc84a4dcd0ba5d lib/wine/x86_64-unix/ntdll.so
+687717fa95835146dfe4b45c6a29d7a82fb37742810fdb4213908dd3176b82e9 lib/wine/x86_64-unix/ntdll.so
 0315a55b11a456590a9368f4cb8d0011d6735cc04c9093ea583570d1352e1ee1 share/wine/wine.inf
 885c0421bfe30600bae9df83961b0fcbb5b9ccd1c02e7b071ce213ff2522e34a lib/wine/x86_64-windows/ntdll.dll
 7b580e19eb4fce14b5730cd2835c5204dc2622ce0fc4f33b68b0155864477667 lib/wine/i386-windows/ntdll.dll
@@ -199,10 +199,10 @@ fi
     || fail "falta el onboarding y verificador Apple GPTK"
 [[ "$(shasum -a 256 "$APP/Contents/MacOS/regression-engine" | awk '{print $1}')" \
     == "$EXPECTED_ENGINE_SHA256" ]] \
-    || fail "el lanzador público no coincide con la autoridad 1.12.2"
+    || fail "el lanzador público no coincide con la autoridad 1.12.3"
 [[ "$(shasum -a 256 "$APP/Contents/SharedSupport/bin/install-apple-gptk-component" \
     | awk '{print $1}')" == "$EXPECTED_GPTK_INSTALLER_SHA256" ]] \
-    || fail "el onboarding GPTK público no coincide con la autoridad 1.12.2"
+    || fail "el onboarding GPTK público no coincide con la autoridad 1.12.3"
 [[ "$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")" == "$EXPECTED_VERSION" ]] \
     || fail "la versión del bundle no coincide con $EXPECTED_VERSION"
 [[ "$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")" == "$EXPECTED_BUILD" ]] \
@@ -246,6 +246,9 @@ for required in "$PUBLIC_WINE_PREFIX/bin" "$PUBLIC_WINE_PREFIX/lib"; do
 done
 
 NTDLL="$WINE_ROOT/lib/wine/x86_64-unix/ntdll.so"
+WINEMAC="$WINE_ROOT/lib/wine/x86_64-unix/winemac.so"
+strings -a "$WINEMAC" | grep -Fx 'explorer.exe' >/dev/null \
+    || fail "winemac no conserva el shell explorer.exe como auxiliar sin Dock"
 for required in \
     "$PUBLIC_WINE_PREFIX/bin" \
     "$PUBLIC_WINE_PREFIX/lib/wine" \
