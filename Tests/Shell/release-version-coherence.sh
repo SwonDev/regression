@@ -26,25 +26,25 @@ contract_value() {
 
 assert_contract() {
     local installer="$1" release_packager="$2" native_packager="$3"
-    [[ "$(contract_value "$installer" VERSION)" == "1.12.0" ]] || return 1
-    [[ "$(contract_value "$installer" BUILD_NUMBER)" == "38" ]] || return 1
-    grep -Fx 'VERSION="${REGRESSION_RELEASE_VERSION:-1.12.0}"' \
+    [[ "$(contract_value "$installer" VERSION)" == "1.12.1" ]] || return 1
+    [[ "$(contract_value "$installer" BUILD_NUMBER)" == "39" ]] || return 1
+    grep -Fx 'VERSION="${REGRESSION_RELEASE_VERSION:-1.12.1}"' \
         "$release_packager" >/dev/null || return 1
-    grep -Fx 'BUILD_NUMBER="${REGRESSION_RELEASE_BUILD_NUMBER:-38}"' \
+    grep -Fx 'BUILD_NUMBER="${REGRESSION_RELEASE_BUILD_NUMBER:-39}"' \
         "$release_packager" >/dev/null || return 1
-    [[ "$(contract_value "$native_packager" VERSION)" == "1.12.0" ]] || return 1
-    [[ "$(contract_value "$native_packager" BUILD_NUMBER)" == "38" ]] || return 1
+    [[ "$(contract_value "$native_packager" VERSION)" == "1.12.1" ]] || return 1
+    [[ "$(contract_value "$native_packager" BUILD_NUMBER)" == "39" ]] || return 1
 }
 
 assert_contract "$INSTALLER" "$RELEASE_PACKAGER" "$NATIVE_PACKAGER" || {
-    printf 'FAIL: instalador y empaquetadores no comparten el contrato 1.12.0 (38).\n' >&2
+    printf 'FAIL: instalador y empaquetadores no comparten el contrato 1.12.1 (39).\n' >&2
     exit 1
 }
 
 cp "$INSTALLER" "$SCRATCH/install_regression.sh"
 cp "$RELEASE_PACKAGER" "$SCRATCH/package_release.sh"
 cp "$NATIVE_PACKAGER" "$SCRATCH/package_regression.sh"
-/usr/bin/sed -i '' 's/^VERSION="1.12.0"$/VERSION="1.11.0"/' \
+/usr/bin/sed -i '' 's/^VERSION="1.12.1"$/VERSION="1.11.0"/' \
     "$SCRATCH/package_regression.sh"
 if assert_contract \
     "$SCRATCH/install_regression.sh" \
@@ -54,4 +54,4 @@ if assert_contract \
     exit 1
 fi
 
-printf 'PASS: instalador y empaquetadores comparten 1.12.0 (38) y el drift 1.11 se rechaza.\n'
+printf 'PASS: instalador y empaquetadores comparten 1.12.1 (39) y el drift 1.11 se rechaza.\n'

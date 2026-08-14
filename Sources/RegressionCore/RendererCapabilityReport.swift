@@ -346,24 +346,15 @@ struct RendererCapabilityInspector: Sendable {
         requiredVersion: AppleGPTKVersion,
         modules: inout Set<RendererModuleObservation>
     ) -> AppleGPTKVersion? {
-        let componentURL: URL
+        let componentURL = applicationSupportURL.appendingPathComponent(
+            "Components/AppleGPTK/\(requiredVersion.rawValue)",
+            isDirectory: true
+        )
         let receiptRootURL = applicationSupportURL.appendingPathComponent(
             "Receipts/AppleGPTK",
             isDirectory: true
         )
         let receiptRelativePath = "\(requiredVersion.rawValue)-license-receipt"
-        switch requiredVersion {
-        case .version3:
-            componentURL = installation.applicationURL.appendingPathComponent(
-                "Contents/SharedSupport/wine-root/lib/apple_gptk",
-                isDirectory: true
-            )
-        case .version4Beta2:
-            componentURL = applicationSupportURL.appendingPathComponent(
-                "Components/AppleGPTK/4.0b2",
-                isDirectory: true
-            )
-        }
         guard let componentRoot = AnchoredDirectory.open(componentURL),
               let receiptRoot = AnchoredDirectory.open(receiptRootURL) else { return nil }
         afterSnapshotRootOpened(componentURL)
@@ -397,8 +388,9 @@ struct RendererCapabilityInspector: Sendable {
                 location: RendererModuleLocation(expectedLocation)
             ))
         }
+        let licenseRelativePath = Self.gptkLicenseRelativePath(for: requiredVersion)
         guard let licenseDigest = try? componentRoot.hashRegularFile(
-                relativePath: "Documentation/License.rtf",
+                relativePath: licenseRelativePath,
                 maximumBytes: 4 * 1_024 * 1_024
               ),
               let receiptDigest = try? receiptRoot.hashRegularFile(
@@ -409,7 +401,7 @@ struct RendererCapabilityInspector: Sendable {
               receiptDigest.identity.mode & 0o7777 == 0o600 else { return nil }
         fileSnapshots.append(RegularFileSnapshot(
             root: componentRoot,
-            relativePath: "Documentation/License.rtf",
+            relativePath: licenseRelativePath,
             digest: licenseDigest
         ))
         fileSnapshots.append(RegularFileSnapshot(
@@ -429,7 +421,8 @@ struct RendererCapabilityInspector: Sendable {
                 version: requiredVersion,
                 componentRoot: componentRoot,
                 receiptRoot: receiptRoot,
-                receiptRelativePath: receiptRelativePath
+                receiptRelativePath: receiptRelativePath,
+                licenseRelativePath: licenseRelativePath
             )
             && componentRoot.stillNamesSubdirectory(
                 relativePath: "wine/x86_64-windows",
@@ -456,7 +449,8 @@ struct RendererCapabilityInspector: Sendable {
         version: AppleGPTKVersion,
         componentRoot: AnchoredDirectory,
         receiptRoot: AnchoredDirectory,
-        receiptRelativePath: String
+        receiptRelativePath: String,
+        licenseRelativePath: String
     ) -> Bool {
         guard let receiptData = try? receiptRoot.readPrivateRegularFile(
                 relativePath: receiptRelativePath,
@@ -467,8 +461,8 @@ struct RendererCapabilityInspector: Sendable {
             return false
         }
         let lines = contents.split(whereSeparator: \.isNewline).map(String.init)
-        let expectedCount = version == .version3 ? 8 : 6
-        guard lines.count == expectedCount else { return false }
+        let expectedCounts: Set<Int> = version == .version3 ? [6, 8] : [6]
+        guard expectedCounts.contains(lines.count) else { return false }
         var values: [String: String] = [:]
         for line in lines {
             guard let separator = line.firstIndex(of: "=") else { return false }
@@ -477,7 +471,7 @@ struct RendererCapabilityInspector: Sendable {
             values[key] = String(line[line.index(after: separator)...])
         }
         guard let licenseData = try? componentRoot.readRegularFile(
-            relativePath: "Documentation/License.rtf",
+            relativePath: licenseRelativePath,
             maximumBytes: 4 * 1_024 * 1_024
         ) else {
             return false
@@ -493,11 +487,19 @@ struct RendererCapabilityInspector: Sendable {
               ) != nil else { return false }
         switch version {
         case .version3:
-            return values["source_kind"] == "existing-protected-component"
+            let isExistingConsent = values["source_kind"] == "existing-protected-component"
                 && values["catalog_id"] == AppleGPTKComponentCatalog.protectedProfilesComponentID
                 && values["payload_fingerprint"]
                     == AppleGPTKComponentCatalog.protectedProfilesPayloadFingerprint
                 && values["dmg_sha256"] == nil
+            let isDMGConsent = values["dmg_sha256"]?.range(
+                of: #"^[0-9a-f]{64}$"#,
+                options: .regularExpression
+            ) != nil
+                && values["source_kind"] == nil
+                && values["catalog_id"] == nil
+                && values["payload_fingerprint"] == nil
+            return isExistingConsent || isDMGConsent
         case .version4Beta2:
             return values["dmg_sha256"] == AppleGPTKComponentCatalog.current.dmgSHA256
         }
@@ -600,6 +602,15 @@ struct RendererCapabilityInspector: Sendable {
             return "external/libd3dshared.dylib"
         }
         return "wine/x86_64-windows/\(descriptor.fileName)"
+    }
+
+    private static func gptkLicenseRelativePath(for version: AppleGPTKVersion) -> String {
+        switch version {
+        case .version3:
+            "external/D3DMetal.framework/Versions/A/Resources/LICENSE"
+        case .version4Beta2:
+            "Documentation/License.rtf"
+        }
     }
 
 }

@@ -8,8 +8,8 @@ export PATH
 # Ningún smoke, wineboot, instalador ni wineserver puede heredar la sesión de otro runtime.
 unset WINESERVERSOCKET
 
-VERSION="1.12.0"
-BUILD_NUMBER="38"
+VERSION="1.12.1"
+BUILD_NUMBER="39"
 REPO="SwonDev/regression"
 ASSET_NAME="Regression-${VERSION}-macos-arm64.tar.gz"
 APP_NAME="Regression.app"
@@ -43,12 +43,13 @@ BOTTLE_BACKUP=""
 BOTTLE_EXISTED=0
 BOTTLE_REPLACEMENT_STARTED=0
 BOTTLE_STEAMAPPS_PRESERVED=0
-GPTK_PRESERVATION_MANIFEST=""
-GPTK_PRESERVED_GENERATION=""
+GPTK_RECOVERED_COMPONENT=""
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
 # REGRESSION_RELEASE_AUTHORITY_V2_BEGIN
 EXPECTED_MEDIA_MANIFEST_SHA256="da8ba98d99d157f981ef3a2472dc9d74c9ce4673ef126bdd61851b9dd21dedb3"
+EXPECTED_ENGINE_SHA256="38be0b5fd0bed42e5467f9a61c5c972733898523eeac3e34e83eb5317efb3edf"
+EXPECTED_GPTK_INSTALLER_SHA256="f6bcd552320e3713693d0a0bbf1af4932b573fc35798282c1724f2b52a688660"
 # Hashes del ensemble público derivados del builder raw sellado mediante strip,
 # saneado literal y firma ad hoc del staging.
 release_runtime_authority_v2()
@@ -57,7 +58,7 @@ release_runtime_authority_v2()
 fed13faa895c9ea5896a6497490db26674c3dca2a318e3389d8e43ba3e00f552 bin/wine
 8d14fb9d6d9730c300ba16b5997d98218a2a40a78008d60f3a6edb719f328db3 bin/wineserver
 5636a6505e872c8d185d8db7ced2d4aa8e9057e81c4c579e4b623009f9c2857b lib/wine/x86_64-unix/wine
-66622d2832d99c37cdaa2872c5409b5f9a5dc04d1fdb9dcd426ae37f8365942e lib/wine/x86_64-unix/ntdll.so
+f17cebf085a0a746224e61b4fc49341f7a0cec48741c5f12d1cc84a4dcd0ba5d lib/wine/x86_64-unix/ntdll.so
 0315a55b11a456590a9368f4cb8d0011d6735cc04c9093ea583570d1352e1ee1 share/wine/wine.inf
 885c0421bfe30600bae9df83961b0fcbb5b9ccd1c02e7b071ce213ff2522e34a lib/wine/x86_64-windows/ntdll.dll
 7b580e19eb4fce14b5730cd2835c5204dc2622ce0fc4f33b68b0155864477667 lib/wine/i386-windows/ntdll.dll
@@ -453,99 +454,6 @@ verify_confined_symlinks()
     done < <(/usr/bin/find "$root" -type l -print0)
 }
 
-verify_gptk_3_payload_authority()
-{
-    local root="$1"
-    local expected relative actual module candidate
-
-    [[ -d "$root" && ! -L "$root" ]] && path_chain_is_physical "$root" || return 1
-    verify_confined_symlinks "$root" || return 1
-    for relative in \
-        external/D3DMetal.framework/Versions/A/Resources/Info.plist \
-        Documentation/License.rtf \
-        Documentation/Acknowledgements.rtf \
-        'Documentation/Read Me.rtf'
-    do
-        [[ -f "$root/$relative" && ! -L "$root/$relative" ]] || return 1
-    done
-    [[ "$(/usr/bin/plutil -extract CFBundleShortVersionString raw \
-        "$root/external/D3DMetal.framework/Versions/A/Resources/Info.plist" \
-        2>/dev/null || true)" == "3.0" ]] || return 1
-
-    while IFS=' ' read -r expected relative; do
-        actual="$(/usr/bin/shasum -a 256 "$root/$relative" 2>/dev/null \
-            | /usr/bin/awk '{print $1}')"
-        [[ "$actual" == "$expected" ]] || return 1
-    done <<'EOF'
-05a7beaed4494a4f5f53d3f626a82fffc3b70146436a908b7048a0632a49e1a8 external/D3DMetal.framework/Versions/A/D3DMetal
-5131e631eee8b542eadf48f4df9fd662d9aeeb59139137e0e6e14047dc434995 external/libd3dshared.dylib
-c999c40698b7fc23c864165fb1364e6a40a8572469775947845afd42f4dfc9e7 wine/x86_64-windows/atidxx64.dll
-7c2bfeb66b18e3ec10c3ee92c9d42f4e3123692d568d14c831aec1a13aa03f79 wine/x86_64-windows/d3d11.dll
-bbda1c4e94ee70255c528c5689b28333ca9bece2d755ede7c4197977a534704f wine/x86_64-windows/d3d12.dll
-1b1f2d80349e043e6c628b515ba6b44478a1209c504e6c9f3dae4a9d1b06d561 wine/x86_64-windows/dxgi.dll
-f073fc2377b305380bcd8c228394e48abe1caf09116e12875cb656774a14b4dc wine/x86_64-windows/nvapi64.dll
-d7c0df74d9bb4de5e2a3cc357b2309148fd3fdc824fe7941e4d789dbd072ff99 wine/x86_64-windows/nvngx.dll
-EOF
-    for module in atidxx64 d3d11 d3d12 dxgi nvapi64 nvngx; do
-        [[ -L "$root/wine/x86_64-unix/$module.so" ]] || return 1
-        [[ "$(/usr/bin/readlink "$root/wine/x86_64-unix/$module.so")" == \
-            "../../external/libd3dshared.dylib" ]] || return 1
-    done
-    while IFS= read -r -d '' candidate; do
-        relative="${candidate#"$root"/}"
-        case "$relative" in
-            external|external/D3DMetal.framework|external/D3DMetal.framework/*|\
-            external/libd3dshared.dylib|\
-            wine|wine/x86_64-unix|wine/x86_64-windows|\
-            wine/x86_64-unix/atidxx64.so|wine/x86_64-unix/d3d11.so|\
-            wine/x86_64-unix/d3d12.so|wine/x86_64-unix/dxgi.so|\
-            wine/x86_64-unix/nvapi64.so|wine/x86_64-unix/nvngx.so|\
-            wine/x86_64-windows/atidxx64.dll|wine/x86_64-windows/d3d11.dll|\
-            wine/x86_64-windows/d3d12.dll|wine/x86_64-windows/dxgi.dll|\
-            wine/x86_64-windows/nvapi64.dll|wine/x86_64-windows/nvngx.dll|\
-            Documentation|Documentation/License.rtf|\
-            Documentation/Acknowledgements.rtf|'Documentation/Read Me.rtf') ;;
-            *) return 1 ;;
-        esac
-    done < <(/usr/bin/find "$root" -mindepth 1 -print0)
-    /usr/bin/codesign --verify --deep --strict \
-        "$root/external/D3DMetal.framework" >/dev/null 2>&1 || return 1
-    /usr/bin/codesign --verify --strict \
-        "$root/external/libd3dshared.dylib" >/dev/null 2>&1 || return 1
-}
-
-verify_gptk_3_receipt_authority()
-{
-    local receipt="$1"
-    local root="$2"
-    local mode owner license_hash identity_before identity_after
-
-    [[ -f "$receipt" && ! -L "$receipt" ]] && path_chain_is_physical "$receipt" || return 1
-    identity_before="$(/usr/bin/stat -f '%d:%i:%z:%m:%c' "$receipt" 2>/dev/null || true)"
-    mode="$(/usr/bin/stat -f '%Lp' "$receipt" 2>/dev/null || true)"
-    owner="$(/usr/bin/stat -f '%u' "$receipt" 2>/dev/null || true)"
-    [[ "$mode" == "600" && "$owner" == "$(/usr/bin/id -u)" ]] || return 1
-    [[ "$(/usr/bin/wc -l < "$receipt" | /usr/bin/tr -d ' ')" == "8" ]] || return 1
-    license_hash="$(/usr/bin/shasum -a 256 "$root/Documentation/License.rtf" \
-        2>/dev/null | /usr/bin/awk '{print $1}')"
-    [[ "$(authority_value schema "$receipt")" == "1" \
-        && "$(authority_value version "$receipt")" == "3.0" \
-        && "$(authority_value source_kind "$receipt")" == \
-            "existing-protected-component" \
-        && "$(authority_value catalog_id "$receipt")" == \
-            "apple-gptk-protected-profiles" \
-        && "$(authority_value payload_fingerprint "$receipt")" == \
-            "fdc07beb364b2327896196e214996585fbcc1a10c71784d383218d2de9db57d7" \
-        && "$(authority_value license_sha256 "$receipt")" == "$license_hash" \
-        && "$(authority_value confirmation "$receipt")" == \
-            "ACEPTO LA LICENCIA DE APPLE GPTK 3.0" \
-        && "$(authority_value confirmed_at "$receipt")" =~ \
-            ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ \
-        && -z "$(authority_value dmg_sha256 "$receipt")" ]] || return 1
-    identity_after="$(/usr/bin/stat -f '%d:%i:%z:%m:%c' "$receipt" 2>/dev/null || true)"
-    [[ -n "$identity_before" && "$identity_after" == "$identity_before" ]]
-}
-
 validate_install_prefix() {
     [[ "$INSTALL_PREFIX" == /* ]] || {
         fail "--prefix debe ser una ruta absoluta."
@@ -583,6 +491,18 @@ verify_staged_release() {
     do
         [[ -x "$binary" ]] || { fail "Falta un ejecutable requerido: $binary"; return 1; }
     done
+
+    [[ "$(/usr/bin/shasum -a 256 "$app/Contents/MacOS/regression-engine" \
+        | /usr/bin/awk '{print $1}')" == "$EXPECTED_ENGINE_SHA256" ]] || {
+        fail "El lanzador no coincide con la autoridad compilada 1.12.1."
+        return 1
+    }
+    [[ "$(/usr/bin/shasum -a 256 \
+        "$app/Contents/SharedSupport/bin/install-apple-gptk-component" \
+        | /usr/bin/awk '{print $1}')" == "$EXPECTED_GPTK_INSTALLER_SHA256" ]] || {
+        fail "El onboarding GPTK no coincide con la autoridad compilada 1.12.1."
+        return 1
+    }
 
 
     for required in \
@@ -816,7 +736,6 @@ D3DMETAL_SOURCE=""
 
 if [[ -d "$DESTINATION/Contents/SharedSupport/wine-root/lib/apple_gptk/external/D3DMetal.framework" ]]; then
     D3DMETAL_SOURCE="$DESTINATION/Contents/SharedSupport/wine-root/lib/apple_gptk"
-    GPTK_3_RECEIPT="$APP_SUPPORT/Receipts/AppleGPTK/3.0-license-receipt"
     PREVIOUS_BUNDLE_ID="$(/usr/bin/plutil -extract CFBundleIdentifier raw \
         "$DESTINATION/Contents/Info.plist" 2>/dev/null || true)"
     if [[ -d "$DESTINATION" && ! -L "$DESTINATION" \
@@ -824,27 +743,27 @@ if [[ -d "$DESTINATION/Contents/SharedSupport/wine-root/lib/apple_gptk/external/
         && ! -L "$DESTINATION/Contents/Info.plist" \
         && "$PREVIOUS_BUNDLE_ID" == "local.regression.launcher" ]] \
         && path_chain_is_physical "$DESTINATION" \
-        && /usr/bin/codesign --verify --deep --strict "$DESTINATION" >/dev/null 2>&1 \
-        && verify_gptk_3_payload_authority "$D3DMETAL_SOURCE" \
-        && verify_gptk_3_receipt_authority "$GPTK_3_RECEIPT" "$D3DMETAL_SOURCE"; then
-        GPTK_PRESERVED_GENERATION="3.0"
-        GPTK_PRESERVATION_MANIFEST="$WORK_DIR/gptk-before-install.mtree"
-        (
-            cd "$D3DMETAL_SOURCE"
-            /usr/sbin/mtree -c -k type,mode,link,sha256digest \
-                | /usr/bin/sed -n '/^# \.$/,$p'
-        ) > "$GPTK_PRESERVATION_MANIFEST"
-        mkdir -p "$STAGED_WINE_ROOT/lib"
-        cleanup_path "$GPTK_ROOT"
-        cp -cR "$D3DMETAL_SOURCE" "$GPTK_ROOT"
-        ok "Apple GPTK 3.0 autorizado conservado desde la instalación anterior"
+        && /usr/bin/codesign --verify --deep --strict "$DESTINATION" >/dev/null 2>&1; then
+        GPTK_INSTALLER="$STAGED_APP/Contents/SharedSupport/bin/install-apple-gptk-component"
+        if "$GPTK_INSTALLER" --component 3.0 --recover-existing \
+            --source-component "$D3DMETAL_SOURCE"; then
+            GPTK_RECOVERED_COMPONENT="$APP_SUPPORT/Components/AppleGPTK/3.0"
+            ok "Apple GPTK 3.0 se migró al almacén local persistente"
+        else
+            warn "El GPTK anterior no coincide con la autoridad exacta 3.0."
+            say "      La instalación base continuará y Regression ofrecerá el DMG oficial."
+        fi
     else
-        warn "El GPTK anterior no acredita generación, hashes, topología y recibo 3.0."
-        say "      No se copiará al bundle nuevo; Regression conservará el runtime general."
+        warn "La app anterior no acredita una fuente física y firmada de Apple GPTK 3.0."
+        say "      Regression conservará cualquier componente externo válido y ofrecerá el DMG oficial si falta."
     fi
 else
-    warn "Apple GPTK aún no está instalado en Regression; la instalación base continuará."
-    say "      Regression te guiará para instalar Apple GPTK desde Apple cuando la abras."
+    if [[ -d "$APP_SUPPORT/Components/AppleGPTK/3.0" ]]; then
+        ok "Apple GPTK 3.0 externo se conserva fuera del bundle actualizado"
+    else
+        warn "Apple GPTK 3.0 aún no está instalado en Regression; la instalación base continuará."
+        say "      Regression te guiará para descargarlo desde Apple y seleccionar su DMG."
+    fi
 fi
 
 # Los enlaces a perfiles D3DMetal no viajan activos en el asset público porque su destino
@@ -959,34 +878,14 @@ fi
 mv "$STAGED_APP" "$DESTINATION"
 
 codesign --verify --deep --strict "$DESTINATION"
-if [[ -n "$GPTK_PRESERVATION_MANIFEST" ]]; then
-    [[ "$GPTK_PRESERVED_GENERATION" == "3.0" ]] || {
-        fail "La preservación GPTK perdió la identidad de generación exacta."
-        rollback 1
-    }
-    verify_gptk_3_payload_authority \
-        "$DESTINATION/Contents/SharedSupport/wine-root/lib/apple_gptk" \
-        || {
-            fail "El GPTK preservado no conserva la autoridad 3.0 tras el cutover."
+if [[ -n "$GPTK_RECOVERED_COMPONENT" ]]; then
+    "$DESTINATION/Contents/SharedSupport/bin/install-apple-gptk-component" \
+        --component 3.0 --inspect-existing --output-dir "$WORK_DIR/gptk-final-inspection" \
+        >/dev/null || {
+            fail "El GPTK 3.0 migrado no supera la inspección final tras el cutover."
             rollback 1
         }
-    verify_gptk_3_receipt_authority "$GPTK_3_RECEIPT" \
-        "$DESTINATION/Contents/SharedSupport/wine-root/lib/apple_gptk" \
-        || {
-            fail "El recibo autorizado ya no coincide con el GPTK 3.0 preservado."
-            rollback 1
-        }
-    GPTK_INSTALLED_MANIFEST="$WORK_DIR/gptk-after-install.mtree"
-    (
-        cd "$DESTINATION/Contents/SharedSupport/wine-root/lib/apple_gptk"
-        /usr/sbin/mtree -c -k type,mode,link,sha256digest \
-            | /usr/bin/sed -n '/^# \.$/,$p'
-    ) > "$GPTK_INSTALLED_MANIFEST"
-    /usr/bin/cmp -s "$GPTK_PRESERVATION_MANIFEST" "$GPTK_INSTALLED_MANIFEST" || {
-        fail "La instalación no conservó exactamente los hashes, modos y enlaces GPTK."
-        rollback 1
-    }
-    ok "GPTK local verificado byte a byte tras la sustitución"
+    ok "GPTK local persistente verificado tras la sustitución"
 fi
 
 step "7/7 Runtime canónico, botella propia y Steam"

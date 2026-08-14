@@ -1784,23 +1784,53 @@ struct MenuBarView: View {
     switch model.protectedAppleGPTKAuthorizationState {
     case .requiresAuthorization:
       Button("Revisar licencia de GPTK 3.0…") {
-        model.beginInspectExistingProtectedAppleGPTK()
+        if model.appleGPTKLicenseReview?.source.isProtectedVersion == true {
+          model.presentAppleGPTKLicenseReview()
+        } else {
+          model.beginInspectExistingProtectedAppleGPTK()
+        }
       }
       .buttonStyle(.borderedProminent)
       .regressionAccessibleControl()
       .disabled(model.operation.isBusy || model.runningState.activeBackend != nil)
       .accessibilityHint(
-        "Inspecciona la licencia del componente exacto existente sin abrir un selector de DMG"
+        model.appleGPTKLicenseReview?.source.isProtectedVersion == true
+          ? "Muestra la licencia exacta extraída del DMG oficial ya verificado"
+          : "Inspecciona la licencia del componente exacto existente sin abrir un selector de DMG"
       )
     case .failed:
-      Button("Comprobar GPTK 3.0") {
-        Task { await model.refreshProtectedAppleGPTKAuthorizationStatus() }
-      }
-      .regressionAccessibleControl()
-      .disabled(model.operation.isBusy)
-    case .checking, .ready, .authorizing, .unavailable:
+      protectedAppleGPTKSourceActions(includeRefresh: true)
+    case .unavailable:
+      protectedAppleGPTKSourceActions(includeRefresh: false)
+    case .checking, .ready, .authorizing:
       EmptyView()
     }
+  }
+
+  @ViewBuilder
+  private func protectedAppleGPTKSourceActions(includeRefresh: Bool) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(spacing: 8) {
+        Button("Seleccionar DMG…") {
+          model.beginSelectAndInspectProtectedAppleGPTKDMG()
+        }
+        .buttonStyle(.borderedProminent)
+        .regressionAccessibleControl()
+
+        Button("Apple Developer") {
+          model.openOfficialProtectedAppleGPTKDownload()
+        }
+        .regressionAccessibleControl()
+        .accessibilityHint("Abre únicamente la página oficial de Apple Developer")
+      }
+      if includeRefresh {
+        Button("Comprobar componente existente") {
+          Task { await model.refreshProtectedAppleGPTKAuthorizationStatus() }
+        }
+        .regressionAccessibleControl()
+      }
+    }
+    .disabled(model.operation.isBusy || model.runningState.activeBackend != nil)
   }
 
   private var steamRuntimeSymbol: String {

@@ -67,7 +67,7 @@ public struct VerifiedGameCertification: Codable, Equatable, Identifiable, Senda
 /// motor ni sustituye la telemetría: evita perder el estado blindado al regenerar los datos
 /// locales. Solo se añade una entrada después de validar render, entrada, opciones y gameplay.
 public enum VerifiedGameCatalog {
-    public static let revision = "2026-08-09.4"
+    public static let revision = "2026-08-14.5"
 
     public static let all: [VerifiedGameCertification] = [
         VerifiedGameCertification(
@@ -200,6 +200,18 @@ public enum VerifiedGameCatalog {
                 "a6601afa279218f05f11c770759898744ff0dcc0bc9a5527cefb19a1bc2331b9",
             engineFingerprint:
                 "28d3234281bc056e55cb93c13dbb06d50b53771467c154733de930ef70afa5d1"
+        ),
+        VerifiedGameCertification(
+            appID: "1154030",
+            gameName: "Titan Quest II",
+            backend: .regression,
+            verifiedAt: "2026-08-07",
+            evidence: "docs/games/titan-quest-2.md",
+            sourceRunID: UUID(uuidString: "228467BB-AECE-40EF-8FE5-E739250AA859"),
+            configurationFingerprint:
+                "fb45e5ed2bd154a0127745aeddbc6d6a22ecdcc6be4d3380733d6af93440210b",
+            engineFingerprint:
+                "fb45e5ed2bd154a0127745aeddbc6d6a22ecdcc6be4d3380733d6af93440210b"
         ),
         VerifiedGameCertification(
             appID: "1619520",

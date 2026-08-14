@@ -11,6 +11,8 @@ WORK_DIR=""
 
 # REGRESSION_RELEASE_AUTHORITY_V2_BEGIN
 EXPECTED_MEDIA_MANIFEST_SHA256="da8ba98d99d157f981ef3a2472dc9d74c9ce4673ef126bdd61851b9dd21dedb3"
+EXPECTED_ENGINE_SHA256="38be0b5fd0bed42e5467f9a61c5c972733898523eeac3e34e83eb5317efb3edf"
+EXPECTED_GPTK_INSTALLER_SHA256="f6bcd552320e3713693d0a0bbf1af4932b573fc35798282c1724f2b52a688660"
 # Hashes del ensemble público derivados del builder raw sellado mediante strip,
 # saneado literal y firma ad hoc del staging.
 release_runtime_authority_v2()
@@ -19,7 +21,7 @@ release_runtime_authority_v2()
 fed13faa895c9ea5896a6497490db26674c3dca2a318e3389d8e43ba3e00f552 bin/wine
 8d14fb9d6d9730c300ba16b5997d98218a2a40a78008d60f3a6edb719f328db3 bin/wineserver
 5636a6505e872c8d185d8db7ced2d4aa8e9057e81c4c579e4b623009f9c2857b lib/wine/x86_64-unix/wine
-66622d2832d99c37cdaa2872c5409b5f9a5dc04d1fdb9dcd426ae37f8365942e lib/wine/x86_64-unix/ntdll.so
+f17cebf085a0a746224e61b4fc49341f7a0cec48741c5f12d1cc84a4dcd0ba5d lib/wine/x86_64-unix/ntdll.so
 0315a55b11a456590a9368f4cb8d0011d6735cc04c9093ea583570d1352e1ee1 share/wine/wine.inf
 885c0421bfe30600bae9df83961b0fcbb5b9ccd1c02e7b071ce213ff2522e34a lib/wine/x86_64-windows/ntdll.dll
 7b580e19eb4fce14b5730cd2835c5204dc2622ce0fc4f33b68b0155864477667 lib/wine/i386-windows/ntdll.dll
@@ -182,6 +184,12 @@ fi
     || fail "falta la autorreparación Windows Media"
 [[ -x "$APP/Contents/SharedSupport/bin/install-apple-gptk-component" ]] \
     || fail "falta el onboarding y verificador Apple GPTK"
+[[ "$(shasum -a 256 "$APP/Contents/MacOS/regression-engine" | awk '{print $1}')" \
+    == "$EXPECTED_ENGINE_SHA256" ]] \
+    || fail "el lanzador público no coincide con la autoridad 1.12.1"
+[[ "$(shasum -a 256 "$APP/Contents/SharedSupport/bin/install-apple-gptk-component" \
+    | awk '{print $1}')" == "$EXPECTED_GPTK_INSTALLER_SHA256" ]] \
+    || fail "el onboarding GPTK público no coincide con la autoridad 1.12.1"
 [[ "$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")" == "$EXPECTED_VERSION" ]] \
     || fail "la versión del bundle no coincide con $EXPECTED_VERSION"
 [[ "$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")" == "$EXPECTED_BUILD" ]] \

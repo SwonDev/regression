@@ -20,11 +20,13 @@ final class AppleGPTKOnboardingTests: XCTestCase {
     XCTAssertEqual(current.version, "4.0b2")
     XCTAssertEqual(current.minimumMacOSMajorVersion, 15)
     XCTAssertNotEqual(protected.d3dMetalSHA256, current.d3dMetalSHA256)
-    XCTAssertNil(protected.dmgFileName)
+    XCTAssertEqual(protected.dmgFileName, "Evaluation_environment_for_Windows_games_3.0.dmg")
     XCTAssertNil(protected.dmgSHA256)
     XCTAssertNotNil(current.dmgSHA256)
-    XCTAssertFalse(protected.supportsDMGOnboarding)
+    XCTAssertTrue(protected.supportsDMGOnboarding)
+    XCTAssertFalse(protected.requiresPinnedDMGHash)
     XCTAssertTrue(current.supportsDMGOnboarding)
+    XCTAssertTrue(current.requiresPinnedDMGHash)
     XCTAssertNil(AppleGPTKComponentCatalog.component(version: "2.1"))
   }
 
@@ -518,7 +520,7 @@ final class AppleGPTKOnboardingTests: XCTestCase {
     let legacyDescriptor = AppleGPTKInspectionDescriptor(
       schema: 1,
       version: AppleGPTKComponentCatalog.protectedProfiles.version,
-      // Simula un descriptor ya inspeccionado; el catálogo público no autoriza a crearlo.
+      // La imagen completa queda ligada localmente después de verificar el payload exacto.
       dmgSHA256: String(repeating: "a", count: 64),
       licenseSHA256: String(repeating: "b", count: 64),
       sourceDMG: "/tmp/GPTK-3.0.dmg"
@@ -529,10 +531,13 @@ final class AppleGPTKOnboardingTests: XCTestCase {
       nonce: "0123456789abcdef0123456789abcdef"
     )
 
-    XCTAssertEqual(legacyToken.confirmation, "")
+    XCTAssertEqual(
+      legacyToken.confirmation,
+      AppleGPTKComponentCatalog.protectedProfiles.licenseConfirmation
+    )
     XCTAssertEqual(
       legacyToken.validation(against: legacyDescriptor, now: now),
-      .invalid(.invalidAuthorization)
+      .valid
     )
 
     let unknownDescriptor = AppleGPTKInspectionDescriptor(

@@ -42,11 +42,11 @@ fail()
     '#!/usr/bin/env bash' \
     'set -euo pipefail' \
     'printf "%s\n" "$*" >> "$REGRESSION_GPTK_TEST_ARGUMENT_LOG"' \
-    'if [[ "$*" == "--verify-only" ]]; then' \
+    'if [[ "$*" == "--component 4.0b2 --verify-only" ]]; then' \
     '  [[ "${REGRESSION_GPTK_TEST_EXTERNAL_RESULT:-failed}" == "verified" ]]' \
     '  exit' \
     'fi' \
-    'if [[ "$*" == "--repair-from-cache" ]]; then' \
+    'if [[ "$*" == "--component 4.0b2 --repair-from-cache" ]]; then' \
     '  [[ "${REGRESSION_GPTK_TEST_EXTERNAL_RESULT:-failed}" == "repairable" ]]' \
     '  exit' \
     'fi' \
@@ -65,7 +65,7 @@ fail()
     'set -euo pipefail' \
     '[[ "${1:-}" == "unreal-bootstrap-routes" ]] && exit 0' \
     '[[ "${1:-}" == "windows-media-pending-recovery-app-id" ]] && { printf "%s\n" "REGRESSION_WINDOWS_MEDIA_PENDING_APP_ID=none"; exit 0; }' \
-    '[[ "${1:-}" == "acquire-windows-media-runtime-lease" ]] && { printf "%s\n" "REGRESSION_WINDOWS_MEDIA_RUNTIME_LEASE=22222222-2222-4222-8222-222222222222"; exit 0; }' \
+    '[[ "${1:-}" == "acquire-windows-media-runtime-lease" ]] && { printf "%s\n" "REGRESSION_WINDOWS_MEDIA_RUNTIME_LEASE=22222222-2222-4222-8222-222222222222" "REGRESSION_WINDOWS_MEDIA_RUNTIME_STATE=issued"; exit 0; }' \
     '[[ "${1:-}" == "prepare-launch-state" ]] || exit 1' \
     'printf "%s\n" "REGRESSION_REPAIR_STATE=no-op"' \
     > "$CONTROLLER"
@@ -76,7 +76,6 @@ fail()
     '#!/usr/bin/env bash' \
     'set -euo pipefail' \
     '{' \
-    'printf "internal=%s\n" "${REGRESSION_INTERNAL_GPTK_3_0_VERIFIED-unset}"' \
     'printf "legacy-executable=%s\n" "${REGRESSION_EXTERNAL_D3DMETAL_EXECUTABLE-unset}"' \
     'printf "legacy-root=%s\n" "${REGRESSION_EXTERNAL_D3DMETAL_WINE_ROOT-unset}"' \
     'printf "route-count=%s\n" "${REGRESSION_EXTERNAL_D3DMETAL_ROUTE_COUNT-unset}"' \
@@ -85,6 +84,14 @@ fail()
     'printf "route-0-root=%s\n" "${REGRESSION_EXTERNAL_D3DMETAL_ROUTE_0_WINE_ROOT-unset}"' \
     'printf "route-1-executable=%s\n" "${REGRESSION_EXTERNAL_D3DMETAL_ROUTE_1_EXECUTABLE-unset}"' \
     'printf "route-1-root=%s\n" "${REGRESSION_EXTERNAL_D3DMETAL_ROUTE_1_WINE_ROOT-unset}"' \
+    'printf "route-2-executable=%s\n" "${REGRESSION_EXTERNAL_D3DMETAL_ROUTE_2_EXECUTABLE-unset}"' \
+    'printf "route-2-root=%s\n" "${REGRESSION_EXTERNAL_D3DMETAL_ROUTE_2_WINE_ROOT-unset}"' \
+    'printf "route-3-executable=%s\n" "${REGRESSION_EXTERNAL_D3DMETAL_ROUTE_3_EXECUTABLE-unset}"' \
+    'printf "route-3-root=%s\n" "${REGRESSION_EXTERNAL_D3DMETAL_ROUTE_3_WINE_ROOT-unset}"' \
+    'printf "route-4-executable=%s\n" "${REGRESSION_EXTERNAL_D3DMETAL_ROUTE_4_EXECUTABLE-unset}"' \
+    'printf "route-4-root=%s\n" "${REGRESSION_EXTERNAL_D3DMETAL_ROUTE_4_WINE_ROOT-unset}"' \
+    'printf "route-5-executable=%s\n" "${REGRESSION_EXTERNAL_D3DMETAL_ROUTE_5_EXECUTABLE-unset}"' \
+    'printf "route-5-root=%s\n" "${REGRESSION_EXTERNAL_D3DMETAL_ROUTE_5_WINE_ROOT-unset}"' \
     'printf "route-15-executable=%s\n" "${REGRESSION_EXTERNAL_D3DMETAL_ROUTE_15_EXECUTABLE-unset}"' \
     'printf "route-15-basename=%s\n" "${REGRESSION_EXTERNAL_D3DMETAL_ROUTE_15_BASENAME-unset}"' \
     'printf "route-15-root=%s\n" "${REGRESSION_EXTERNAL_D3DMETAL_ROUTE_15_WINE_ROOT-unset}"' \
@@ -101,7 +108,6 @@ run_engine()
     : > "$ENVIRONMENT_LOG"
     env \
         HOME="$TEST_HOME" \
-        REGRESSION_INTERNAL_GPTK_3_0_VERIFIED=1 \
         REGRESSION_EXTERNAL_D3DMETAL_EXECUTABLE=Hostile.exe \
         REGRESSION_EXTERNAL_D3DMETAL_WINE_ROOT=/tmp/hostile-wine \
         REGRESSION_EXTERNAL_D3DMETAL_ROUTE_COUNT=16 \
@@ -131,6 +137,14 @@ assert_external_routes_absent()
         'route-0-root=unset' \
         'route-1-executable=unset' \
         'route-1-root=unset' \
+        'route-2-executable=unset' \
+        'route-2-root=unset' \
+        'route-3-executable=unset' \
+        'route-3-root=unset' \
+        'route-4-executable=unset' \
+        'route-4-root=unset' \
+        'route-5-executable=unset' \
+        'route-5-root=unset' \
         'route-15-executable=unset' \
         'route-15-basename=unset' \
         'route-15-root=unset'
@@ -143,27 +157,42 @@ assert_external_routes_absent()
 run_engine 1
 [[ "$(/usr/bin/sed -n '1p' "$ARGUMENT_LOG")" == "--component 3.0 --verify-only" ]] || fail \
     "el launcher no invocó la verificación exacta del componente 3.0 antes de exportar autoridad"
-[[ "$(/usr/bin/grep '^internal=' "$ENVIRONMENT_LOG")" == "internal=1" ]] || fail \
-    "una verificación 3.0 autorizada debía publicar la autoridad exacta al loader"
 [[ "$(/usr/bin/grep '^legacy-executable=' "$ENVIRONMENT_LOG")" == "legacy-executable=unset" ]] || fail \
     "el launcher heredó un basename GPTK genérico controlado por el entorno host"
 [[ "$(/usr/bin/grep '^legacy-root=' "$ENVIRONMENT_LOG")" == "legacy-root=unset" ]] || fail \
     "el launcher heredó una raíz GPTK genérica controlada por el entorno host"
-[[ "$(/usr/bin/grep '^route-count=' "$ENVIRONMENT_LOG")" == "route-count=2" ]] || fail \
-    "el launcher no publicó exactamente las dos rutas GPTK compiladas"
+[[ "$(/usr/bin/grep '^route-count=' "$ENVIRONMENT_LOG")" == "route-count=6" ]] || fail \
+    "el launcher no publicó las seis rutas GPTK compiladas"
 [[ "$(/usr/bin/grep '^route-0-executable=' "$ENVIRONMENT_LOG")" == \
-    "route-0-executable=TQ2-Win64-Shipping.exe" ]] || fail \
+    "route-0-executable=Grim Dawn.exe" ]] || fail \
     "el índice GPTK 0 no conservó su executable compilado"
 [[ "$(/usr/bin/grep '^route-1-executable=' "$ENVIRONMENT_LOG")" == \
-    "route-1-executable=Borderlands4.exe" ]] || fail \
+    "route-1-executable=DSClient-Win64-Shipping.exe" ]] || fail \
     "el índice GPTK 1 no conservó su executable compilado"
-EXPECTED_EXTERNAL_ROOT="$TEST_HOME/Library/Application Support/Regression/Components/AppleGPTK/4.0b2/wine"
+[[ "$(/usr/bin/grep '^route-2-executable=' "$ENVIRONMENT_LOG")" == \
+    "route-2-executable=DD2.exe" ]] || fail "el índice GPTK 2 no conservó DD2"
+[[ "$(/usr/bin/grep '^route-3-executable=' "$ENVIRONMENT_LOG")" == \
+    "route-3-executable=fft_enhanced.exe" ]] || fail "el índice GPTK 3 no conservó FFT"
+[[ "$(/usr/bin/grep '^route-4-executable=' "$ENVIRONMENT_LOG")" == \
+    "route-4-executable=TQ2-Win64-Shipping.exe" ]] || fail "el índice GPTK 4 no conservó TQ2"
+[[ "$(/usr/bin/grep '^route-5-executable=' "$ENVIRONMENT_LOG")" == \
+    "route-5-executable=Borderlands4.exe" ]] || fail "el índice GPTK 5 no conservó Borderlands 4"
+EXPECTED_GPTK3_ROOT="$TEST_HOME/Library/Application Support/Regression/Components/AppleGPTK/3.0/wine"
+EXPECTED_GPTK4_ROOT="$TEST_HOME/Library/Application Support/Regression/Components/AppleGPTK/4.0b2/wine"
 [[ "$(/usr/bin/grep '^route-0-root=' "$ENVIRONMENT_LOG")" == \
-    "route-0-root=$EXPECTED_EXTERNAL_ROOT" ]] || fail \
+    "route-0-root=$EXPECTED_GPTK3_ROOT" ]] || fail \
     "el índice GPTK 0 no quedó emparejado con la raíz verificada"
 [[ "$(/usr/bin/grep '^route-1-root=' "$ENVIRONMENT_LOG")" == \
-    "route-1-root=$EXPECTED_EXTERNAL_ROOT" ]] || fail \
+    "route-1-root=$EXPECTED_GPTK3_ROOT" ]] || fail \
     "el índice GPTK 1 no quedó emparejado con la raíz verificada"
+for index in 2 3; do
+    [[ "$(/usr/bin/grep "^route-${index}-root=" "$ENVIRONMENT_LOG")" == \
+        "route-${index}-root=$EXPECTED_GPTK3_ROOT" ]] || fail "la ruta GPTK3 $index no quedó emparejada"
+done
+for index in 4 5; do
+    [[ "$(/usr/bin/grep "^route-${index}-root=" "$ENVIRONMENT_LOG")" == \
+        "route-${index}-root=$EXPECTED_GPTK4_ROOT" ]] || fail "la ruta GPTK4 $index no quedó emparejada"
+done
 [[ "$(/usr/bin/grep '^route-15-executable=' "$ENVIRONMENT_LOG")" == \
     "route-15-executable=unset" ]] || fail \
     "una ruta hostil fuera del catálogo sobrevivió a la preparación"
@@ -185,7 +214,4 @@ assert_external_routes_absent "verify/repair fallidos"
 run_engine 0
 [[ "$(/usr/bin/sed -n '1p' "$ARGUMENT_LOG")" == "--component 3.0 --verify-only" ]] || fail \
     "el launcher cambió la verificación 3.0 por otra generación"
-[[ "$(/usr/bin/grep '^internal=' "$ENVIRONMENT_LOG")" == "internal=unset" ]] || fail \
-    "directorios existentes, un payload 2.1 o una marca heredada no deben autorizar GPTK 3.0"
-
-printf 'PASS: GPTK 3.0 solo llega al loader tras verificar recibo y hashes de su generación.\n'
+printf 'PASS: las seis rutas GPTK solo llegan al loader tras verificar su generación.\n'

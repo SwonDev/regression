@@ -10,7 +10,7 @@
 > comparte con Codex) y `README.md` (arquitectura, build reproducible, diagnósticos, método).
 > Si algo aquí difiere de `AGENTS.md`, manda `AGENTS.md`.
 
-> **Contrato actual del checkout (14 de agosto de 2026):** Regression **1.12.0 (38)**, release
+> **Contrato actual del checkout (14 de agosto de 2026):** Regression **1.12.1 (39)**, release
 > estable publicada, y SQLite **v17**. **v1.11.0 (37)** es el baseline histórico; conservar sus
 > gates de transición no autoriza a saltarse la matriz global de futuras releases.
 

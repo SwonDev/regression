@@ -7,6 +7,11 @@ public struct WindowsMediaRepairLease: Equatable, Sendable {
     public let appID: String?
 }
 
+package struct WindowsMediaRuntimeLeaseSnapshot: Equatable, Sendable {
+    package let token: String
+    package let liveOwnerPIDs: Set<Int32>
+}
+
 public enum WindowsMediaRepairInterlockError: Error, Equatable {
     case invalidAuthorization
     case runtimeActive
@@ -60,6 +65,89 @@ public enum WindowsMediaRepairInterlock {
         )
     }
 
+    /// Añade un emisor efímero a la misma sesión de runtime ya acreditada. Se usa únicamente
+    /// para enviar `-applaunch` al Steam de Regression que ya está abierto: todos los PID vivos
+    /// quedan en el mismo registro y una reparación continúa bloqueada hasta que terminen.
+    package static func joinExistingRuntimeLease(
+        ownerPID: Int32,
+        expectedToken: String,
+        expectedRuntimeOwnerPIDs: Set<Int32>,
+        applicationSupportURL: URL
+    ) throws -> WindowsMediaRepairLease {
+        guard ownerPID > 1, processIsAlive(ownerPID), UUID(uuidString: expectedToken) != nil,
+              !expectedRuntimeOwnerPIDs.isEmpty,
+              expectedRuntimeOwnerPIDs.count <= 32 else {
+            throw WindowsMediaRepairInterlockError.invalidAuthorization
+        }
+        guard let directoryRoot = AnchoredDirectory.open(applicationSupportURL) else {
+            throw WindowsMediaRepairInterlockError.unsafeStorage
+        }
+        try directoryRoot.ensurePrivateDirectory(relativePath: directory)
+        guard let root = AnchoredDirectory.open(applicationSupportURL) else {
+            throw WindowsMediaRepairInterlockError.unsafeStorage
+        }
+        return try withAnchoredIssuanceLock(applicationSupportURL: applicationSupportURL) {
+            guard root.isStillNamedBy(applicationSupportURL) else {
+                throw WindowsMediaRepairInterlockError.unsafeStorage
+            }
+            let current = try read(root: root)
+            guard current.kind == "runtime", current.state == "issued", current.appID == nil,
+                  current.token == expectedToken else {
+                throw WindowsMediaRepairInterlockError.leaseActive
+            }
+            var liveOwners = current.ownerPIDs.filter(processIsAlive)
+            guard !Set(liveOwners).isDisjoint(with: expectedRuntimeOwnerPIDs) else {
+                throw WindowsMediaRepairInterlockError.leaseMismatch
+            }
+            if !liveOwners.contains(ownerPID) {
+                guard liveOwners.count < 32 else {
+                    throw WindowsMediaRepairInterlockError.unsafeStorage
+                }
+                liveOwners.append(ownerPID)
+            }
+            try write(
+                LeaseRecord(
+                    kind: current.kind,
+                    state: current.state,
+                    appID: current.appID,
+                    ownerPIDs: liveOwners,
+                    token: current.token
+                ),
+                replacing: true,
+                root: root
+            )
+            guard root.isStillNamedBy(applicationSupportURL) else {
+                throw WindowsMediaRepairInterlockError.unsafeStorage
+            }
+            return WindowsMediaRepairLease(
+                token: current.token,
+                ownerPID: ownerPID,
+                appID: nil
+            )
+        }
+    }
+
+    package static func snapshotExistingRuntimeLease(
+        applicationSupportURL: URL
+    ) throws -> WindowsMediaRuntimeLeaseSnapshot {
+        try withAnchoredIssuanceLock(applicationSupportURL: applicationSupportURL) {
+            guard let root = AnchoredDirectory.open(applicationSupportURL),
+                  root.isStillNamedBy(applicationSupportURL) else {
+                throw WindowsMediaRepairInterlockError.unsafeStorage
+            }
+            let current = try read(root: root)
+            let liveOwners = Set(current.ownerPIDs.filter(processIsAlive))
+            guard current.kind == "runtime", current.state == "issued", current.appID == nil,
+                  !liveOwners.isEmpty else {
+                throw WindowsMediaRepairInterlockError.leaseMismatch
+            }
+            return WindowsMediaRuntimeLeaseSnapshot(
+                token: current.token,
+                liveOwnerPIDs: liveOwners
+            )
+        }
+    }
+
     public static func consumeRepairLease(
         appID: String,
         token: String,
@@ -70,7 +158,7 @@ public enum WindowsMediaRepairInterlock {
         guard runtimeIsIdle else { throw WindowsMediaRepairInterlockError.runtimeActive }
         let current = try read(applicationSupportURL: applicationSupportURL)
         guard current.kind == "repair", ["issued", "consumed"].contains(current.state), current.appID == appID,
-              current.token == token, current.ownerPID == ownerPID,
+              current.token == token, current.ownerPIDs == [ownerPID],
               processIsAlive(ownerPID) else {
             throw WindowsMediaRepairInterlockError.leaseMismatch
         }
@@ -79,7 +167,7 @@ public enum WindowsMediaRepairInterlock {
                 kind: current.kind,
                 state: "consumed",
                 appID: current.appID,
-                ownerPID: current.ownerPID,
+                ownerPIDs: current.ownerPIDs,
                 token: current.token
             ),
             replacing: true,
@@ -92,30 +180,55 @@ public enum WindowsMediaRepairInterlock {
         ownerPID: Int32,
         applicationSupportURL: URL
     ) throws {
-        let current = try read(applicationSupportURL: applicationSupportURL)
-        guard current.token == token, current.ownerPID == ownerPID else {
-            throw WindowsMediaRepairInterlockError.leaseMismatch
+        try withAnchoredIssuanceLock(applicationSupportURL: applicationSupportURL) {
+            guard let root = AnchoredDirectory.open(applicationSupportURL),
+                  root.isStillNamedBy(applicationSupportURL) else {
+                throw WindowsMediaRepairInterlockError.unsafeStorage
+            }
+            let current = try read(root: root)
+            guard current.token == token, current.ownerPIDs.contains(ownerPID) else {
+                throw WindowsMediaRepairInterlockError.leaseMismatch
+            }
+            if current.kind == "runtime" {
+                let remaining = current.ownerPIDs.filter {
+                    $0 != ownerPID && processIsAlive($0)
+                }
+                if !remaining.isEmpty {
+                    try write(
+                        LeaseRecord(
+                            kind: current.kind,
+                            state: current.state,
+                            appID: current.appID,
+                            ownerPIDs: remaining,
+                            token: current.token
+                        ),
+                        replacing: true,
+                        root: root
+                    )
+                    return
+                }
+            }
+            try root.unlinkRegularFile(relativePath: relativePath)
         }
-        guard let root = AnchoredDirectory.open(applicationSupportURL) else {
-            throw WindowsMediaRepairInterlockError.unsafeStorage
-        }
-        try root.unlinkRegularFile(relativePath: relativePath)
     }
 
     private struct LeaseRecord {
         let kind: String
         let state: String
         let appID: String?
-        let ownerPID: Int32
+        let ownerPIDs: [Int32]
         let token: String
 
         var data: Data {
-            Data([
-                "schema=1",
+            let ownerField = kind == "runtime"
+                ? "owner_pids=\(ownerPIDs.map(String.init).joined(separator: ","))"
+                : "owner_pid=\(ownerPIDs[0])"
+            return Data([
+                "schema=\(kind == "runtime" ? "2" : "1")",
                 "kind=\(kind)",
                 "state=\(state)",
                 "app_id=\(appID ?? "none")",
-                "owner_pid=\(ownerPID)",
+                ownerField,
                 "token=\(token)",
             ].joined(separator: "\n").appending("\n").utf8)
         }
@@ -159,7 +272,7 @@ public enum WindowsMediaRepairInterlock {
                 current = nil
             }
             if let current {
-                if processIsAlive(current.ownerPID) {
+                if current.ownerPIDs.contains(where: processIsAlive) {
                     throw WindowsMediaRepairInterlockError.leaseActive
                 }
 #if DEBUG
@@ -192,7 +305,7 @@ public enum WindowsMediaRepairInterlock {
                     kind: kind,
                     state: "issued",
                     appID: appID,
-                    ownerPID: ownerPID,
+                    ownerPIDs: [ownerPID],
                     token: lease.token
                 ),
                 replacing: false,
@@ -273,11 +386,32 @@ public enum WindowsMediaRepairInterlock {
             values[key] = String(line[line.index(after: separator)...])
         }
         guard values.count == 6,
-              values["schema"] == "1",
+              let schema = values["schema"], ["1", "2"].contains(schema),
               let kind = values["kind"], ["repair", "runtime"].contains(kind),
               let state = values["state"], ["issued", "consumed"].contains(state),
-              let rawPID = values["owner_pid"], let ownerPID = Int32(rawPID), ownerPID > 1,
               let token = values["token"], UUID(uuidString: token) != nil else {
+            throw WindowsMediaRepairInterlockError.unsafeStorage
+        }
+        let ownerPIDs: [Int32]
+        if schema == "1", let rawPID = values["owner_pid"],
+           let ownerPID = Int32(rawPID), ownerPID > 1, values["owner_pids"] == nil {
+            ownerPIDs = [ownerPID]
+        } else if schema == "2", kind == "runtime", values["owner_pid"] == nil,
+                  let rawPIDs = values["owner_pids"] {
+            let fields = rawPIDs.split(separator: ",", omittingEmptySubsequences: false)
+            guard !fields.isEmpty, fields.count <= 32 else {
+                throw WindowsMediaRepairInterlockError.unsafeStorage
+            }
+            ownerPIDs = try fields.map { field in
+                guard let ownerPID = Int32(field), ownerPID > 1 else {
+                    throw WindowsMediaRepairInterlockError.unsafeStorage
+                }
+                return ownerPID
+            }
+            guard Set(ownerPIDs).count == ownerPIDs.count else {
+                throw WindowsMediaRepairInterlockError.unsafeStorage
+            }
+        } else {
             throw WindowsMediaRepairInterlockError.unsafeStorage
         }
         let appID = values["app_id"].flatMap { $0 == "none" ? nil : $0 }
@@ -285,7 +419,13 @@ public enum WindowsMediaRepairInterlock {
             || (kind == "repair" && appID.flatMap(SteamAppID.normalized) == appID) else {
             throw WindowsMediaRepairInterlockError.unsafeStorage
         }
-        return LeaseRecord(kind: kind, state: state, appID: appID, ownerPID: ownerPID, token: token)
+        return LeaseRecord(
+            kind: kind,
+            state: state,
+            appID: appID,
+            ownerPIDs: ownerPIDs,
+            token: token
+        )
     }
 
     private static func processIsAlive(_ processID: Int32) -> Bool {

@@ -40,15 +40,77 @@ public enum AppleGPTKVersion: String, Equatable, Sendable {
 }
 
 public enum GameRuntimeProfileCatalog {
-    public static let revision = "2026-08-13.16"
-
-    private static let legacyAppleGPTKVersionByAppID: [String: AppleGPTKVersion] = [
-        "219990": .version3,
-        "4570720": .version3,
-        "2054970": .version3
-    ]
+    public static let revision = "2026-08-14.1"
 
     public static let all: [CompiledGameRuntimeProfile] = [
+        CompiledGameRuntimeProfile(
+            appID: "219990",
+            identifier: "grim-dawn.apple-gptk-3.0-portable",
+            revision: 1,
+            executable: "grim dawn.exe",
+            configurationValues: [
+                "profile.scope": "exact-app-process",
+                "profile.graphics.backend": "d3dmetal",
+                "profile.graphics.route": "complete",
+                "profile.component.id": "apple-gptk",
+                "profile.component.version": "3.0",
+                "profile.component.distribution": "external-apple-authorized",
+                "profile.launcher.entrypoints": "regression,steam",
+                "profile.router.contract": "compiled-exact-process-external-d3dmetal-v1"
+            ]
+        ),
+        CompiledGameRuntimeProfile(
+            appID: "4570720",
+            identifier: "dragonsword.apple-gptk-3.0-portable",
+            revision: 1,
+            executable: "dsclient-win64-shipping.exe",
+            requiresActiveSteamClient: true,
+            configurationValues: [
+                "profile.scope": "exact-app-process",
+                "profile.graphics.backend": "d3dmetal",
+                "profile.graphics.route": "complete",
+                "profile.component.id": "apple-gptk",
+                "profile.component.version": "3.0",
+                "profile.component.distribution": "external-apple-authorized",
+                "profile.launcher.entrypoints": "regression,steam",
+                "profile.router.contract": "compiled-exact-process-external-d3dmetal-v1"
+            ]
+        ),
+        CompiledGameRuntimeProfile(
+            appID: "2054970",
+            identifier: "dragons-dogma-2.apple-gptk-3.0-portable",
+            revision: 1,
+            executable: "dd2.exe",
+            requiresActiveSteamClient: true,
+            configurationValues: [
+                "profile.scope": "exact-app-process",
+                "profile.graphics.backend": "d3dmetal",
+                "profile.graphics.route": "complete",
+                "profile.presentation.driver": "runtime-winemac-overlay-preserved",
+                "profile.component.id": "apple-gptk",
+                "profile.component.version": "3.0",
+                "profile.component.distribution": "external-apple-authorized",
+                "profile.launcher.entrypoints": "regression,steam",
+                "profile.router.contract": "compiled-exact-process-external-d3dmetal-v1"
+            ]
+        ),
+        CompiledGameRuntimeProfile(
+            appID: "1004640",
+            identifier: "final-fantasy-tactics.apple-gptk-3.0-portable",
+            revision: 1,
+            executable: "fft_enhanced.exe",
+            requiresActiveSteamClient: true,
+            configurationValues: [
+                "profile.scope": "exact-app-process",
+                "profile.graphics.backend": "d3dmetal",
+                "profile.graphics.route": "complete",
+                "profile.component.id": "apple-gptk",
+                "profile.component.version": "3.0",
+                "profile.component.distribution": "external-apple-authorized",
+                "profile.launcher.entrypoints": "regression,steam",
+                "profile.router.contract": "compiled-exact-process-external-d3dmetal-v1"
+            ]
+        ),
         CompiledGameRuntimeProfile(
             appID: "1619520",
             identifier: "unity-intro-media-borderless-stability",
@@ -189,7 +251,7 @@ public enum GameRuntimeProfileCatalog {
     /// única autoridad Swift; los gates comparan esta lista con el launcher y Wine.
     public static var externalAppleGPTKRouteBasenames: [String] {
         all.compactMap { profile in
-            guard declaredAppleGPTKVersion(in: profile) == .version4Beta2 else {
+            guard declaredAppleGPTKVersion(in: profile) != nil else {
                 return nil
             }
             return profile.executable
@@ -222,10 +284,6 @@ public enum GameRuntimeProfileCatalog {
               let normalized = SteamAppID.normalized(appID) else {
             return nil
         }
-        if let legacyVersion = legacyAppleGPTKVersionByAppID[normalized] {
-            return legacyVersion
-        }
-
         guard let profile = profile(for: normalized, backend: backend) else {
             return nil
         }

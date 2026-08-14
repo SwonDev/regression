@@ -259,7 +259,7 @@ verify_release_1_12_development_runtime_authority()
         "668a88221884f4e62f3d40bed4a125a45e2e745c1d56610f8e3a33273a219299:tools/wine/wine:bin/wine"
         "173c4926f53d0551d85ee6efe48e641867230a27bda7fc6a226ac484012d13fb:server/wineserver:bin/wineserver"
         "48ae6acb327148f3d8f02afcc93d8f8e61ab333b1dec752918244e58828cf5c9:loader/wine:lib/wine/x86_64-unix/wine"
-        "f3ccf2a487d8999659a1e641b043b916487851c1540362a0a983cdf0fd0bb8cc:dlls/ntdll/ntdll.so:lib/wine/x86_64-unix/ntdll.so"
+        "a8543b9f7ca817eb9555cc4bd1c21943409f27107ea8289f04ae985c92732619:dlls/ntdll/ntdll.so:lib/wine/x86_64-unix/ntdll.so"
     )
 
     [[ -d "$runtime_build" && ! -L "$runtime_build" ]] || {
@@ -323,10 +323,10 @@ verify_release_1_12_development_runtime_authority()
 }
 
 if $RELEASE_1_12_DEVELOPMENT_CANDIDATE; then
-    verify_hash 5cd7370ade8fe210cdc74e6c58f354e7d9cf4e3833012d6482ff6924a4f09fe9 \
+    verify_hash 38be0b5fd0bed42e5467f9a61c5c972733898523eeac3e34e83eb5317efb3edf \
         "Contents/MacOS/regression-engine"
     verify_mode 755 "Contents/MacOS/regression-engine"
-    verify_hash 291bc4ecf61dc9c7efdebbe9e8e5737baff594ee4bfa626b90b1647a64333073 \
+    verify_hash f6bcd552320e3713693d0a0bbf1af4932b573fc35798282c1724f2b52a688660 \
         "Contents/SharedSupport/bin/install-apple-gptk-component"
     verify_mode 755 "Contents/SharedSupport/bin/install-apple-gptk-component"
     verify_hash b1469e452c6ebe94b27fb64504c31f50e251c24ea571ab8eee32ae5015fd0d5f \

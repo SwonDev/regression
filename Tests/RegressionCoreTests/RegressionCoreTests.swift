@@ -69,6 +69,10 @@ final class RegressionCoreTests: XCTestCase {
             "Moonlighter 2: The Endless Vault"
         )
         XCTAssertEqual(
+            VerifiedGameCatalog.certification(for: "1154030")?.sourceRunID,
+            UUID(uuidString: "228467BB-AECE-40EF-8FE5-E739250AA859")
+        )
+        XCTAssertEqual(
             VerifiedGameCatalog.certification(for: "1619520")?.sourceRunID,
             UUID(uuidString: "8EB67186-3D63-4C29-9535-BFC1BAB0A52B")
         )
@@ -90,7 +94,7 @@ final class RegressionCoreTests: XCTestCase {
             borderlands?.engineFingerprint,
             "d7172135a42000c3c4f672663500351f27df9b89bea0d76551dc79be828b95d0"
         )
-        XCTAssertEqual(VerifiedGameCatalog.revision, "2026-08-09.4")
+        XCTAssertEqual(VerifiedGameCatalog.revision, "2026-08-14.5")
         XCTAssertNil(VerifiedGameCatalog.certification(for: "999999999"))
     }
 
@@ -463,7 +467,7 @@ final class RegressionCoreTests: XCTestCase {
     }
 
     func testAppleGPTKRequirementDistinguishesProtectedLegacyGeneration() {
-        for appID in ["219990", "4570720", "2054970"] {
+        for appID in ["219990", "4570720", "2054970", "1004640"] {
             XCTAssertEqual(
                 GameRuntimeProfileCatalog.requiredAppleGPTKVersion(
                     for: appID,
@@ -603,32 +607,23 @@ final class RegressionCoreTests: XCTestCase {
             .deletingLastPathComponent()
         let launcherURL = repositoryRoot.appendingPathComponent("Scripts/regression-engine.sh")
         let launcherContents = try String(contentsOf: launcherURL, encoding: .utf8)
-        let routePattern = try NSRegularExpression(
-            pattern: #"REGRESSION_EXTERNAL_D3DMETAL_ROUTE_([0-9]+)_(EXECUTABLE|WINE_ROOT)=([^"\n]+)"#
-        )
-        let launcherRange = NSRange(launcherContents.startIndex..., in: launcherContents)
-        var launcherRoutes: [Int: [String: String]] = [:]
-        for match in routePattern.matches(in: launcherContents, range: launcherRange) {
-            guard let indexRange = Range(match.range(at: 1), in: launcherContents),
-                  let fieldRange = Range(match.range(at: 2), in: launcherContents),
-                  let valueRange = Range(match.range(at: 3), in: launcherContents),
-                  let index = Int(launcherContents[indexRange]) else {
-                return XCTFail("El launcher contiene una ruta GPTK no parseable")
-            }
-            launcherRoutes[index, default: [:]][String(launcherContents[fieldRange])] =
-                String(launcherContents[valueRange])
-        }
-        let launcherBasenames = launcherRoutes.values.compactMap { $0["EXECUTABLE"] }
         let catalogBasenames = GameRuntimeProfileCatalog.externalAppleGPTKRouteBasenames
         let normalizedCatalogBasenames = catalogBasenames.map { $0.lowercased() }.sorted()
-        let normalizedLauncherBasenames = launcherBasenames.map { $0.lowercased() }.sorted()
+        let expectedBasenames = [
+            "grim dawn.exe",
+            "dsclient-win64-shipping.exe",
+            "dd2.exe",
+            "fft_enhanced.exe",
+            "tq2-win64-shipping.exe",
+            "borderlands4.exe",
+        ]
 
         let patchURL = repositoryRoot
             .appendingPathComponent("patches/wine-26.3.0-per-process-graphics-routing.patch")
         let patchContents = try String(contentsOf: patchURL, encoding: .utf8)
         let failClosedFunction = try XCTUnwrap(
             patchContents
-                .components(separatedBy: "static int regression_executable_requires_gptk_4_0b2(void)")
+                .components(separatedBy: "static int regression_executable_requires_external_gptk(void)")
                 .dropFirst()
                 .first?
                 .components(separatedBy: "+}")
@@ -645,21 +640,27 @@ final class RegressionCoreTests: XCTestCase {
 
         XCTAssertFalse(catalogBasenames.isEmpty)
         XCTAssertEqual(Set(normalizedCatalogBasenames).count, catalogBasenames.count)
-        XCTAssertEqual(normalizedLauncherBasenames, normalizedCatalogBasenames)
+        XCTAssertEqual(normalizedCatalogBasenames, expectedBasenames.sorted())
         XCTAssertEqual(normalizedPatchBasenames, normalizedCatalogBasenames)
-        XCTAssertEqual(launcherRoutes.keys.sorted(), Array(0..<catalogBasenames.count))
-        for index in launcherRoutes.keys {
-            XCTAssertNotNil(launcherRoutes[index]?["EXECUTABLE"])
-            XCTAssertEqual(launcherRoutes[index]?["WINE_ROOT"], "$component/wine")
-            XCTAssertEqual(launcherRoutes[index]?.count, 2)
+        for basename in expectedBasenames {
+            XCTAssertTrue(
+                launcherContents.localizedCaseInsensitiveContains(
+                    "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_EXECUTABLE=\(basename)"
+                )
+            )
         }
-        XCTAssertTrue(launcherContents.contains("prepare_external_apple_gptk_routes"))
-        XCTAssertTrue(launcherContents.contains("REGRESSION_EXTERNAL_D3DMETAL_ROUTE_COUNT=2"))
         XCTAssertEqual(
-            launcherContents.components(separatedBy: "_WINE_ROOT=$component/wine").count - 1,
-            catalogBasenames.count
+            launcherContents.components(separatedBy: "$component/3.0/wine").count - 1,
+            4
         )
-        XCTAssertTrue(launcherContents.contains("--verify-only"))
+        XCTAssertEqual(
+            launcherContents.components(separatedBy: "$component/4.0b2/wine").count - 1,
+            2
+        )
+        XCTAssertTrue(launcherContents.contains("prepare_external_apple_gptk_routes"))
+        XCTAssertTrue(launcherContents.contains("REGRESSION_EXTERNAL_D3DMETAL_ROUTE_COUNT=\"$count\""))
+        XCTAssertTrue(launcherContents.contains("--component 3.0 --verify-only"))
+        XCTAssertTrue(launcherContents.contains("--component 4.0b2 --verify-only"))
         XCTAssertFalse(launcherContents.contains("[[ -f \"$tq2_shipping\" || -f \"$borderlands_shipping\" ]] || return 0"))
         XCTAssertFalse(launcherContents.contains("if [[ -f \"$tq2_shipping\" ]]"))
         XCTAssertFalse(launcherContents.contains("if [[ -f \"$borderlands_shipping\" ]]"))
@@ -676,7 +677,7 @@ final class RegressionCoreTests: XCTestCase {
             .appendingPathComponent("patches/wine-26.3.0-per-process-graphics-routing.patch")
         let contents = try String(contentsOf: patchURL, encoding: .utf8)
 
-        XCTAssertTrue(contents.contains("regression_executable_requires_gptk_4_0b2"))
+        XCTAssertTrue(contents.contains("regression_executable_requires_external_gptk"))
         XCTAssertTrue(contents.contains("REGRESSION_EXTERNAL_D3DMETAL_ROUTE_%u_EXECUTABLE"))
         XCTAssertTrue(contents.contains("REGRESSION_EXTERNAL_D3DMETAL_ROUTE_%u_WINE_ROOT"))
         XCTAssertFalse(contents.contains("REGRESSION_EXTERNAL_D3DMETAL_EXECUTABLE"))
@@ -686,7 +687,7 @@ final class RegressionCoreTests: XCTestCase {
         XCTAssertFalse(contents.contains("regression_builtin_external_d3dmetal_root"))
     }
 
-    func testHistoricalAppleGPTK3ProfilesFailClosedInsideWineWhenUnavailable() throws {
+    func testHistoricalAppleGPTK3ProfilesUseExternalRoutesAndFailClosedWhenUnavailable() throws {
         let repositoryRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -695,30 +696,18 @@ final class RegressionCoreTests: XCTestCase {
             .appendingPathComponent("patches/wine-26.3.0-per-process-graphics-routing.patch")
         let contents = try String(contentsOf: patchURL, encoding: .utf8)
 
-        XCTAssertTrue(contents.contains("regression_internal_gptk_3_0_profile_suffix"))
-        XCTAssertTrue(contents.contains("regression_internal_profile_is_accessible"))
-        XCTAssertTrue(contents.contains("REGRESSION_INTERNAL_GPTK_3_0_VERIFIED"))
-        XCTAssertTrue(contents.contains("regression_internal_gptk_3_0_is_verified"))
-        XCTAssertTrue(contents.contains("required internal GPTK 3.0 component is unavailable or unauthorized"))
+        XCTAssertTrue(contents.contains("regression_executable_requires_external_gptk"))
+        XCTAssertTrue(contents.contains("regression_external_d3dmetal_root"))
+        XCTAssertTrue(contents.contains("external D3DMetal component is unavailable or unauthorized"))
         XCTAssertTrue(contents.contains("regression_executable_is( \"grim dawn.exe\" )"))
         XCTAssertTrue(contents.contains("regression_executable_is( \"dd2.exe\" )"))
         XCTAssertTrue(contents.contains("regression_executable_is( \"dsclient-win64-shipping.exe\" )"))
-        XCTAssertTrue(contents.contains("/lib/profiles/grim-dawn"))
-        XCTAssertTrue(contents.contains("/lib/profiles/dragons-dogma-2"))
-        XCTAssertTrue(contents.contains("/lib/profiles/dragonsword"))
-        XCTAssertTrue(contents.contains("required internal GPTK 3.0 profile is unavailable or invalid"))
-        XCTAssertTrue(contents.contains("S_ISDIR"))
-        XCTAssertTrue(contents.contains("realpath"))
+        XCTAssertTrue(contents.contains("regression_executable_is( \"fft_enhanced.exe\" )"))
+        XCTAssertFalse(contents.contains("REGRESSION_INTERNAL_GPTK_3_0_VERIFIED"))
+        XCTAssertFalse(contents.contains("regression_internal_gptk_3_0_profile_suffix"))
+        XCTAssertTrue(contents.contains("backend = \"external-d3dmetal\""))
         XCTAssertTrue(contents.contains("exit( 126 )"))
         XCTAssertFalse(contents.contains("REGRESSION_INTERNAL_GPTK_2_1_VERIFIED"))
-
-        let authorityGate = try XCTUnwrap(
-            contents.range(of: "!regression_internal_gptk_3_0_is_verified()")
-        )
-        let directoryGate = try XCTUnwrap(
-            contents.range(of: "!regression_internal_profile_is_accessible")
-        )
-        XCTAssertLessThan(authorityGate.lowerBound, directoryGate.lowerBound)
     }
 
     func testForsakenIsleWindowsMediaProfileIsExactAndRegressionOnly() throws {

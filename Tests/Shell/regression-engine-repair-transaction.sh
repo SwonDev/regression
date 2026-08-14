@@ -36,11 +36,13 @@ fail()
     'case "${1:-}" in' \
     '  unreal-bootstrap-routes) exit 0 ;;' \
     '  windows-media-pending-recovery-app-id) printf "%s\n" "REGRESSION_WINDOWS_MEDIA_PENDING_APP_ID=none" ;;' \
+    '  windows-media-repair-plan) printf "%s\n" "REGRESSION_WINDOWS_MEDIA_PLAN=not-required" ;;' \
     '  prepare-launch-state)' \
+    '    [[ "${2:-}" == "2617700" && "${3:-}" == "--owner-pid" && "${4:-}" == "$PPID" ]] || exit 98' \
     '    [[ "${REGRESSION_REPAIR_TEST_EXIT:-0}" == "0" ]] || exit "$REGRESSION_REPAIR_TEST_EXIT"' \
     '    [[ -n "${REGRESSION_REPAIR_TEST_STATE:-}" ]] && printf "%s\n" "$REGRESSION_REPAIR_TEST_STATE"' \
     '    ;;' \
-    '  acquire-windows-media-runtime-lease) printf "%s\n" "REGRESSION_WINDOWS_MEDIA_RUNTIME_LEASE=22222222-2222-4222-8222-222222222222" ;;' \
+    '  acquire-windows-media-runtime-lease) printf "%s\n" "REGRESSION_WINDOWS_MEDIA_RUNTIME_LEASE=22222222-2222-4222-8222-222222222222" "REGRESSION_WINDOWS_MEDIA_RUNTIME_STATE=issued" ;;' \
     '  *) exit 1 ;;' \
     'esac' \
     > "$CONTROLLER"
@@ -62,7 +64,7 @@ run_allowed()
         HOME="$TEST_HOME" \
         REGRESSION_REPAIR_TEST_STATE="$state" \
         REGRESSION_REPAIR_TEST_WINE_LOG="$WINE_LOG" \
-        "$ENGINE"
+        "$ENGINE" -applaunch 2617700
     [[ "$(/usr/bin/wc -l < "$WINE_LOG" | /usr/bin/tr -d ' ')" == "1" ]] || fail \
         "el estado permitido $state no llegó exactamente una vez a Wine"
 }
@@ -77,7 +79,7 @@ run_blocked()
         REGRESSION_REPAIR_TEST_STATE="$state" \
         REGRESSION_REPAIR_TEST_EXIT="$exit_code" \
         REGRESSION_REPAIR_TEST_WINE_LOG="$WINE_LOG" \
-        "$ENGINE"; then
+        "$ENGINE" -applaunch 2617700; then
         fail "el estado inseguro '$state' permitió abrir Wine"
     fi
     [[ ! -s "$WINE_LOG" ]] || fail "Wine se ejecutó después de un resultado inseguro"

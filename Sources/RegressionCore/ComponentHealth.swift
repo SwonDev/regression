@@ -120,8 +120,8 @@ public enum TrustedComponentCatalog {
   public static let windowsMediaComponentVersion = "1"
   public static let steamRuntimePrerequisitesComponentID = "steam-runtime-prerequisites"
   public static let steamRuntimePrerequisitesComponentVersion = "3"
-  public static let supportedApplicationVersion = "1.12.0"
-  public static let supportedBuildIdentifier = "38"
+  public static let supportedApplicationVersion = "1.12.1"
+  public static let supportedBuildIdentifier = "39"
 
   private static let windowsMediaDevelopmentManifestSHA256 =
     "ac662661fb3384c6ad100066391cab209f9de60b2e129fb92e07365ee6fe9bb1"
@@ -141,7 +141,7 @@ public enum TrustedComponentCatalog {
 
   /// Binarios públicos recompilados para el prefijo canónico `/Applications/Regression.app`.
   ///
-  /// Estos PINs proceden del ensemble público 1.12.0 (38) derivado desde el builder raw sellado
+  /// Estos PINs proceden del ensemble público 1.12 (reutilizado por 1.12.1/39) derivado desde el builder raw sellado
   /// mediante `strip -S`, saneado literal y firma ad hoc.
   /// Los Mach-O pre-firma del builder no son bytes de release y se rechazan deliberadamente.
   private static let steamRuntimePublicCoreFiles: [TrustedComponentFile] = [
@@ -159,7 +159,7 @@ public enum TrustedComponentCatalog {
     ),
     TrustedComponentFile(
       relativePath: "lib/wine/x86_64-unix/ntdll.so",
-      expectedSHA256: "66622d2832d99c37cdaa2872c5409b5f9a5dc04d1fdb9dcd426ae37f8365942e"
+      expectedSHA256: "f17cebf085a0a746224e61b4fc49341f7a0cec48741c5f12d1cc84a4dcd0ba5d"
     ),
     TrustedComponentFile(
       relativePath: "share/wine/wine.inf",

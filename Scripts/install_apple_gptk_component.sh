@@ -22,6 +22,7 @@ LICENSE_RECEIPT=""
 LICENSE_CONFIRMATION=""
 VERSION_TAG=""
 SOURCE_DMG=""
+SOURCE_COMPONENT=""
 OUTPUT_DIR=""
 AUTHORIZATION_FILE=""
 AUTHORIZATION_CONSUMED=false
@@ -49,6 +50,7 @@ usage()
     printf '     %s [--component 3.0|4.0b2] --install-authorized --source-dmg RUTA --authorization-file FILE\n\n' "$0"
     printf '     %s --component 3.0 --inspect-existing --output-dir DIR\n' "$0"
     printf '     %s --component 3.0 --authorize-existing --authorization-file FILE\n\n' "$0"
+    printf '     %s --component 3.0 --recover-existing --source-component DIR\n\n' "$0"
     printf 'Sin --component se selecciona 4.0b2. Cada generación conserva caché, recibo y payload propios.\n'
     printf 'Descarga asistida oficial:\n  %s\n' "$OFFICIAL_DOWNLOAD_URL"
 }
@@ -58,12 +60,12 @@ configure_component()
     case "$COMPONENT_REQUEST" in
         3.0)
             VERSION="3.0"
-            DMG_NAME=""
-            # El payload blindado está demostrado por hashes y firma Apple, pero no existe
-            # evidencia local suficiente para vincularlo a un DMG completo concreto.
+            DMG_NAME="Evaluation_environment_for_Windows_games_3.0.dmg"
+            # El DMG completo se liga al recibo local después de comprobar el payload exacto,
+            # su versión y sus firmas Apple. No se confía en el nombre seleccionado.
             DMG_SHA256=""
             MIN_MACOS_MAJOR="14"
-            DMG_ONBOARDING_AVAILABLE=false
+            DMG_ONBOARDING_AVAILABLE=true
             ;;
         4.0b2)
             VERSION="4.0b2"
@@ -215,6 +217,21 @@ canonical_regular_file()
     type="$(/usr/bin/stat -f '%HT' "$file" 2>/dev/null || true)"
     [[ "$type" == "Regular File" ]] || return 1
     /bin/realpath "$file"
+}
+
+canonical_physical_directory()
+{
+    local directory="$1"
+    local canonical owner type
+
+    [[ -d "$directory" && ! -L "$directory" ]] || return 1
+    reject_symlink_path_chain "$directory"
+    canonical="$(/bin/realpath "$directory" 2>/dev/null || true)"
+    [[ -n "$canonical" && "$canonical" == "$directory" ]] || return 1
+    owner="$(/usr/bin/stat -f '%u' "$directory" 2>/dev/null || true)"
+    type="$(/usr/bin/stat -f '%HT' "$directory" 2>/dev/null || true)"
+    [[ "$owner" == "$(/usr/bin/id -u)" && "$type" == "Directory" ]] || return 1
+    printf '%s\n' "$canonical"
 }
 
 validate_private_output_dir()
@@ -454,7 +471,7 @@ protected_payload_topology_is_safe()
         wine/x86_64-windows/nvapi64.dll
         wine/x86_64-windows/nvngx.dll
         external/D3DMetal.framework/Versions/A/Resources/Info.plist
-        Documentation/License.rtf
+        external/D3DMetal.framework/Versions/A/Resources/LICENSE
     )
 
     [[ -d "$root" && ! -L "$root" ]] || return 1
@@ -467,6 +484,25 @@ protected_payload_topology_is_safe()
         [[ "$(/usr/bin/readlink "$root/wine/x86_64-unix/$module.so")" == \
            "../../external/libd3dshared.dylib" ]] || return 1
     done
+}
+
+component_license_path()
+{
+    if [[ "$VERSION" == "3.0" ]]; then
+        printf '%s\n' \
+            "$COMPONENT_ROOT/external/D3DMetal.framework/Versions/A/Resources/LICENSE"
+    else
+        printf '%s\n' "$COMPONENT_ROOT/Documentation/License.rtf"
+    fi
+}
+
+component_license_relative_path()
+{
+    if [[ "$VERSION" == "3.0" ]]; then
+        printf '%s\n' 'external/D3DMetal.framework/Versions/A/Resources/LICENSE'
+    else
+        printf '%s\n' 'Documentation/License.rtf'
+    fi
 }
 
 verify_payload()
@@ -544,27 +580,34 @@ verify_payload()
 # TEST_HARNESS_COMPONENT_CURRENT_BEGIN
 component_is_current()
 {
+    local license_relative
+
+    license_relative="$(component_license_relative_path)"
     [[ -d "$COMPONENT_ROOT" && ! -L "$COMPONENT_ROOT" ]] &&
         { [[ "$VERSION" != "3.0" ]] || protected_payload_topology_is_safe "$COMPONENT_ROOT"; } &&
         verify_payload "$COMPONENT_ROOT" nvngx &&
-        [[ -f "$COMPONENT_ROOT/Documentation/License.rtf" &&
-           ! -L "$COMPONENT_ROOT/Documentation/License.rtf" ]] &&
-        [[ -f "$COMPONENT_ROOT/Documentation/Acknowledgements.rtf" &&
-           ! -L "$COMPONENT_ROOT/Documentation/Acknowledgements.rtf" ]] &&
-        [[ -f "$COMPONENT_ROOT/Documentation/Read Me.rtf" &&
-           ! -L "$COMPONENT_ROOT/Documentation/Read Me.rtf" ]]
+        regular_file_without_symlink_chain "$COMPONENT_ROOT" "$license_relative" &&
+        { [[ "$VERSION" == "3.0" ]] || {
+            [[ -f "$COMPONENT_ROOT/Documentation/Acknowledgements.rtf" &&
+               ! -L "$COMPONENT_ROOT/Documentation/Acknowledgements.rtf" ]] &&
+            [[ -f "$COMPONENT_ROOT/Documentation/Read Me.rtf" &&
+               ! -L "$COMPONENT_ROOT/Documentation/Read Me.rtf" ]];
+        }; }
 }
 # TEST_HARNESS_COMPONENT_CURRENT_END
 
 authorized_component_is_current()
 {
-    local license_hash
+    local license_hash license_path receipt_dmg
 
     component_is_current || return 1
-    license_hash="$(/usr/bin/shasum -a 256 \
-        "$COMPONENT_ROOT/Documentation/License.rtf" | /usr/bin/awk '{print $1}')"
+    license_path="$(component_license_path)"
+    license_hash="$(/usr/bin/shasum -a 256 "$license_path" | /usr/bin/awk '{print $1}')"
     if [[ "$VERSION" == "3.0" ]]; then
-        existing_receipt_matches_payload "$LICENSE_RECEIPT" "$license_hash"
+        existing_receipt_matches_payload "$LICENSE_RECEIPT" "$license_hash" && return 0
+        receipt_dmg="$(receipt_value dmg_sha256 "$LICENSE_RECEIPT" 2>/dev/null || true)"
+        [[ "$receipt_dmg" =~ ^[0-9a-f]{64}$ ]] &&
+            receipt_matches_payload "$LICENSE_RECEIPT" "$receipt_dmg" "$license_hash" "3.0"
     else
         receipt_matches_payload "$LICENSE_RECEIPT" "$DMG_SHA256" "$license_hash"
     fi
@@ -783,6 +826,11 @@ while [[ $# -gt 0 ]]; do
             SOURCE_DMG="$2"
             shift 2
             ;;
+        --source-component)
+            [[ $# -ge 2 ]] || fail "--source-component requiere una ruta"
+            SOURCE_COMPONENT="$2"
+            shift 2
+            ;;
         --output-dir)
             [[ $# -ge 2 ]] || fail "--output-dir requiere una ruta"
             OUTPUT_DIR="$2"
@@ -825,6 +873,10 @@ while [[ $# -gt 0 ]]; do
             select_mode authorize-existing
             shift
             ;;
+        --recover-existing)
+            select_mode recover-existing
+            shift
+            ;;
         --help|-h)
             usage
             exit 0
@@ -843,6 +895,8 @@ validate_managed_paths
     "elige exactamente un modo de operación"
 [[ "$MODE" == "install" || "$MODE" == "inspect" || "$MODE" == "authorized" || -z "$SOURCE_DMG" ]] || fail \
     "--source-dmg solo se admite junto con --install, --inspect o --install-authorized"
+[[ "$MODE" == "recover-existing" || -z "$SOURCE_COMPONENT" ]] || fail \
+    "--source-component solo se admite junto con --recover-existing"
 [[ "$MODE" == "inspect" || "$MODE" == "inspect-existing" || -z "$OUTPUT_DIR" ]] || fail \
     "--output-dir solo se admite junto con --inspect o --inspect-existing"
 [[ "$MODE" == "authorized" || "$MODE" == "authorize-existing" || -z "$AUTHORIZATION_FILE" ]] || fail \
@@ -872,6 +926,50 @@ if [[ "$MODE" == "verify" ]]; then
     fail "Apple GPTK $VERSION no está instalado o no supera su manifiesto"
 fi
 
+if [[ "$MODE" == "recover-existing" ]]; then
+    [[ "$VERSION" == "3.0" ]] || fail \
+        "--recover-existing solo admite el componente protegido exacto 3.0"
+    [[ -n "$SOURCE_COMPONENT" ]] || fail \
+        "--recover-existing requiere --source-component DIR"
+    SOURCE_COMPONENT_CANONICAL="$(canonical_physical_directory "$SOURCE_COMPONENT" || true)"
+    [[ -n "$SOURCE_COMPONENT_CANONICAL" ]] || fail \
+        "la fuente de recuperación no es un directorio físico canónico del usuario"
+    [[ "$SOURCE_COMPONENT_CANONICAL" != "$COMPONENT_ROOT" ]] || fail \
+        "la fuente de recuperación ya es el componente canónico"
+    protected_payload_topology_is_safe "$SOURCE_COMPONENT_CANONICAL" || fail \
+        "la fuente de recuperación no tiene la topología protegida exacta"
+    verify_payload "$SOURCE_COMPONENT_CANONICAL" nvngx || fail \
+        "la fuente de recuperación no coincide con el catálogo protegido 3.0"
+
+    ensure_private_managed_directory "$APPLICATION_SUPPORT"
+    ensure_private_managed_directory "$COMPONENT_PARENT"
+    STAGE="$(/usr/bin/mktemp -d "$COMPONENT_PARENT/.30-recovery-stage.XXXXXX")"
+    /usr/bin/ditto "$SOURCE_COMPONENT_CANONICAL" "$STAGE"
+    /bin/chmod -R go-rwx "$STAGE"
+    protected_payload_topology_is_safe "$STAGE" || fail \
+        "la copia preparada perdió la topología protegida"
+    verify_payload "$STAGE" nvngx || fail \
+        "la copia preparada perdió la identidad protegida"
+
+    if [[ -e "$COMPONENT_ROOT" || -L "$COMPONENT_ROOT" ]]; then
+        BACKUP_PARENT="$APPLICATION_SUPPORT/Backups/Components/AppleGPTK"
+        ensure_private_managed_directory "$APPLICATION_SUPPORT/Backups"
+        ensure_private_managed_directory "$APPLICATION_SUPPORT/Backups/Components"
+        ensure_private_managed_directory "$BACKUP_PARENT"
+        ROLLBACK="$BACKUP_PARENT/3.0-before-recovery-$(/bin/date +%Y%m%d-%H%M%S)-$$"
+        /bin/mv "$COMPONENT_ROOT" "$ROLLBACK"
+    fi
+    /bin/mv "$STAGE" "$COMPONENT_ROOT"
+    STAGE=""
+    COMPONENT_INSTALLED=true
+    component_is_current || fail \
+        "el componente recuperado no supera la verificación final"
+    INSTALL_COMMITTED=true
+    printf 'Apple GPTK 3.0 recuperado y verificado desde una instalación anterior de Regression.\n'
+    printf 'La licencia queda pendiente de aceptación local antes de usar los perfiles protegidos.\n'
+    exit 0
+fi
+
 if unsupported_reason="$(platform_failure_reason)"; then
     fail "$unsupported_reason"
 fi
@@ -886,7 +984,7 @@ if [[ "$MODE" == "inspect-existing" || "$MODE" == "authorize-existing" ]]; then
 
     component_is_current || fail \
         "el componente protegido 3.0 existente falta, ha derivado o contiene enlaces no autorizados"
-    TEST_LICENSE_PATH="$COMPONENT_ROOT/Documentation/License.rtf"
+    TEST_LICENSE_PATH="$(component_license_path)"
     LICENSE_SHA256="$(/usr/bin/shasum -a 256 "$TEST_LICENSE_PATH" | /usr/bin/awk '{print $1}')"
 
     if [[ "$MODE" == "inspect-existing" ]]; then
@@ -954,11 +1052,19 @@ if [[ "$INTERNAL_TEST_MODE" == "license-gate" ]]; then
 fi
 
 EXPECTED_DMG_SHA256="$DMG_SHA256"
+if [[ -z "$EXPECTED_DMG_SHA256" && "$MODE" == "repair" ]]; then
+    EXPECTED_DMG_SHA256="$(receipt_value dmg_sha256 "$LICENSE_RECEIPT" 2>/dev/null || true)"
+    [[ "$EXPECTED_DMG_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail \
+        "la reparación desde caché no tiene una identidad DMG autorizada"
+fi
 if [[ "$INTERNAL_TEST_MODE" == "repair-gate" ||
       "$INTERNAL_TEST_MODE" == "inspect-gate" ||
       "$INTERNAL_TEST_MODE" == "authorized-gate" ]]; then
     EXPECTED_DMG_SHA256="${REGRESSION_GPTK_INTERNAL_TEST_DMG_SHA256:-}"
     [[ "$EXPECTED_DMG_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "el seam requiere un hash de prueba válido"
+fi
+if [[ -z "$EXPECTED_DMG_SHA256" ]]; then
+    EXPECTED_DMG_SHA256="$(/usr/bin/shasum -a 256 "$SOURCE_DMG" | /usr/bin/awk '{print $1}')"
 fi
 if ! hash_matches "$EXPECTED_DMG_SHA256" "$SOURCE_DMG"; then
     if [[ "$MODE" == "repair" ]]; then
@@ -1023,15 +1129,16 @@ if [[ "$MODE" == "inspect" ]]; then
     [[ -n "$OUTPUT_DIR" ]] || fail "--inspect requiere --output-dir DIR"
     validate_private_output_dir "$OUTPUT_DIR"
     /usr/bin/ditto "$MOUNT_POINT/License.rtf" "$OUTPUT_DIR/License.rtf"
-    write_inspection_descriptor "$OUTPUT_DIR" "$SOURCE_DMG" "$DMG_SHA256" "$LICENSE_SHA256"
+    write_inspection_descriptor "$OUTPUT_DIR" "$SOURCE_DMG" "$EXPECTED_DMG_SHA256" "$LICENSE_SHA256"
     printf 'Apple GPTK %s inspeccionado sin modificar la instalación.\n' "$VERSION"
     exit 0
 elif [[ "$MODE" == "authorized" ]]; then
     validate_authorization_contract "$AUTHORIZATION_FILE" "$SOURCE_DMG" \
-        "$DMG_SHA256" "$LICENSE_SHA256"
+        "$EXPECTED_DMG_SHA256" "$LICENSE_SHA256"
     consume_authorization_file "$AUTHORIZATION_FILE"
 elif [[ "$MODE" == "repair" ]]; then
-    receipt_matches_payload "$LICENSE_RECEIPT" "$DMG_SHA256" "$LICENSE_SHA256" || fail \
+    receipt_matches_payload "$LICENSE_RECEIPT" "$EXPECTED_DMG_SHA256" "$LICENSE_SHA256" \
+        "$VERSION" || fail \
         "el recibo ha derivado o requiere onboarding y una nueva aceptación humana"
 else
     show_license_and_confirm "$MOUNT_POINT/License.rtf"
@@ -1075,7 +1182,7 @@ component_is_current || fail "el componente instalado no supera la verificación
 
 ensure_private_managed_directory "$APPLICATION_SUPPORT/Installers"
 ensure_private_managed_directory "$(/usr/bin/dirname "$INSTALLER_CACHE")"
-if ! hash_matches "$DMG_SHA256" "$INSTALLER_CACHE"; then
+if ! hash_matches "$EXPECTED_DMG_SHA256" "$INSTALLER_CACHE"; then
     CACHE_STAGE="$INSTALLER_CACHE.new-$$"
     /usr/bin/ditto "$SOURCE_DMG" "$CACHE_STAGE"
     /bin/chmod 600 "$CACHE_STAGE"
@@ -1083,7 +1190,7 @@ if ! hash_matches "$DMG_SHA256" "$INSTALLER_CACHE"; then
     CACHE_STAGE=""
 fi
 if [[ "$MODE" == "install" || "$MODE" == "authorized" ]]; then
-    write_license_receipt "$DMG_SHA256" "$LICENSE_SHA256"
+    write_license_receipt "$EXPECTED_DMG_SHA256" "$LICENSE_SHA256"
 fi
 
 INSTALL_COMMITTED=true

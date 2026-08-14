@@ -47,8 +47,8 @@ mantiene rollback hasta que Steam y un juego se validan de forma explícita.
 > termina correctamente no se marca como compatible por sí solo.
 
 > [!NOTE]
-> El contrato del código fuente de esta rama es **Regression 1.12.0 (38)** y SQLite **v17**.
-> **v1.12.0 (38)** es la release estable actual. **v1.11.0 (37)** permanece como baseline
+> El contrato del código fuente de esta rama es **Regression 1.12.1 (39)** y SQLite **v17**.
+> **v1.12.1 (39)** corrige el arranque general de Steam y la conservación/onboarding de GPTK. **v1.11.0 (37)** permanece como baseline
 > histórico verificable y como origen autorizado de la migración. La instalación de arriba
 > siempre descarga la última release publicada.
 
@@ -268,7 +268,7 @@ visual está en [`DESIGN.md`](DESIGN.md).
 
 ## Desarrollo
 
-Este checkout corresponde a la release **1.12.0 (38)**. Los helpers que nombran `public-1.11`
+Este checkout corresponde a la release **1.12.1 (39)**. Los helpers que nombran `public-1.11`
 son puertas históricas para comprobar la transición desde el asset anterior; no definen la
 versión estable actual.
 

@@ -45,8 +45,8 @@ status_output="$(env HOME="$TMP_ROOT/home" "$INSTALLER" --status)"
     || fail "--status no devolvió la página oficial de Apple"
 
 legacy_status="$(env HOME="$TMP_ROOT/legacy-home" "$INSTALLER" --component 3.0 --status)"
-[[ "$legacy_status" == unsupported:*"huella exacta demostrada"* ]] || fail \
-    "el payload 3.0 conocido debe permanecer fail-closed sin una identidad DMG demostrada"
+[[ "$legacy_status" == requires-download:*"Evaluation_environment_for_Windows_games_3.0.dmg"* ]] || fail \
+    "GPTK 3.0 debe ofrecer el mismo onboarding oficial sin bloquear Steam"
 
 expect_failure "modo ausente" "elige exactamente un modo" \
     "$INSTALLER"
@@ -62,6 +62,21 @@ expect_failure "instalación sin fuente explícita" "--install requiere --source
     "$INSTALLER" --install
 expect_failure "fuente fuera de install" "--source-dmg solo se admite" \
     "$INSTALLER" --status --source-dmg "$TMP_ROOT/fake.dmg"
+expect_failure "recuperación sin fuente" "--recover-existing requiere --source-component" \
+    env HOME="$TMP_ROOT/recovery-missing-home" \
+        "$INSTALLER" --component 3.0 --recover-existing
+expect_failure "recuperación 4.0 no permitida" "solo admite el componente protegido exacto 3.0" \
+    env HOME="$TMP_ROOT/recovery-version-home" \
+        "$INSTALLER" --component 4.0b2 --recover-existing \
+            --source-component "$TMP_ROOT"
+recovery_outside="$TMP_ROOT/recovery-outside"
+recovery_link="$TMP_ROOT/recovery-link"
+mkdir -p "$recovery_outside"
+ln -s "$recovery_outside" "$recovery_link"
+expect_failure "recuperación desde symlink" "directorio físico canónico" \
+    env HOME="$TMP_ROOT/recovery-symlink-home" \
+        "$INSTALLER" --component 3.0 --recover-existing \
+            --source-component "$recovery_link"
 expect_failure "instalación sin TTY" "terminal interactivo" \
     "$INSTALLER" --install --source-dmg "$TMP_ROOT/fake.dmg"
 expect_failure "reparación sin recibo" "requiere onboarding" \
@@ -183,7 +198,7 @@ expect_failure "reparación autorizada en seam no mutante" "sin permitir ninguna
 license_line="$(/usr/bin/grep -nF 'show_license_and_confirm "$MOUNT_POINT/License.rtf"' "$INSTALLER" | /usr/bin/cut -d: -f1)"
 # shellcheck disable=SC2016
 mutation_line="$(/usr/bin/grep -nF 'ensure_private_managed_directory "$COMPONENT_PARENT"' \
-    "$INSTALLER" | /usr/bin/cut -d: -f1)"
+    "$INSTALLER" | /usr/bin/tail -n 1 | /usr/bin/cut -d: -f1)"
 [[ -n "$license_line" && -n "$mutation_line" && "$license_line" -lt "$mutation_line" ]] || fail \
     "License.rtf debe mostrarse y confirmarse antes de mutar el componente"
 
@@ -192,7 +207,7 @@ if /usr/bin/grep -Eiq 'curl|wget|cookie|services-account/download' "$INSTALLER";
 fi
 
 # shellcheck disable=SC2016
-/usr/bin/grep -Fq '"$installer" --repair-from-cache' "$ENGINE" || fail \
+/usr/bin/grep -Fq '"$installer" --component 4.0b2 --repair-from-cache' "$ENGINE" || fail \
     "la autorreparación del motor debe usar el modo explícito --repair-from-cache"
 /usr/bin/grep -Fq 'elif authorized_component_is_current; then' "$INSTALLER" || fail \
     "--status debe exigir payload y recibo autorizado"
@@ -201,10 +216,11 @@ fi
 # shellcheck disable=SC2016
 /usr/bin/grep -Fq '"$installer" --component 3.0 --verify-only' "$ENGINE" || fail \
     "el motor debe acreditar recibo y hashes 3.0 antes de exportar autoridad interna"
-/usr/bin/grep -Fq 'unset REGRESSION_INTERNAL_GPTK_3_0_VERIFIED' "$ENGINE" || fail \
-    "el motor debe borrar cualquier autoridad 3.0 heredada antes de verificar"
-/usr/bin/grep -Fq 'export REGRESSION_INTERNAL_GPTK_3_0_VERIFIED=1' "$ENGINE" || fail \
-    "el motor solo debe publicar la autoridad exacta después de verificar 3.0"
+/usr/bin/grep -Fq 'unset REGRESSION_EXTERNAL_D3DMETAL_ROUTE_COUNT' "$ENGINE" || fail \
+    "el motor debe borrar cualquier autoridad GPTK externa heredada antes de verificar"
+/usr/bin/grep -Fq 'REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_EXECUTABLE=Grim Dawn.exe' \
+    "$ENGINE" || fail \
+    "el motor solo debe publicar la ruta GPTK 3.0 después de verificar el componente"
 /usr/bin/grep -Fq '05a7beaed4494a4f5f53d3f626a82fffc3b70146436a908b7048a0632a49e1a8' \
     "$INSTALLER" || fail "el catálogo 3.0 debe fijar el D3DMetal blindado exacto"
 if /usr/bin/grep -Eq '3\.0\).*DMG_SHA256="[0-9a-f]{64}"' "$INSTALLER"; then

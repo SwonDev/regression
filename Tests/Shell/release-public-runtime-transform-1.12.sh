@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TRANSFORM="$ROOT/build/verify-public-runtime-transform-1.12.sh"
 PACKAGER="$ROOT/Scripts/package_release.sh"
 ASSET_VERIFIER="$ROOT/build/verify-release-asset.sh"
-CURRENT_ASSET="$ROOT/build/release-1.12.0/Regression-1.12.0-macos-arm64.tar.gz"
+CURRENT_ASSET="$ROOT/build/release-1.12.1/Regression-1.12.1-macos-arm64.tar.gz"
 SCRATCH="$(mktemp -d /private/tmp/regression-public-runtime-transform-test.XXXXXX)"
 WINE_ROOT="$SCRATCH/wine-root"
 SECOND_WINE_ROOT="$SCRATCH/wine-root-second"
@@ -49,7 +49,7 @@ done <<'EOF'
 fed13faa895c9ea5896a6497490db26674c3dca2a318e3389d8e43ba3e00f552 bin/wine
 8d14fb9d6d9730c300ba16b5997d98218a2a40a78008d60f3a6edb719f328db3 bin/wineserver
 5636a6505e872c8d185d8db7ced2d4aa8e9057e81c4c579e4b623009f9c2857b lib/wine/x86_64-unix/wine
-66622d2832d99c37cdaa2872c5409b5f9a5dc04d1fdb9dcd426ae37f8365942e lib/wine/x86_64-unix/ntdll.so
+f17cebf085a0a746224e61b4fc49341f7a0cec48741c5f12d1cc84a4dcd0ba5d lib/wine/x86_64-unix/ntdll.so
 EOF
 
 for relative in bin/wine bin/wineserver lib/wine/x86_64-unix/wine lib/wine/x86_64-unix/ntdll.so; do

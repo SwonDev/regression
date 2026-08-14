@@ -145,6 +145,31 @@ final class RendererCapabilityReportTests: XCTestCase {
         XCTAssertEqual(report.resolution, .effective(.d3dmetal))
     }
 
+    func testInspectorAcceptsGPTK3DMGReceiptForPortableLegacyProfile() throws {
+        let fixture = try RendererInspectorFixture()
+        defer { fixture.remove() }
+        try fixture.installCompleteDXMT()
+        try fixture.installGPTK(
+            version: .version3,
+            validReceipt: true,
+            receiptStyle: .dmgAuthorized
+        )
+        let receipt = fixture.gptkReceiptRoot.appendingPathComponent("3.0-license-receipt")
+        let receiptContents = try String(contentsOf: receipt, encoding: .utf8)
+        XCTAssertEqual(receiptContents.split(whereSeparator: \.isNewline).count, 6)
+        XCTAssertTrue(receiptContents.contains("version=3.0"))
+        XCTAssertTrue(receiptContents.contains("dmg_sha256="))
+        XCTAssertTrue(receiptContents.contains("confirmation=ACEPTO LA LICENCIA DE APPLE GPTK 3.0"))
+
+        let report = RendererCapabilityInspector(
+            applicationSupportURL: fixture.applicationSupport,
+            componentHealth: { version, _ in version == .version3 },
+            moduleHealth: trustedFixtureModule
+        ).inspect(installation: fixture.installation, appID: "1004640")
+
+        XCTAssertEqual(report.resolution, .effective(.d3dmetal))
+    }
+
     func testInspectorAcceptsValidGPTK4ForDeclaredProfile() throws {
         let fixture = try RendererInspectorFixture()
         defer { fixture.remove() }
@@ -629,6 +654,10 @@ final class RendererCapabilityReportTests: XCTestCase {
 }
 
 final class RendererInspectorFixture {
+    enum GPTKReceiptStyle {
+        case existingProtected
+        case dmgAuthorized
+    }
     let root: URL
     let application: URL
     let bottle: URL
@@ -722,7 +751,8 @@ final class RendererInspectorFixture {
     func installGPTK(
         version: AppleGPTKVersion,
         validReceipt: Bool,
-        hostileUnixLink: Bool = false
+        hostileUnixLink: Bool = false,
+        receiptStyle: GPTKReceiptStyle = .existingProtected
     ) throws {
         let component = gptkComponentURL(version)
         let windows = component.appendingPathComponent("wine/x86_64-windows", isDirectory: true)
@@ -730,8 +760,13 @@ final class RendererInspectorFixture {
             "external/D3DMetal.framework/Versions/A",
             isDirectory: true
         )
-        let documentation = component.appendingPathComponent("Documentation", isDirectory: true)
-        for directory in [windows, framework, documentation] {
+        let licenseURL: URL
+        if version == .version3 {
+            licenseURL = framework.appendingPathComponent("Resources/LICENSE")
+        } else {
+            licenseURL = component.appendingPathComponent("Documentation/License.rtf")
+        }
+        for directory in [windows, framework, licenseURL.deletingLastPathComponent()] {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         }
         let moduleNames = version == .version3
@@ -766,7 +801,7 @@ final class RendererInspectorFixture {
         ))
         let license = Data("license-\(version.rawValue)".utf8)
         XCTAssertTrue(FileManager.default.createFile(
-            atPath: documentation.appendingPathComponent("License.rtf").path,
+            atPath: licenseURL.path,
             contents: license
         ))
         let hash = SHA256.hash(data: license).map { String(format: "%02x", $0) }.joined()
@@ -779,7 +814,7 @@ final class RendererInspectorFixture {
             "\(version.rawValue)-license-receipt"
         )
         let lines: [String]
-        if version == .version3 {
+        if version == .version3, receiptStyle == .existingProtected {
             lines = [
                 "schema=1",
                 "version=3.0",
@@ -793,10 +828,10 @@ final class RendererInspectorFixture {
         } else {
             lines = [
                 "schema=1",
-                "version=4.0b2",
+                "version=\(version.rawValue)",
                 "dmg_sha256=6248a0edc61553790753e5e9c060b8e53c940ed197f11409dcc34a35e05becc1",
                 "license_sha256=\(validReceipt ? hash : String(repeating: "0", count: 64))",
-                "confirmation=ACEPTO LA LICENCIA DE APPLE GPTK 4.0b2",
+                "confirmation=ACEPTO LA LICENCIA DE APPLE GPTK \(version.rawValue)",
                 "confirmed_at=2026-08-13T12:00:00Z",
             ]
         }
@@ -810,8 +845,8 @@ final class RendererInspectorFixture {
     func gptkComponentURL(_ version: AppleGPTKVersion) -> URL {
         switch version {
         case .version3:
-            application.appendingPathComponent(
-                "Contents/SharedSupport/wine-root/lib/apple_gptk",
+            applicationSupport.appendingPathComponent(
+                "Components/AppleGPTK/3.0",
                 isDirectory: true
             )
         case .version4Beta2:

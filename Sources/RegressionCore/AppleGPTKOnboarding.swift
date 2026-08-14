@@ -36,7 +36,13 @@ public struct AppleGPTKComponentManifest: Equatable, Sendable {
   }
 
   public var supportsDMGOnboarding: Bool {
-    dmgFileName != nil && dmgSHA256 != nil
+    dmgFileName != nil
+  }
+
+  /// Un hash `nil` permite seleccionar un DMG oficial cuya identidad completa se liga al
+  /// recibo local después de verificar el payload exacto y sus firmas Apple compiladas.
+  public var requiresPinnedDMGHash: Bool {
+    dmgSHA256 != nil
   }
 }
 
@@ -49,7 +55,7 @@ public enum AppleGPTKComponentCatalog {
   /// por Apple. No debe confundirse con el D3DMetal 2.1 observado en bundles posteriores.
   public static let protectedProfiles = AppleGPTKComponentManifest(
     version: "3.0",
-    dmgFileName: nil,
+    dmgFileName: "Evaluation_environment_for_Windows_games_3.0.dmg",
     dmgSHA256: nil,
     minimumMacOSMajorVersion: 14,
     d3dMetalSHA256: "05a7beaed4494a4f5f53d3f626a82fffc3b70146436a908b7048a0632a49e1a8",
@@ -1082,7 +1088,8 @@ public struct AppleGPTKAuthorizationToken: Codable, Equatable, Sendable {
       authorization: Self.authorizationValue,
       confirmation: AppleGPTKComponentCatalog.component(version: descriptor.version)
         .flatMap {
-          $0.supportsDMGOnboarding && $0.dmgSHA256 == descriptor.dmgSHA256
+          $0.supportsDMGOnboarding
+            && ($0.dmgSHA256 == nil || $0.dmgSHA256 == descriptor.dmgSHA256)
             ? $0.licenseConfirmation
             : nil
         } ?? ""
@@ -1114,7 +1121,7 @@ public struct AppleGPTKAuthorizationToken: Codable, Equatable, Sendable {
     guard
       let component = AppleGPTKComponentCatalog.component(version: version),
       component.supportsDMGOnboarding,
-      component.dmgSHA256 == descriptor.dmgSHA256,
+      component.dmgSHA256 == nil || component.dmgSHA256 == descriptor.dmgSHA256,
       confirmation == component.licenseConfirmation
     else {
       return .invalid(.invalidAuthorization)

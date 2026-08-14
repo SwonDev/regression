@@ -110,6 +110,7 @@ elif command == "release-windows-media-lease":
     pass
 elif command == "acquire-windows-media-runtime-lease":
     print("REGRESSION_WINDOWS_MEDIA_RUNTIME_LEASE=22222222-2222-4222-8222-222222222222")
+    print("REGRESSION_WINDOWS_MEDIA_RUNTIME_STATE=issued")
 elif command == "windows-media-private-file":
     support = os.path.join(os.environ["HOME"], "Library/Application Support/Regression")
     paths = {

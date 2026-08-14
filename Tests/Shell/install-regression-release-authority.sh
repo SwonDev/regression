@@ -48,7 +48,7 @@ for script in "$INSTALLER" "$VERIFIER"; do
         'fed13faa895c9ea5896a6497490db26674c3dca2a318e3389d8e43ba3e00f552 bin/wine' \
         '8d14fb9d6d9730c300ba16b5997d98218a2a40a78008d60f3a6edb719f328db3 bin/wineserver' \
         '5636a6505e872c8d185d8db7ced2d4aa8e9057e81c4c579e4b623009f9c2857b lib/wine/x86_64-unix/wine' \
-        '66622d2832d99c37cdaa2872c5409b5f9a5dc04d1fdb9dcd426ae37f8365942e lib/wine/x86_64-unix/ntdll.so' \
+        'f17cebf085a0a746224e61b4fc49341f7a0cec48741c5f12d1cc84a4dcd0ba5d lib/wine/x86_64-unix/ntdll.so' \
         '0315a55b11a456590a9368f4cb8d0011d6735cc04c9093ea583570d1352e1ee1 share/wine/wine.inf' \
         '885c0421bfe30600bae9df83961b0fcbb5b9ccd1c02e7b071ce213ff2522e34a lib/wine/x86_64-windows/ntdll.dll' \
         '7b580e19eb4fce14b5730cd2835c5204dc2622ce0fc4f33b68b0155864477667 lib/wine/i386-windows/ntdll.dll'
@@ -63,6 +63,7 @@ for script in "$INSTALLER" "$VERIFIER"; do
         668a88221884f4e62f3d40bed4a125a45e2e745c1d56610f8e3a33273a219299 \
         173c4926f53d0551d85ee6efe48e641867230a27bda7fc6a226ac484012d13fb \
         48ae6acb327148f3d8f02afcc93d8f8e61ab333b1dec752918244e58828cf5c9 \
+        a8543b9f7ca817eb9555cc4bd1c21943409f27107ea8289f04ae985c92732619 \
         f3ccf2a487d8999659a1e641b043b916487851c1540362a0a983cdf0fd0bb8cc
     do
         ! /usr/bin/grep -Fq "$pre_sign_hash" "$script" \
@@ -73,10 +74,10 @@ for script in "$INSTALLER" "$VERIFIER"; do
     /usr/bin/grep -Fq 'REGRESSION_EXTERNAL_D3DMETAL_(EXECUTABLE|WINE_ROOT)' "$script" \
         || fail "la ruta GPTK genérica heredada no se rechaza en $script"
 done
-/usr/bin/grep -Fq 'VERSION="1.12.0"' "$INSTALLER" \
-    || fail "el instalador no declara Regression 1.12.0"
-/usr/bin/grep -Fq 'BUILD_NUMBER="38"' "$INSTALLER" \
-    || fail "el instalador no declara el build 38"
+/usr/bin/grep -Fq 'VERSION="1.12.1"' "$INSTALLER" \
+    || fail "el instalador no declara Regression 1.12.1"
+/usr/bin/grep -Fq 'BUILD_NUMBER="39"' "$INSTALLER" \
+    || fail "el instalador no declara el build 39"
 /usr/bin/grep -Fq 'PATH="/usr/bin:/bin:/usr/sbin:/sbin"' "$INSTALLER" \
     || fail "el instalador público permite sustituir comandos de confianza mediante PATH"
 installer_preamble="$WORK_DIR/installer-preamble.sh"
@@ -105,7 +106,7 @@ runtime_authority_accepts()
         | /usr/bin/grep -Fxq "$expected_hash $expected_path"
 }
 runtime_authority_accepts \
-    66622d2832d99c37cdaa2872c5409b5f9a5dc04d1fdb9dcd426ae37f8365942e \
+    f17cebf085a0a746224e61b4fc49341f7a0cec48741c5f12d1cc84a4dcd0ba5d \
     lib/wine/x86_64-unix/ntdll.so \
     || fail "ntdll.so post-firma no supera la autoridad pública"
 if runtime_authority_accepts \
@@ -116,7 +117,7 @@ fi
 
 HELPERS="$WORK_DIR/installer-authority-helpers.sh"
 /usr/bin/sed -n \
-    '/^authority_value()/,/^}/p; /^path_chain_is_physical()/,/^}/p; /^trusted_digest_from_github_release()/,/^}/p; /^verify_gptk_3_receipt_authority()/,/^}/p' \
+    '/^authority_value()/,/^}/p; /^path_chain_is_physical()/,/^}/p; /^trusted_digest_from_github_release()/,/^}/p' \
     "$INSTALLER" > "$HELPERS"
 # shellcheck disable=SC1090
 source "$HELPERS"
@@ -142,46 +143,18 @@ export VERSION REPO
     "Regression-1.10.1-macos-arm64.tar.zst")" == "$api_digest" ]] \
     || fail "la API oficial no se interpreta como autoridad por tag, URL, asset y digest"
 
-receipt_root="$WORK_DIR/gptk-3.0"
-receipt="$WORK_DIR/3.0-license-receipt"
-mkdir -p "$receipt_root/Documentation"
-printf 'licencia protegida\n' > "$receipt_root/Documentation/License.rtf"
-license_hash="$(shasum -a 256 "$receipt_root/Documentation/License.rtf" | awk '{print $1}')"
-cat > "$receipt" <<EOF
-schema=1
-version=3.0
-source_kind=existing-protected-component
-catalog_id=apple-gptk-protected-profiles
-payload_fingerprint=fdc07beb364b2327896196e214996585fbcc1a10c71784d383218d2de9db57d7
-license_sha256=$license_hash
-confirmation=ACEPTO LA LICENCIA DE APPLE GPTK 3.0
-confirmed_at=2026-08-13T12:00:00Z
-EOF
-chmod 600 "$receipt"
-verify_gptk_3_receipt_authority "$receipt" "$receipt_root" \
-    || fail "un recibo GPTK 3.0 exacto y privado debía validarse"
-receipt_parent_outside="$WORK_DIR/receipt-parent-outside"
-receipt_parent_link="$WORK_DIR/receipt-parent-link"
-mkdir -p "$receipt_parent_outside"
-ln -s "$receipt_parent_outside" "$receipt_parent_link"
-cp "$receipt" "$receipt_parent_outside/receipt"
-chmod 600 "$receipt_parent_outside/receipt"
-if verify_gptk_3_receipt_authority "$receipt_parent_link/receipt" "$receipt_root"; then
-    fail "un recibo bajo una cadena de symlinks no puede autorizar preservación"
-fi
-/usr/bin/sed -i '' 's/confirmation=.*/confirmation=aceptación inválida/' "$receipt"
-if verify_gptk_3_receipt_authority "$receipt" "$receipt_root"; then
-    fail "un recibo GPTK sin aceptación exacta no puede autorizar preservación"
-fi
-
 for literal in \
-    'verify_gptk_3_payload_authority "$D3DMETAL_SOURCE"' \
-    'verify_gptk_3_receipt_authority "$GPTK_3_RECEIPT" "$D3DMETAL_SOURCE"' \
-    'GPTK_PRESERVED_GENERATION="3.0"'
+    'install-apple-gptk-component' \
+    '--component 3.0 --recover-existing' \
+    '--source-component "$D3DMETAL_SOURCE"' \
+    'Components/AppleGPTK/3.0'
 do
-    /usr/bin/grep -Fq "$literal" "$INSTALLER" \
+    /usr/bin/grep -Fq -- "$literal" "$INSTALLER" \
         || fail "falta la puerta GPTK: $literal"
 done
+if /usr/bin/grep -Fq 'cp -cR "$D3DMETAL_SOURCE" "$GPTK_ROOT"' "$INSTALLER"; then
+    fail "el actualizador no puede volver a incrustar GPTK dentro del bundle"
+fi
 
 VERSION="$(/usr/bin/awk -F\" '$1 == "VERSION=" { print $2; exit }' "$INSTALLER")"
 BUILD="$(/usr/bin/awk -F\" '$1 == "BUILD_NUMBER=" { print $2; exit }' "$INSTALLER")"
@@ -196,11 +169,22 @@ if /usr/bin/grep -Eq '(^|[^[:alnum:]_])zstd([^[:alnum:]_]|$)' "$INSTALLER"; then
 fi
 
 fixture="$WORK_DIR/fixture"
-mkdir -p "$fixture/Regression.app"
+mkdir -p "$fixture/Regression.app/Contents"
+cat > "$fixture/Regression.app/Contents/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>local.regression.launcher</string>
+<key>CFBundleShortVersionString</key><string>$VERSION</string>
+<key>CFBundleVersion</key><string>$BUILD</string>
+</dict></plist>
+EOF
+chmod 644 "$fixture/Regression.app/Contents/Info.plist"
 ln -s ../../outside "$fixture/Regression.app/escape"
 asset="$WORK_DIR/$ASSET_NAME"
 PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
-    /usr/bin/tar -czf "$asset" -C "$fixture" Regression.app
+    /usr/bin/tar --uid 0 --gid 0 --uname root --gname wheel \
+        -czf "$asset" -C "$fixture" Regression.app
 actual="$(shasum -a 256 "$asset" | awk '{print $1}')"
 checksum="$WORK_DIR/$ASSET_NAME.sha256"
 printf '%s  %s\n' "$actual" "$ASSET_NAME" > "$checksum"
@@ -226,6 +210,10 @@ expect_failure "enlace relativo escapando en el verificador" \
 
 laboratory_fixture="$WORK_DIR/laboratory-fixture"
 mkdir -p "$laboratory_fixture/Regression.app/000-runtime"
+mkdir -p "$laboratory_fixture/Regression.app/Contents"
+cp "$fixture/Regression.app/Contents/Info.plist" \
+    "$laboratory_fixture/Regression.app/Contents/Info.plist"
+chmod 644 "$laboratory_fixture/Regression.app/Contents/Info.plist"
 printf 'copia de laboratorio\n' \
     > "$laboratory_fixture/Regression.app/000-runtime/d3d11.dll.bak-investigation"
 # El backup aparece antes de un árbol suficientemente grande para reproducir el SIGPIPE que
@@ -237,7 +225,8 @@ for index in $(jot 12000 1); do
 done
 laboratory_asset="$WORK_DIR/laboratory-$ASSET_NAME"
 PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
-    /usr/bin/tar -czf "$laboratory_asset" -C "$laboratory_fixture" Regression.app
+    /usr/bin/tar --uid 0 --gid 0 --uname root --gname wheel \
+        -czf "$laboratory_asset" -C "$laboratory_fixture" Regression.app
 laboratory_actual="$(shasum -a 256 "$laboratory_asset" | awk '{print $1}')"
 laboratory_checksum="$laboratory_asset.sha256"
 printf '%s  %s\n' "$laboratory_actual" "$ASSET_NAME" > "$laboratory_checksum"

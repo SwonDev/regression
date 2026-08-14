@@ -229,7 +229,7 @@ expect_failure "replay" "no existe" \
 
 EXISTING_HOME="$TMP_ROOT/existing-home"
 EXISTING_ROOT="$EXISTING_HOME/Library/Application Support/Regression/Components/AppleGPTK/3.0"
-EXISTING_LICENSE="$EXISTING_ROOT/Documentation/License.rtf"
+EXISTING_LICENSE="$EXISTING_ROOT/external/D3DMetal.framework/Versions/A/Resources/LICENSE"
 EXISTING_OUTPUT="$TMP_ROOT/existing-inspection"
 EXISTING_HARNESS="$TMP_ROOT/install-apple-gptk-test-harness.sh"
 /bin/mkdir -p "$(/usr/bin/dirname "$EXISTING_LICENSE")"
@@ -244,7 +244,7 @@ EXISTING_HASH="$(/usr/bin/shasum -a 256 "$EXISTING_LICENSE" | /usr/bin/awk '{pri
         print "component_is_current()"
         print "{"
         print "    [[ -d \"$COMPONENT_ROOT\" && ! -L \"$COMPONENT_ROOT\" ]] &&"
-        print "        regular_file_without_symlink_chain \"$COMPONENT_ROOT\" \"Documentation/License.rtf\""
+        print "        regular_file_without_symlink_chain \"$COMPONENT_ROOT\" \"external/D3DMetal.framework/Versions/A/Resources/LICENSE\""
         print "}"
         skipping = 1
         next
@@ -296,9 +296,10 @@ expect_failure "inspect-existing sin payload" "ruta canónica real" \
 
 SYMLINK_HOME="$TMP_ROOT/existing-symlink-home"
 SYMLINK_ROOT="$SYMLINK_HOME/Library/Application Support/Regression/Components/AppleGPTK/3.0"
-/bin/mkdir -p "$SYMLINK_ROOT/Documentation"
-/bin/ln -s "$EXISTING_LICENSE" "$SYMLINK_ROOT/Documentation/License.rtf"
-expect_failure "License.rtf existente como symlink" \
+/bin/mkdir -p "$SYMLINK_ROOT/external/D3DMetal.framework/Versions/A/Resources"
+/bin/ln -s "$EXISTING_LICENSE" \
+    "$SYMLINK_ROOT/external/D3DMetal.framework/Versions/A/Resources/LICENSE"
+expect_failure "licencia existente como symlink" \
     "falta, ha derivado o contiene enlaces no autorizados" \
     env HOME="$SYMLINK_HOME" "$EXISTING_HARNESS" --component 3.0 \
         --inspect-existing --output-dir "$TMP_ROOT/symlink-output"

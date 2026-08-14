@@ -40,6 +40,22 @@ if [[ ! -f "$STEAM" ]]; then
     exit 1
 fi
 
+# Las consultas con autoridad de proceso deben ejecutar `regressionctl` como hijo
+# directo de este launcher. Una sustitución `$(...)` introduce un subshell y hace
+# que `getppid()` vea otro PID, por lo que el guard correcto rechazaría la consulta.
+# Los resultados se capturan en un directorio privado y se eliminan antes del exec.
+CONTROLLER_QUERY_DIR="$(/usr/bin/mktemp -d /private/tmp/regression-launcher-query.XXXXXX)"
+/bin/chmod 700 "$CONTROLLER_QUERY_DIR"
+cleanup_controller_query_dir()
+{
+    if [[ "${CONTROLLER_QUERY_DIR:-}" == /private/tmp/regression-launcher-query.* &&
+          -d "$CONTROLLER_QUERY_DIR" && ! -L "$CONTROLLER_QUERY_DIR" ]]; then
+        /usr/bin/find "$CONTROLLER_QUERY_DIR" -depth -delete
+    fi
+}
+trap cleanup_controller_query_dir EXIT
+trap 'exit 1' HUP INT TERM
+
 prepare_unreal_bootstrap_routes()
 {
     local controller="$ROOT/Contents/SharedSupport/bin/regressionctl"
@@ -67,25 +83,11 @@ prepare_unreal_bootstrap_routes()
     fi
 }
 
-prepare_internal_apple_gptk_authority()
-{
-    local installer="$ROOT/Contents/SharedSupport/bin/install-apple-gptk-component"
-
-    # No se confía en una marca heredada ni en que los directorios del perfil
-    # existan: solo el verificador versionado puede acreditar recibo, hashes y
-    # firma de la generación 3.0 blindada.
-    unset REGRESSION_INTERNAL_GPTK_3_0_VERIFIED
-    [[ -x "$installer" ]] || return 0
-    if "$installer" --component 3.0 --verify-only >/dev/null 2>&1; then
-        export REGRESSION_INTERNAL_GPTK_3_0_VERIFIED=1
-    fi
-}
-
 prepare_external_apple_gptk_routes()
 {
     local installer="$ROOT/Contents/SharedSupport/bin/install-apple-gptk-component"
-    local component="$APP_SUPPORT/Components/AppleGPTK/4.0b2"
-    local index
+    local component="$APP_SUPPORT/Components/AppleGPTK"
+    local count=0 index
 
     # El entorno padre no conserva autoridad de una preparación anterior. Se
     # limpia todo el espacio que el loader admite antes incluso de comprobar el
@@ -99,23 +101,38 @@ prepare_external_apple_gptk_routes()
 
     [[ -x "$installer" ]] || return 0
 
-    # Si el componente está dañado pero el DMG oficial permanece en caché, la
-    # reparación es automática y transaccional, pero solo después de una
-    # confirmación humana registrada para esa versión, DMG y licencia. Si Apple
-    # aún exige descargarlo, Steam sigue disponible y Regression guía el alta.
-    if ! "$installer" --verify-only >/dev/null 2>&1; then
-        "$installer" --repair-from-cache >/dev/null 2>&1 || return 0
+    # Cada generación se acredita por separado. La ausencia de una no bloquea
+    # Steam ni la otra: solo los basenames exactos de esa generación quedarán
+    # sin una ruta y el loader los rechazará antes de caer al baseline.
+    if "$installer" --component 3.0 --verify-only >/dev/null 2>&1; then
+        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_EXECUTABLE=Grim Dawn.exe"
+        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_WINE_ROOT=$component/3.0/wine"
+        count=$((count + 1))
+        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_EXECUTABLE=DSClient-Win64-Shipping.exe"
+        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_WINE_ROOT=$component/3.0/wine"
+        count=$((count + 1))
+        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_EXECUTABLE=DD2.exe"
+        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_WINE_ROOT=$component/3.0/wine"
+        count=$((count + 1))
+        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_EXECUTABLE=fft_enhanced.exe"
+        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_WINE_ROOT=$component/3.0/wine"
+        count=$((count + 1))
     fi
 
-    # Las rutas se publican para toda la sesión de Steam. Así un juego
-    # instalado después de abrir la tienda recibe el perfil exacto al pulsar
-    # «Jugar», sin tener que reiniciar Steam. El loader vuelve a validar el
-    # basename compilado y nunca acepta nombres o rutas desde la base local.
-    export REGRESSION_EXTERNAL_D3DMETAL_ROUTE_0_EXECUTABLE=TQ2-Win64-Shipping.exe
-    export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_0_WINE_ROOT=$component/wine"
-    export REGRESSION_EXTERNAL_D3DMETAL_ROUTE_1_EXECUTABLE=Borderlands4.exe
-    export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_1_WINE_ROOT=$component/wine"
-    export REGRESSION_EXTERNAL_D3DMETAL_ROUTE_COUNT=2
+    if ! "$installer" --component 4.0b2 --verify-only >/dev/null 2>&1; then
+        "$installer" --component 4.0b2 --repair-from-cache >/dev/null 2>&1 || true
+    fi
+    if "$installer" --component 4.0b2 --verify-only >/dev/null 2>&1; then
+        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_EXECUTABLE=TQ2-Win64-Shipping.exe"
+        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_WINE_ROOT=$component/4.0b2/wine"
+        count=$((count + 1))
+        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_EXECUTABLE=Borderlands4.exe"
+        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_WINE_ROOT=$component/4.0b2/wine"
+        count=$((count + 1))
+    fi
+    if (( count > 0 )); then
+        export REGRESSION_EXTERNAL_D3DMETAL_ROUTE_COUNT="$count"
+    fi
 }
 
 prepare_windows_media_component()
@@ -123,17 +140,22 @@ prepare_windows_media_component()
     local app_id="${1:-}"
     local installer="$ROOT/Contents/SharedSupport/bin/install-windows-media-component"
     local controller="$ROOT/Contents/SharedSupport/bin/regressionctl"
+    local query_file="$CONTROLLER_QUERY_DIR/windows-media-plan"
     local plan
     local lease
 
     # Una sesión general de Steam nunca instala nada: la mutación exige el App ID
     # canónico del lanzamiento y un plan derivado de evidencia local fresca.
     [[ "$app_id" =~ ^[1-9][0-9]{0,9}$ ]] || return 0
-    [[ -x "$installer" && -x "$controller" ]] || return 1
-    if ! plan="$("$controller" windows-media-repair-plan "$app_id" --owner-pid $$)"; then
+    # El controlador decide primero si este App ID necesita Windows Media. La
+    # ausencia del instalador no puede bloquear un juego cuyo plan sea
+    # `not-required`; solo se exige cuando existe una reparación autorizada.
+    [[ -x "$controller" ]] || return 1
+    if ! "$controller" windows-media-repair-plan "$app_id" --owner-pid $$ >"$query_file"; then
         printf 'Regression: no se pudo autorizar Windows Media para App ID %s.\n' "$app_id" >&2
         return 1
     fi
+    plan="$(/bin/cat "$query_file")"
     case "$plan" in
         'REGRESSION_WINDOWS_MEDIA_PLAN=not-required')
             return 0
@@ -142,6 +164,7 @@ prepare_windows_media_component()
             return 1
             ;;
         REGRESSION_WINDOWS_MEDIA_PLAN=repair$'\n'REGRESSION_WINDOWS_MEDIA_LEASE=*)
+            [[ -x "$installer" ]] || return 1
             lease="${plan##*REGRESSION_WINDOWS_MEDIA_LEASE=}"
             [[ "$lease" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
                 || return 1
@@ -158,17 +181,23 @@ prepare_windows_media_component()
 
 prepare_compiled_game_state_repairs()
 {
+    local app_id="${1:-}"
     local controller="$ROOT/Contents/SharedSupport/bin/regressionctl"
     local repair_log="$APP_SUPPORT/Logs/Launcher/compiled-state-repair.log"
     local repair_state
 
+    # Las reparaciones de estado pertenecen al juego exacto. Abrir la tienda o
+    # cualquier otro App ID nunca inspecciona, muta ni hereda el journal de Tinkerlands.
+    [[ "$app_id" == "2617700" ]] || return 0
     if [[ ! -x "$controller" ]]; then
-        printf 'Regression: falta el controlador que acredita la reparación tipada; Steam no se abrirá.\n' >&2
+        printf 'Regression: falta el controlador que acredita la reparación tipada de App ID %s.\n' \
+            "$app_id" >&2
         return 1
     fi
     mkdir -p "$(dirname "$repair_log")"
-    if ! "$controller" prepare-launch-state >"$repair_log" 2>&1; then
-        printf 'Regression: la reparación tipada dejó un estado no verificable; Steam no se abrirá.\n' >&2
+    if ! "$controller" prepare-launch-state "$app_id" --owner-pid $$ \
+        >"$repair_log" 2>&1; then
+        printf 'Regression: la reparación tipada bloqueó únicamente App ID %s.\n' "$app_id" >&2
         return 1
     fi
 
@@ -202,46 +231,44 @@ prepare_process_dll_isolation_routes()
 # bootstrap. El router sustituye la imagen estándar de Unreal por el Shipping
 # exacto; los títulos D3D12 validados añaden D3DMetal solo al proceso permitido.
 prepare_unreal_bootstrap_routes
-prepare_internal_apple_gptk_authority
 prepare_external_apple_gptk_routes
 windows_media_app_id=""
 if [[ "${1:-}" == "-applaunch" && "${2:-}" =~ ^[1-9][0-9]{0,9}$ ]]; then
     windows_media_app_id="$2"
 fi
-if [[ -z "$windows_media_app_id" ]]; then
-    if ! windows_media_pending="$(
-        "$ROOT/Contents/SharedSupport/bin/regressionctl" \
-            windows-media-pending-recovery-app-id --owner-pid $$
-    )"; then
-        printf 'Regression: no se pudo descartar una transacción Windows Media pendiente.\n' >&2
-        exit 1
-    fi
-    case "$windows_media_pending" in
-        'REGRESSION_WINDOWS_MEDIA_PENDING_APP_ID=none') ;;
-        REGRESSION_WINDOWS_MEDIA_PENDING_APP_ID=*)
-            windows_media_app_id="${windows_media_pending#*=}"
-            [[ "$windows_media_app_id" =~ ^[1-9][0-9]{0,9}$ ]] || exit 1
-            ;;
-        *) exit 1 ;;
-    esac
-fi
 if ! prepare_windows_media_component "$windows_media_app_id"; then
-    printf 'Regression: Windows Media dejó un estado no verificable; Steam no se abrirá.\n' >&2
+    printf 'Regression: Windows Media bloqueó únicamente App ID %s.\n' "$windows_media_app_id" >&2
     exit 1
 fi
-prepare_compiled_game_state_repairs
+prepare_compiled_game_state_repairs "$windows_media_app_id"
 prepare_process_dll_isolation_routes
 
-if ! windows_media_runtime_lease="$(
-    "$ROOT/Contents/SharedSupport/bin/regressionctl" acquire-windows-media-runtime-lease \
-        --owner-pid $$
-)"; then
+windows_media_runtime_lease_file="$CONTROLLER_QUERY_DIR/windows-media-runtime-lease"
+windows_media_runtime_lease_arguments=(acquire-windows-media-runtime-lease --owner-pid $$)
+if [[ -n "$windows_media_app_id" ]]; then
+    windows_media_runtime_lease_arguments+=(
+        --app-id "$windows_media_app_id" --join-existing-regression-runtime
+    )
+fi
+if ! "$ROOT/Contents/SharedSupport/bin/regressionctl" \
+    "${windows_media_runtime_lease_arguments[@]}" >"$windows_media_runtime_lease_file"; then
     printf 'Regression: no se pudo adquirir el interlock de runtime; Steam no se abrirá.\n' >&2
     exit 1
 fi
-[[ "$windows_media_runtime_lease" =~ ^REGRESSION_WINDOWS_MEDIA_RUNTIME_LEASE=[0-9a-f-]{36}$ ]] || {
+windows_media_runtime_lease="$(/usr/bin/grep -E '^REGRESSION_WINDOWS_MEDIA_RUNTIME_LEASE=[0-9a-f-]{36}$' \
+    "$windows_media_runtime_lease_file" || true)"
+windows_media_runtime_state="$(/usr/bin/grep -E '^REGRESSION_WINDOWS_MEDIA_RUNTIME_STATE=(issued|joined)$' \
+    "$windows_media_runtime_lease_file" || true)"
+windows_media_runtime_expected_state='issued'
+if [[ -n "$windows_media_app_id" ]]; then
+    windows_media_runtime_expected_state='(issued|joined)'
+fi
+[[ "$windows_media_runtime_lease" =~ ^REGRESSION_WINDOWS_MEDIA_RUNTIME_LEASE=[0-9a-f-]{36}$ &&
+   "$windows_media_runtime_state" =~ ^REGRESSION_WINDOWS_MEDIA_RUNTIME_STATE=${windows_media_runtime_expected_state}$ ]] || {
     printf 'Regression: el interlock de runtime devolvió un lease no válido.\n' >&2
     exit 1
 }
 
+cleanup_controller_query_dir
+trap - EXIT HUP INT TERM
 exec "$W/bin/wine" "$STEAM" "$@"

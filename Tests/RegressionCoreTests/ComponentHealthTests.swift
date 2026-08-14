@@ -156,6 +156,87 @@ final class ComponentHealthTests: XCTestCase {
     ))
   }
 
+  func testWindowsMediaRuntimeLeaseCanJoinAnExistingCanonicalRuntimeWithoutOpeningRepairRace() throws {
+    let support = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "regression-wm-runtime-join-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: support) }
+
+    let firstRuntime = Process()
+    firstRuntime.executableURL = URL(fileURLWithPath: "/bin/sleep")
+    firstRuntime.arguments = ["30"]
+    try firstRuntime.run()
+    defer {
+      if firstRuntime.isRunning { firstRuntime.terminate() }
+      firstRuntime.waitUntilExit()
+    }
+
+    let firstLease = try WindowsMediaRepairInterlock.issueRuntimeLease(
+      ownerPID: firstRuntime.processIdentifier,
+      applicationSupportURL: support
+    )
+    let snapshot = try WindowsMediaRepairInterlock.snapshotExistingRuntimeLease(
+      applicationSupportURL: support
+    )
+    let joinedLease = try WindowsMediaRepairInterlock.joinExistingRuntimeLease(
+      ownerPID: getpid(),
+      expectedToken: snapshot.token,
+      expectedRuntimeOwnerPIDs: snapshot.liveOwnerPIDs,
+      applicationSupportURL: support
+    )
+    XCTAssertEqual(joinedLease.token, firstLease.token)
+    XCTAssertEqual(joinedLease.ownerPID, getpid())
+
+    firstRuntime.terminate()
+    firstRuntime.waitUntilExit()
+    XCTAssertThrowsError(try WindowsMediaRepairInterlock.issueRepairLease(
+      appID: "347940",
+      ownerPID: getpid(),
+      applicationSupportURL: support,
+      runtimeIsIdle: true
+    )) { error in
+      XCTAssertEqual(error as? WindowsMediaRepairInterlockError, .leaseActive)
+    }
+    try WindowsMediaRepairInterlock.release(
+      token: joinedLease.token,
+      ownerPID: getpid(),
+      applicationSupportURL: support
+    )
+  }
+
+  func testWindowsMediaRuntimeJoinRejectsAReplacedLeaseGenerationAndUnobservedOwner() throws {
+    let support = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "regression-wm-runtime-generation-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: support) }
+    let lease = try WindowsMediaRepairInterlock.issueRuntimeLease(
+      ownerPID: getpid(),
+      applicationSupportURL: support
+    )
+
+    XCTAssertThrowsError(try WindowsMediaRepairInterlock.joinExistingRuntimeLease(
+      ownerPID: getpid(),
+      expectedToken: "11111111-1111-4111-8111-111111111111",
+      expectedRuntimeOwnerPIDs: [getpid()],
+      applicationSupportURL: support
+    ))
+    XCTAssertThrowsError(try WindowsMediaRepairInterlock.joinExistingRuntimeLease(
+      ownerPID: getpid(),
+      expectedToken: lease.token,
+      expectedRuntimeOwnerPIDs: [Int32.max],
+      applicationSupportURL: support
+    ))
+    try WindowsMediaRepairInterlock.release(
+      token: lease.token,
+      ownerPID: getpid(),
+      applicationSupportURL: support
+    )
+  }
+
 #if DEBUG
   func testWindowsMediaStaleLeaseReclaimCannotDeleteAuthorityIssuedByAnotherEmitter() throws {
     let support = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -524,8 +605,8 @@ final class ComponentHealthTests: XCTestCase {
       applicationSupportURL: roots.applicationSupport
     )
     let current = TrustedComponentCatalog.windowsMediaDescriptor(
-      applicationVersion: "1.12.0",
-      buildIdentifier: "38",
+      applicationVersion: "1.12.1",
+      buildIdentifier: "39",
       variant: .publicInstalled,
       applicationBundleURL: roots.bundle,
       applicationSupportURL: roots.applicationSupport
@@ -665,8 +746,8 @@ final class ComponentHealthTests: XCTestCase {
     )
 
     let descriptor = TrustedComponentCatalog.steamRuntimePrerequisitesDescriptor(
-      applicationVersion: "1.12.0",
-      buildIdentifier: "38",
+      applicationVersion: "1.12.1",
+      buildIdentifier: "39",
       variant: .publicInstalled,
       wineRootURL: root
     )
@@ -674,13 +755,13 @@ final class ComponentHealthTests: XCTestCase {
     XCTAssertEqual(descriptor.identity.componentID, "steam-runtime-prerequisites")
     XCTAssertEqual(descriptor.identity.componentVersion, "3")
     XCTAssertEqual(descriptor.identity.variant, .publicInstalled)
-    XCTAssertEqual(descriptor.identity.buildIdentifier, "38")
+    XCTAssertEqual(descriptor.identity.buildIdentifier, "39")
     XCTAssertEqual(descriptor.payloadRootURL, root.standardizedFileURL)
     XCTAssertEqual(
       descriptor.identity,
       TrustedComponentCatalog.steamRuntimePrerequisitesDescriptor(
-        applicationVersion: "1.12.0",
-        buildIdentifier: "38",
+        applicationVersion: "1.12.1",
+        buildIdentifier: "39",
         variant: .publicInstalled,
         wineRootURL: root
       ).identity
@@ -697,7 +778,7 @@ final class ComponentHealthTests: XCTestCase {
         "lib/wine/x86_64-unix/wine":
           "5636a6505e872c8d185d8db7ced2d4aa8e9057e81c4c579e4b623009f9c2857b",
         "lib/wine/x86_64-unix/ntdll.so":
-          "66622d2832d99c37cdaa2872c5409b5f9a5dc04d1fdb9dcd426ae37f8365942e",
+          "f17cebf085a0a746224e61b4fc49341f7a0cec48741c5f12d1cc84a4dcd0ba5d",
         "share/wine/wine.inf":
           "0315a55b11a456590a9368f4cb8d0011d6735cc04c9093ea583570d1352e1ee1",
         "lib/wine/x86_64-windows/ntdll.dll":
@@ -768,8 +849,8 @@ final class ComponentHealthTests: XCTestCase {
       isDirectory: true
     )
     let descriptor = TrustedComponentCatalog.steamRuntimePrerequisitesDescriptor(
-      applicationVersion: "1.12.0",
-      buildIdentifier: "38",
+      applicationVersion: "1.12.1",
+      buildIdentifier: "39",
       variant: .development,
       wineRootURL: root
     )
@@ -780,7 +861,7 @@ final class ComponentHealthTests: XCTestCase {
     XCTAssertEqual(report.recovery, .installSupportedApplicationBuild)
     XCTAssertEqual(
       report.issue,
-      .unsupportedVariant("Regression 1.12.0 (38): runtime de desarrollo sin PIN reproducible")
+      .unsupportedVariant("Regression 1.12.1 (39): runtime de desarrollo sin PIN reproducible")
     )
   }
 

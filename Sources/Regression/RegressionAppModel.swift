@@ -89,7 +89,9 @@ enum AppleGPTKLicenseReviewSource: Equatable {
 
     var confirmationValue: String {
         switch self {
-        case .diskImage: AppleGPTKAuthorizationToken.confirmationValue
+        case .diskImage(let descriptor, _):
+            AppleGPTKComponentCatalog.component(version: descriptor.version)?.licenseConfirmation
+                ?? ""
         case .protectedExisting: AppleGPTKExistingComponentAuthorizationToken.confirmationValue
         }
     }
@@ -106,6 +108,10 @@ enum AppleGPTKLicenseReviewSource: Equatable {
     var isProtectedExisting: Bool {
         if case .protectedExisting = self { return true }
         return false
+    }
+
+    var isProtectedVersion: Bool {
+        version == AppleGPTKComponentCatalog.protectedProfiles.version
     }
 }
 
@@ -1072,14 +1078,35 @@ final class RegressionAppModel {
         )
     }
 
+    func openOfficialProtectedAppleGPTKDownload() {
+        let url = AppleGPTKOnboarding.officialDownloadURL
+        guard url.host == "developer.apple.com", NSWorkspace.shared.open(url) else {
+            protectedAppleGPTKAuthorizationState = .failed(
+                "No se pudo abrir la página oficial de Apple Developer."
+            )
+            return
+        }
+        protectedAppleGPTKAuthorizationState = .unavailable(
+            "Descarga Apple GPTK 3.0 desde Apple Developer y selecciona explícitamente su DMG. Steam sigue disponible."
+        )
+    }
+
     func beginSelectAndInspectAppleGPTKDMG() {
         startAppleGPTKCriticalOperation { [weak self] in
-            await self?.selectAndInspectAppleGPTKDMG()
+            await self?.selectAndInspectAppleGPTKDMG(version: "4.0b2")
         }
     }
 
-    private func selectAndInspectAppleGPTKDMG() async {
-        guard !operation.isBusy, !appleGPTKIsBusy, runningState.activeBackend == nil else {
+    func beginSelectAndInspectProtectedAppleGPTKDMG() {
+        startAppleGPTKCriticalOperation { [weak self] in
+            await self?.selectAndInspectAppleGPTKDMG(version: "3.0")
+        }
+    }
+
+    private func selectAndInspectAppleGPTKDMG(version: String) async {
+        guard !operation.isBusy, !appleGPTKIsBusy,
+              !protectedAppleGPTKAuthorizationState.isBusy,
+              runningState.activeBackend == nil else {
             failAppleGPTK(
                 "Cierra Steam y espera a que termine la operación actual antes de inspeccionar Apple GPTK."
             )
@@ -1087,8 +1114,8 @@ final class RegressionAppModel {
         }
 
         let panel = NSOpenPanel()
-        panel.title = "Seleccionar el DMG oficial de Apple GPTK 4.0b2"
-        panel.message = "Regression verificará el hash, el payload y las firmas antes de mostrar la licencia."
+        panel.title = "Seleccionar el DMG oficial de Apple GPTK \(version)"
+        panel.message = "Regression verificará el payload exacto, la versión y las firmas Apple antes de mostrar la licencia."
         panel.prompt = "Inspeccionar"
         panel.allowedContentTypes = [.diskImage]
         panel.canChooseDirectories = false
@@ -1096,7 +1123,7 @@ final class RegressionAppModel {
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let sourceURL = panel.url else { return }
 
-        await inspectAppleGPTKDMG(at: sourceURL)
+        await inspectAppleGPTKDMG(at: sourceURL, version: version)
     }
 
     func beginInspectExistingProtectedAppleGPTK() {
@@ -1213,7 +1240,7 @@ final class RegressionAppModel {
         if let review = appleGPTKLicenseReview {
             try? FileManager.default.removeItem(at: review.inspectionDirectoryURL)
         }
-        let cancelledProtectedReview = appleGPTKLicenseReview?.source.isProtectedExisting == true
+        let cancelledProtectedReview = appleGPTKLicenseReview?.source.isProtectedVersion == true
         appleGPTKLicenseReview = nil
         if cancelledProtectedReview {
             protectedAppleGPTKAuthorizationState = .requiresAuthorization
@@ -1274,15 +1301,19 @@ final class RegressionAppModel {
         sourceURL: URL
     ) async {
 
-        appleGPTKOnboarding = AppleGPTKOnboarding(
-            inputs: .init(
-                platformSupport: .supported,
-                componentHealth: .missing,
-                dmgSelection: .selected(sourceURL),
-                licenseConfirmation: .confirmed,
-                operation: .installing
+        if descriptor.version == "3.0" {
+            protectedAppleGPTKAuthorizationState = .authorizing
+        } else {
+            appleGPTKOnboarding = AppleGPTKOnboarding(
+                inputs: .init(
+                    platformSupport: .supported,
+                    componentHealth: .missing,
+                    dmgSelection: .selected(sourceURL),
+                    licenseConfirmation: .confirmed,
+                    operation: .installing
+                )
             )
-        )
+        }
         operation = .preparing("Instalando Apple GPTK")
         statusDetail = "Volviendo a verificar el DMG antes de instalar el componente de forma transaccional."
 
@@ -1306,6 +1337,7 @@ final class RegressionAppModel {
             let result = try await processRunner.run(
                 executableURL: installerURL,
                 arguments: [
+                    "--component", descriptor.version,
                     "--install-authorized",
                     "--source-dmg", sourceURL.path,
                     "--authorization-file", authorizationURL.path,
@@ -1319,14 +1351,27 @@ final class RegressionAppModel {
             appleGPTKLicenseReview = nil
             try? FileManager.default.removeItem(at: review.inspectionDirectoryURL)
             operation = .ready
-            statusDetail = "Apple GPTK 4.0b2 se instaló y verificó correctamente."
-            updateAppleGPTK(operation: .idle)
-            await performAppleGPTKStatusRefresh()
+            statusDetail = "Apple GPTK \(descriptor.version) se instaló y verificó correctamente."
+            if descriptor.version == "3.0" {
+                await refreshComponentHealth()
+            } else {
+                updateAppleGPTK(operation: .idle)
+                await performAppleGPTKStatusRefresh()
+            }
         } catch {
             appleGPTKLicenseReview = nil
             try? FileManager.default.removeItem(at: review.inspectionDirectoryURL)
             operation = .ready
-            failAppleGPTK(error.localizedDescription)
+            if descriptor.version == "3.0" {
+                protectedAppleGPTKAuthorizationState = .failed(error.localizedDescription)
+                presentComponentFailure(
+                    title: "No se pudo instalar Apple GPTK 3.0",
+                    message: error.localizedDescription,
+                    recovery: .reviewProtectedAppleGPTK
+                )
+            } else {
+                failAppleGPTK(error.localizedDescription)
+            }
         }
     }
 
@@ -1397,16 +1442,20 @@ final class RegressionAppModel {
         }
     }
 
-    private func inspectAppleGPTKDMG(at sourceURL: URL) async {
+    private func inspectAppleGPTKDMG(at sourceURL: URL, version: String) async {
         let inspectionDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("regression-gptk-inspection-\(UUID().uuidString)", isDirectory: true)
         do {
             try createPrivateInspectionDirectory(at: inspectionDirectory)
-            updateAppleGPTK(
-                selection: .selected(sourceURL),
-                confirmation: .notReviewed,
-                operation: .verifying
-            )
+            if version == "3.0" {
+                protectedAppleGPTKAuthorizationState = .checking
+            } else {
+                updateAppleGPTK(
+                    selection: .selected(sourceURL),
+                    confirmation: .notReviewed,
+                    operation: .verifying
+                )
+            }
             operation = .preparing("Verificando Apple GPTK")
             statusDetail = "Comprobando el DMG oficial, su payload y sus firmas sin instalar nada."
 
@@ -1414,6 +1463,7 @@ final class RegressionAppModel {
             let result = try await processRunner.run(
                 executableURL: installerURL,
                 arguments: [
+                    "--component", version,
                     "--inspect",
                     "--source-dmg", sourceURL.path,
                     "--output-dir", inspectionDirectory.path,
@@ -1438,7 +1488,8 @@ final class RegressionAppModel {
                 .joined()
             let canonicalSource = sourceURL.resolvingSymlinksInPath().standardizedFileURL.path
             guard descriptor.schema == 1,
-                  descriptor.version == "4.0b2",
+                  descriptor.version == version,
+                  AppleGPTKComponentCatalog.component(version: descriptor.version) != nil,
                   descriptor.sourceDMG == canonicalSource,
                   descriptor.dmgSHA256.wholeMatch(of: /^[0-9a-f]{64}$/) != nil,
                   descriptor.licenseSHA256.wholeMatch(of: /^[0-9a-f]{64}$/) != nil,
@@ -1457,17 +1508,30 @@ final class RegressionAppModel {
                 inspectionDirectoryURL: inspectionDirectory,
                 licenseRTFData: licenseData
             )
-            updateAppleGPTK(
-                selection: .selected(URL(fileURLWithPath: descriptor.sourceDMG)),
-                confirmation: .notReviewed,
-                operation: .idle
-            )
+            if version == "3.0" {
+                protectedAppleGPTKAuthorizationState = .requiresAuthorization
+            } else {
+                updateAppleGPTK(
+                    selection: .selected(URL(fileURLWithPath: descriptor.sourceDMG)),
+                    confirmation: .notReviewed,
+                    operation: .idle
+                )
+            }
             operation = .ready
-            statusDetail = "Apple GPTK 4.0b2 está verificado. Revisa la licencia exacta antes de instalar."
+            statusDetail = "Apple GPTK \(version) está verificado. Revisa la licencia exacta antes de instalar."
         } catch {
             try? FileManager.default.removeItem(at: inspectionDirectory)
             operation = .ready
-            failAppleGPTK(error.localizedDescription)
+            if version == "3.0" {
+                protectedAppleGPTKAuthorizationState = .failed(error.localizedDescription)
+                presentComponentFailure(
+                    title: "No se pudo verificar Apple GPTK 3.0",
+                    message: error.localizedDescription,
+                    recovery: .reviewProtectedAppleGPTK
+                )
+            } else {
+                failAppleGPTK(error.localizedDescription)
+            }
         }
     }
 

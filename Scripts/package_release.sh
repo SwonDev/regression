@@ -3,8 +3,8 @@
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${REGRESSION_RELEASE_VERSION:-1.12.0}"
-BUILD_NUMBER="${REGRESSION_RELEASE_BUILD_NUMBER:-38}"
+VERSION="${REGRESSION_RELEASE_VERSION:-1.12.1}"
+BUILD_NUMBER="${REGRESSION_RELEASE_BUILD_NUMBER:-39}"
 APP="$ROOT/Regression.app"
 APP_NAME="Regression.app"
 OUTPUT_DIR="${REGRESSION_RELEASE_OUTPUT_DIR:-$ROOT/build/release-$VERSION}"
@@ -22,6 +22,59 @@ WORK_DIR=""
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 step() { printf '\n== %s ==\n' "$*"; }
+
+install_name_tool_checked() {
+    local diagnostics="$WORK_DIR/install-name-tool.stderr" unexpected=0
+    : > "$diagnostics"
+    if ! install_name_tool "$@" 2>"$diagnostics"; then
+        cat "$diagnostics" >&2
+        fail "install_name_tool no pudo transformar el staging público."
+    fi
+    while IFS= read -r diagnostic; do
+        [[ -z "$diagnostic" ]] && continue
+        case "$diagnostic" in
+            *'warning: changes being made to the file will invalidate the code signature in:'*)
+                # La firma transitoria se sustituye y verifica al final del pipeline.
+                ;;
+            *)
+                unexpected=1
+                ;;
+        esac
+    done < "$diagnostics"
+    if [[ "$unexpected" -ne 0 ]]; then
+        cat "$diagnostics" >&2
+        fail "install_name_tool emitió un diagnóstico no permitido."
+    fi
+}
+
+strip_macho_checked() {
+    local candidate="$1" diagnostics="$WORK_DIR/strip.stderr" diagnostic unexpected=0
+    : > "$diagnostics"
+    if ! xcrun strip -S "$candidate" 2>"$diagnostics"; then
+        cat "$diagnostics" >&2
+        fail "strip no pudo sanear los símbolos de depuración del staging público."
+    fi
+    while IFS= read -r diagnostic; do
+        [[ -z "$diagnostic" ]] && continue
+        case "$diagnostic" in
+            *'warning: changes being made to the file will invalidate the code signature in:'*)
+                # Igual que install_name_tool: la firma transitoria se sustituye y
+                # verifica de nuevo antes de producir el asset.
+                ;;
+            *'warning: input object file already stripped:'*)
+                # El fichero ya cumple el resultado que exige -S; no hay símbolos
+                # de depuración adicionales que retirar.
+                ;;
+            *)
+                unexpected=1
+                ;;
+        esac
+    done < "$diagnostics"
+    if [[ "$unexpected" -ne 0 ]]; then
+        cat "$diagnostics" >&2
+        fail "strip emitió un diagnóstico inesperado."
+    fi
+}
 
 installer_contract_value() {
     local key="$1" installer="$2" lines line value
@@ -311,7 +364,7 @@ BRIDGE_SOURCE="$(find "$BRIDGE_SOURCE_PARENT" -mindepth 1 -maxdepth 1 -type d | 
 [[ -f "$BRIDGE_SOURCE/LICENSE" && -f "$BRIDGE_SOURCE/shim/shim_sdl.c" ]] \
     || fail "El archivo de Switch2Bridge está incompleto."
 
-swift build -c release --package-path "$BRIDGE_SOURCE/daemon"
+swift build -c release -Xswiftc -warnings-as-errors --package-path "$BRIDGE_SOURCE/daemon"
 BRIDGE_BINARY="$BRIDGE_SOURCE/daemon/.build/release/Switch2Bridge"
 [[ -x "$BRIDGE_BINARY" ]] || fail "No se generó el demonio de Switch2Bridge."
 
@@ -361,8 +414,8 @@ SDL_REAL_PORTABLE_CANONICAL="$(cd "$(dirname "$SDL_REAL_PORTABLE")" && pwd -P)/$
 if [[ "$SDL_REAL_SOURCE_CANONICAL" != "$SDL_REAL_PORTABLE_CANONICAL" ]]; then
     cp -cL "$SDL_REAL_SOURCE" "$SDL_REAL_PORTABLE"
 fi
-install_name_tool -id '@loader_path/libSDL2-real.dylib' "$SDL_REAL_PORTABLE"
-clang -dynamiclib -arch x86_64 -O2 -headerpad_max_install_names \
+install_name_tool_checked -id '@loader_path/libSDL2-real.dylib' "$SDL_REAL_PORTABLE"
+clang -dynamiclib -arch x86_64 -O2 -Wall -Wextra -Werror -headerpad_max_install_names \
     -install_name libSDL2-2.0.0.dylib \
     -Wl,-reexport_library,"$SDL_REAL_PORTABLE" \
     "$BRIDGE_SOURCE/shim/shim_sdl.c" -o "$SDL_LIBRARY"
@@ -416,19 +469,19 @@ while IFS= read -r -d '' candidate; do
             || -L "$RUNTIME_DIR/gstreamer-1.0/$basename" ]] || {
             fail "Dependencia externa no incluida: $candidate -> $dependency"
         }
-        install_name_tool -change "$dependency" "@rpath/$basename" "$candidate"
+        install_name_tool_checked -change "$dependency" "@rpath/$basename" "$candidate"
         rewrote=1
     done < <(otool -L "$candidate" | tail -n +2 \
         | sed -E 's/^[[:space:]]*(.*) \(compatibility version.*/\1/')
 
     if [[ "$current_id" == /* ]]; then
-        install_name_tool -id "@rpath/${current_id##*/}" "$candidate"
+        install_name_tool_checked -id "@rpath/${current_id##*/}" "$candidate"
     fi
 
     while IFS= read -r rpath; do
         [[ "$rpath" == /* && "$rpath" != /usr/lib/* && "$rpath" != /System/Library/* ]] \
             || continue
-        install_name_tool -delete_rpath "$rpath" "$candidate"
+        install_name_tool_checked -delete_rpath "$rpath" "$candidate"
     done < <(otool -l "$candidate" \
         | awk '/LC_RPATH/{rpath=1; next} rpath && $1 == "path" { print $2; rpath=0 }')
 
@@ -446,12 +499,12 @@ while IFS= read -r -d '' candidate; do
         existing_rpaths="$(otool -l "$candidate" \
             | awk '/LC_RPATH/{rpath=1; next} rpath && $1 == "path" { print $2; rpath=0 }')"
         grep -Fxq "$portable_rpath" <<<"$existing_rpaths" \
-            || install_name_tool -add_rpath "$portable_rpath" "$candidate"
+            || install_name_tool_checked -add_rpath "$portable_rpath" "$candidate"
     fi
 
     # Solo se eliminan símbolos de depuración Mach-O. Los módulos PE quedan intactos para
     # preservar unwind/SEH y su formato builtin.
-    xcrun strip -S "$candidate" 2>/dev/null || true
+    strip_macho_checked "$candidate"
 done < <(find "$PUBLIC_APP" -type f -print0)
 
 step "Eliminando rutas locales sin alterar offsets binarios"

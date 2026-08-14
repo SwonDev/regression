@@ -7,8 +7,8 @@ MACOS_DIR="$APP/Contents/MacOS"
 PLIST="$APP/Contents/Info.plist"
 RESOURCES_DIR="$APP/Contents/Resources"
 STATE_ICON_DIR="$ROOT/assets/menubar/states"
-VERSION="1.12.0"
-BUILD_NUMBER="38"
+VERSION="1.12.1"
+BUILD_NUMBER="39"
 BACKUP_ROOT="$ROOT/backups/native-packaging"
 COMPATIBILITY_ROOT="${REGRESSION_COMPATIBILITY_ROOT:-$HOME/Library/Application Support/Regression/Compatibility}"
 COMPATIBILITY_DB="$COMPATIBILITY_ROOT/compatibility.sqlite"
@@ -62,9 +62,9 @@ verify_prepackage_state()
     source_hash="$(shasum -a 256 "$source_engine" | awk '{print $1}')"
     installed_ntdll_hash="$(shasum -a 256 "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so" | awk '{print $1}')"
 
-    if [[ "$installed_hash" == "5cd7370ade8fe210cdc74e6c58f354e7d9cf4e3833012d6482ff6924a4f09fe9" &&
+    if [[ "$installed_hash" == "38be0b5fd0bed42e5467f9a61c5c972733898523eeac3e34e83eb5317efb3edf" &&
           "$source_hash" == "$installed_hash" ]]; then
-        # La migración 1.12 sustituye el conjunto entero de arranque Wine después
+        # La línea 1.12 sustituye el conjunto entero de arranque Wine después
         # del backup. El bundle previo no se puede acreditar aún con ese builder,
         # pero sí debe conservar scripts/medios 1.12 y una firma íntegra antes de
         # iniciar una mutación reversible.
@@ -79,6 +79,14 @@ verify_prepackage_state()
             exit 1
         }
         codesign --verify --deep --strict "$APP"
+    elif [[ "$installed_hash" == "767c2c54bfd395ad957f394038c5a930abc46296bb471d4696e186b9a68166f4" &&
+          "$source_hash" == "38be0b5fd0bed42e5467f9a61c5c972733898523eeac3e34e83eb5317efb3edf" ]]; then
+        REGRESSION_APP_PATH="$APP" "$ROOT/build/verify-public-installed-state.sh" \
+            --candidate-1.12.1-before-runtime-join-fix
+    elif [[ "$installed_hash" == "5cd7370ade8fe210cdc74e6c58f354e7d9cf4e3833012d6482ff6924a4f09fe9" &&
+          "$source_hash" == "38be0b5fd0bed42e5467f9a61c5c972733898523eeac3e34e83eb5317efb3edf" ]]; then
+        REGRESSION_APP_PATH="$APP" "$ROOT/build/verify-public-installed-state.sh" \
+            --release-1.12.0
     elif [[ "$installed_hash" == "0aa2c39d5476d8b5767d9a1979af5ecaf96f36648cbe15d376a761aad06e7ca4" &&
           "$source_hash" == "$installed_hash" &&
           "$installed_ntdll_hash" == "d41e2468e46ef1993fa124f5b759716d67618989f5304501ccde21fbf4c5eef8" ]]; then
