@@ -126,10 +126,11 @@ final class GameTestPreflightTests: XCTestCase {
     func testKnownWineSessionAndInstalledGamePassWithoutFalseOrphan() async throws {
         let fixture = try PreflightFixture()
         defer { fixture.cleanup() }
-        let runner = PreflightProcessRunner(output: #"""
-          10     1 /tmp/Regression.app/Contents/SharedSupport/wine-root/bin/wineserver
-          11     1 C:\windows\system32\services.exe
-        """#)
+        let applicationPath = fixture.installations.regression.applicationURL.path
+        let runner = PreflightProcessRunner(output: """
+          10     1 \(applicationPath)/Contents/SharedSupport/wine-root/bin/wineserver
+          11     1 C:\\windows\\system32\\services.exe
+        """)
 
         let report = await GameTestPreflight(
             runner: runner,
@@ -181,8 +182,79 @@ final class GameTestPreflightTests: XCTestCase {
             report.checks.first { $0.checkID == .wineRuntimeIsolation }?.status,
             .blocked
         )
+        XCTAssertTrue(
+            report.checks.first { $0.checkID == .wineRuntimeIsolation }?.detail
+                .contains("OtroRuntime") == true
+        )
+        XCTAssertFalse(
+            report.checks.first { $0.checkID == .wineRuntimeIsolation }?.detail
+                .contains("/Applications") == true
+        )
         let callCount = await runner.callCount()
         XCTAssertEqual(callCount, 1)
+    }
+
+    func testWineServerUsesExactDiscoveredRegressionApplicationInsteadOfBundleSubstring() async throws {
+        let fixture = try PreflightFixture()
+        defer { fixture.cleanup() }
+        let exactApplication = fixture.root.appendingPathComponent(
+            "Regression Candidate.app",
+            isDirectory: true
+        )
+        let regression = RegressionInstallation(
+            applicationURL: exactApplication,
+            bottleURL: fixture.installations.regression.bottleURL,
+            steamExecutableURL: fixture.installations.regression.steamExecutableURL,
+            engineLauncherURL: fixture.installations.regression.engineLauncherURL,
+            health: .ready,
+            healthDetail: "fixture"
+        )
+        let installations = InstallationSnapshot(crossOver: nil, regression: regression)
+        let runner = PreflightProcessRunner(
+            output: "99 1 \(exactApplication.path)/Contents/SharedSupport/wine-root/bin/wineserver\n"
+        )
+
+        let report = await GameTestPreflight(
+            runner: runner,
+            applicationSupportURL: fixture.applicationSupportURL
+        ).evaluate(
+            backend: .regression,
+            installations: installations,
+            runningState: RunningBackendState(regressionPIDs: [20]),
+            databaseHealth: healthyDatabase(),
+            sharedLibraryAssessment: nil,
+            game: fixture.game
+        )
+
+        XCTAssertEqual(
+            report.checks.first { $0.checkID == .wineRuntimeIsolation }?.status,
+            .ready
+        )
+    }
+
+    func testDeceptiveRegressionSubstringDoesNotBypassExactApplicationAttribution() async throws {
+        let fixture = try PreflightFixture()
+        defer { fixture.cleanup() }
+        let runner = PreflightProcessRunner(
+            output: "99 1 /Applications/FakeRegression.app/Contents/Regression.app/Contents/bin/wineserver\n"
+        )
+
+        let report = await GameTestPreflight(
+            runner: runner,
+            applicationSupportURL: fixture.applicationSupportURL
+        ).evaluate(
+            backend: .regression,
+            installations: fixture.installations,
+            runningState: RunningBackendState(),
+            databaseHealth: healthyDatabase(),
+            sharedLibraryAssessment: nil,
+            game: fixture.game
+        )
+
+        XCTAssertEqual(
+            report.checks.first { $0.checkID == .wineRuntimeIsolation }?.status,
+            .blocked
+        )
     }
 
     func testDownloadInProgressBlocksTheGameBeforeLaunch() async throws {

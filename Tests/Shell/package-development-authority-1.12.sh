@@ -9,6 +9,7 @@ RELEASE_PACKAGER="$ROOT/Scripts/package_release.sh"
 NATIVE_PACKAGER="$ROOT/Scripts/package_regression.sh"
 RUNTIME_SOURCE="$ROOT/build/release-1.12.0/wine64-public"
 MEDIA_SOURCE="$ROOT/build/windows-media-component/1"
+BOTTLE_BASELINE_SOURCE="$ROOT/build/steam-bottle-baseline/1"
 SCRATCH="$(mktemp -d /private/tmp/regression-package-development-authority.XXXXXX)"
 
 cleanup() {
@@ -40,7 +41,8 @@ for source in \
     "$RUNTIME_SOURCE/server/wineserver" \
     "$RUNTIME_SOURCE/loader/wine" \
     "$RUNTIME_SOURCE/dlls/ntdll/ntdll.so" \
-    "$MEDIA_SOURCE/manifest.sha256"
+    "$MEDIA_SOURCE/manifest.sha256" \
+    "$BOTTLE_BASELINE_SOURCE/manifest.sha256"
 do
     [[ -f "$source" ]] || fail "falta el insumo de fixture 1.12: $source"
 done
@@ -53,6 +55,7 @@ make_fixture() {
         "$app/Contents/MacOS" \
         "$app/Contents/SharedSupport/bin" \
         "$app/Contents/SharedSupport/components/windows-media" \
+        "$app/Contents/SharedSupport/components/steam-bottle-baseline" \
         "$app/Contents/SharedSupport/wine-root/bin" \
         "$app/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix" \
         "$builder/tools/wine" \
@@ -73,6 +76,8 @@ EOF
     install -m 755 "$ROOT/Scripts/install_windows_media_component.sh" \
         "$app/Contents/SharedSupport/bin/install-windows-media-component"
     ditto "$MEDIA_SOURCE" "$app/Contents/SharedSupport/components/windows-media/1"
+    ditto "$BOTTLE_BASELINE_SOURCE" \
+        "$app/Contents/SharedSupport/components/steam-bottle-baseline/1"
 
     install -m 755 "$RUNTIME_SOURCE/tools/wine/wine" \
         "$builder/tools/wine/wine"

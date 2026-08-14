@@ -62,6 +62,22 @@ if sed -n '/case \.eligible:/,/case \.preparing:/p' "$MENU" \
   fail "la custodia elegible todavía reclama Return incondicionalmente"
 fi
 
+if sed -n '/private func inspectExistingProtectedAppleGPTK()/,/func presentAppleGPTKLicenseReview()/p' "$MODEL" \
+  | rg -n 'runningState\.activeBackend' >/dev/null; then
+  fail "la revisión no mutante de GPTK 3.0 todavía exige cerrar Steam"
+fi
+
+if ! sed -n '/func restartSteamAfterProtectedAppleGPTKAuthorization()/,/private func setProtectedAppleGPTKSteamRestartRequired/p' "$MODEL" \
+  | rg -Fq 'coordinator.requestShutdown'; then
+  fail "la autorización GPTK 3.0 no reinicia el Steam propio de forma normal"
+fi
+if ! sed -n '/func restartSteamAfterProtectedAppleGPTKAuthorization()/,/private func setProtectedAppleGPTKSteamRestartRequired/p' "$MODEL" \
+  | rg -Fq 'await startSteam()'; then
+  fail "la autorización GPTK 3.0 no vuelve a abrir Steam con las rutas nuevas"
+fi
+require_literal "$MODEL" 'protectedAppleGPTKSteamRestartRequiredKey'
+require_literal "$MENU" 'Button("Reiniciar Steam")'
+
 if sed -n '/if let issue = model\.gameLaunchIssue/,/gameLaunchTimeline/p' "$MENU" \
   | rg -n 'Text\(issue\.title\)[[:space:][:print:]]*\.foregroundStyle\(\.orange\)' >/dev/null; then
   fail "el título de requisito todavía usa el color de advertencia de bajo contraste"

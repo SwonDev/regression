@@ -120,8 +120,8 @@ public enum TrustedComponentCatalog {
   public static let windowsMediaComponentVersion = "1"
   public static let steamRuntimePrerequisitesComponentID = "steam-runtime-prerequisites"
   public static let steamRuntimePrerequisitesComponentVersion = "3"
-  public static let supportedApplicationVersion = "1.12.1"
-  public static let supportedBuildIdentifier = "39"
+  public static let supportedApplicationVersion = "1.12.2"
+  public static let supportedBuildIdentifier = "40"
 
   private static let windowsMediaDevelopmentManifestSHA256 =
     "ac662661fb3384c6ad100066391cab209f9de60b2e129fb92e07365ee6fe9bb1"
@@ -141,7 +141,7 @@ public enum TrustedComponentCatalog {
 
   /// Binarios públicos recompilados para el prefijo canónico `/Applications/Regression.app`.
   ///
-  /// Estos PINs proceden del ensemble público 1.12 (reutilizado por 1.12.1/39) derivado desde el builder raw sellado
+  /// Estos PINs proceden del ensemble público 1.12 (reutilizado por 1.12.2/40) derivado desde el builder raw sellado
   /// mediante `strip -S`, saneado literal y firma ad hoc.
   /// Los Mach-O pre-firma del builder no son bytes de release y se rechazan deliberadamente.
   private static let steamRuntimePublicCoreFiles: [TrustedComponentFile] = [

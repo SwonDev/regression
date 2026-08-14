@@ -368,7 +368,7 @@ set -e
 [[ $mismatch_crash_status -ne 0 ]] || fail "el fixture de WAL cruzado debía interrumpirse"
 expect_failure \
     "launch explícito no puede reconciliar WAL de otro App ID" \
-    "Windows Media dejó un estado no verificable" \
+    "Windows Media bloqueó únicamente App ID 999" \
     env HOME="$TEST_HOME" \
         REGRESSION_WINDOWS_MEDIA_INTERNAL_TEST_VARIANT=public \
         REGRESSION_WINDOWS_MEDIA_INTERNAL_TEST_SYNC_HELPER="$SYNC_HELPER" \

@@ -197,6 +197,20 @@ stop_fixture
 start_fixture windows-media-game-failure dark
 require_visible "Abrir Steam"
 stop_fixture
+
+# Revisar y aceptar la licencia del GPTK 3.0 ya custodiado no modifica el payload y debe seguir
+# disponible mientras el Steam general de Regression está abierto.
+start_fixture gptk3-license-steam-active light normal "" maintenance
+swift "$ROOT/Tests/Shell/fixture_text_probe.swift" \
+  "$WORK/gptk3-license-steam-active-light.png" \
+  --require-enabled-prominent "Revisar licencia de GPTK 3.0" >/dev/null
+stop_fixture
+start_fixture gptk3-restart-required light normal "" maintenance
+require_visible "La licencia ya está aceptada"
+swift "$ROOT/Tests/Shell/fixture_text_probe.swift" \
+  "$WORK/gptk3-restart-required-light.png" \
+  --require-enabled-prominent "Reiniciar Steam" >/dev/null
+stop_fixture
 # El requisito por juego conserva el texto semántico principal en claro, oscuro y ambos modos
 # de alto contraste. El contrato estático comprueba que solo el icono usa el color warning.
 start_fixture windows-media-game-failure light accessibility5 "" game

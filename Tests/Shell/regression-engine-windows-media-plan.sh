@@ -104,6 +104,16 @@ set -e
 
 : > "$CALL_LOG"
 : > "$WINE_LOG"
+env HOME="$TEST_HOME" REGRESSION_WM_PLAN=not-required REGRESSION_WM_RUNTIME_STATE=joined \
+    REGRESSION_WM_CALL_LOG="$CALL_LOG" REGRESSION_WM_WINE_LOG="$WINE_LOG" \
+    "$ENGINE" -shutdown
+/usr/bin/grep -E '^controller:acquire-windows-media-runtime-lease --owner-pid [1-9][0-9]* --join-existing-regression-runtime-control$' "$CALL_LOG" >/dev/null \
+    || fail "el cierre normal no se unió a la sesión Regression ya acreditada"
+/usr/bin/grep -E 'Steam\.exe -shutdown$' "$WINE_LOG" >/dev/null \
+    || fail "el cierre normal no llegó a Steam después de unir la lease existente"
+
+: > "$CALL_LOG"
+: > "$WINE_LOG"
 env HOME="$TEST_HOME" REGRESSION_WM_PLAN=repair REGRESSION_WM_PENDING_FAILURE=1 \
     REGRESSION_WM_CALL_LOG="$CALL_LOG" REGRESSION_WM_WINE_LOG="$WINE_LOG" \
     "$ENGINE" >/dev/null 2>&1

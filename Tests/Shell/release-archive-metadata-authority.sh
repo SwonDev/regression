@@ -51,7 +51,7 @@ write_checksum() {
 verify_metadata_only() {
     local archive="$1"
     REGRESSION_RELEASE_ARCHIVE_METADATA_ONLY=1 \
-        "$VERIFIER" "$archive" "$archive.sha256" 1.12.1 39
+        "$VERIFIER" "$archive" "$archive.sha256" 1.12.2 40
 }
 
 make_normalized_archive() {

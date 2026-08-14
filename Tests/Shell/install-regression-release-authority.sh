@@ -74,10 +74,10 @@ for script in "$INSTALLER" "$VERIFIER"; do
     /usr/bin/grep -Fq 'REGRESSION_EXTERNAL_D3DMETAL_(EXECUTABLE|WINE_ROOT)' "$script" \
         || fail "la ruta GPTK genérica heredada no se rechaza en $script"
 done
-/usr/bin/grep -Fq 'VERSION="1.12.1"' "$INSTALLER" \
-    || fail "el instalador no declara Regression 1.12.1"
-/usr/bin/grep -Fq 'BUILD_NUMBER="39"' "$INSTALLER" \
-    || fail "el instalador no declara el build 39"
+/usr/bin/grep -Fq 'VERSION="1.12.2"' "$INSTALLER" \
+    || fail "el instalador no declara Regression 1.12.2"
+/usr/bin/grep -Fq 'BUILD_NUMBER="40"' "$INSTALLER" \
+    || fail "el instalador no declara el build 40"
 /usr/bin/grep -Fq 'PATH="/usr/bin:/bin:/usr/sbin:/sbin"' "$INSTALLER" \
     || fail "el instalador público permite sustituir comandos de confianza mediante PATH"
 installer_preamble="$WORK_DIR/installer-preamble.sh"

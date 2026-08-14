@@ -248,6 +248,27 @@ struct GameTestProcessRecord: Equatable, Sendable {
             && normalizedExecutable.contains("crossover.app/contents/sharedsupport/crossover")
     }
 
+    func belongsToApplication(_ applicationURL: URL) -> Bool {
+        guard isWineServer, executable.hasPrefix("/") else { return false }
+        let executableURL = URL(fileURLWithPath: executable).standardizedFileURL
+        let applicationRoot = applicationURL.standardizedFileURL.path
+        return executableURL.path.hasPrefix(applicationRoot + "/Contents/")
+    }
+
+    var sanitizedRuntimeOwner: String? {
+        guard executable.hasPrefix("/") else { return nil }
+        let components = URL(fileURLWithPath: executable).standardizedFileURL.pathComponents
+        guard let appComponent = components.last(where: {
+            $0.lowercased().hasSuffix(".app") && $0.count <= 100
+        }) else { return "otra aplicación Wine" }
+        let name = String(appComponent.dropLast(4)).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty,
+              name.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) else {
+            return "otra aplicación Wine"
+        }
+        return name
+    }
+
     private static func lastPathComponent(of executable: String) -> String {
         let normalized = executable.replacingOccurrences(of: "\\", with: "/")
         return normalized.split(separator: "/").last.map(String.init) ?? normalized
@@ -315,7 +336,7 @@ public actor GameTestPreflight {
         )
         if let processResult, processResult.exitCode == 0 {
             let records = Self.parseProcessList(processResult.standardOutput)
-            checks.append(wineRuntimeCheck(records))
+            checks.append(wineRuntimeCheck(records, installations: installations))
             checks.append(wineServiceCheck(records))
         } else {
             checks.append(GameTestPreflightCheck(
@@ -572,19 +593,26 @@ public actor GameTestPreflight {
     }
 
     private func wineRuntimeCheck(
-        _ records: [GameTestProcessRecord]
+        _ records: [GameTestProcessRecord],
+        installations: InstallationSnapshot
     ) -> GameTestPreflightCheck {
         let wineServers = records.filter(\.isWineServer)
-        let foreign = wineServers.filter {
-            !$0.isKnownRegressionWineServer && !$0.isKnownCrossOverWineServer
+        let crossOverApplicationURL = installations.crossOver?.applicationURL
+        let foreign = wineServers.filter { record in
+            !record.belongsToApplication(installations.regression.applicationURL)
+                && !(crossOverApplicationURL.map(record.belongsToApplication) ?? false)
         }
         let definiteForeign = foreign.filter { $0.executable.hasPrefix("/") }
         if !definiteForeign.isEmpty {
+            let owners = Array(Set(definiteForeign.compactMap { $0.sanitizedRuntimeOwner })).sorted()
+            let ownerDetail = owners.isEmpty
+                ? ""
+                : " Origen observado: \(owners.joined(separator: ", "))."
             return GameTestPreflightCheck(
                 checkID: .wineRuntimeIsolation,
                 status: .blocked,
                 title: "Aislamiento de Wine",
-                detail: "Se detectaron \(definiteForeign.count) wineserver de otro runtime.",
+                detail: "Se detectaron \(definiteForeign.count) wineserver de otro runtime.\(ownerDetail)",
                 recoveryAction: "Cierra su aplicación propietaria antes de probar; Regression no terminará procesos ajenos automáticamente."
             )
         }

@@ -78,7 +78,7 @@ La v15 reinstala dentro de la migración transaccional los guards de `research_e
 vincula la promoción a un proceso representativo rastreado y cerrado. Un perfecto legacy sin esa
 autoridad se invalida y no alimenta catálogo, perfiles, motores, custodia ni aprendizaje.
 
-Este corte corresponde a la release estable **Regression 1.12.1 (39)**. **v1.11.0 (37)** es su
+Este corte corresponde a la release estable **Regression 1.12.2 (40)**. **v1.11.0 (37)** es su
 baseline histórico: permanece verificable y sus artefactos no se reetiquetan ni se reescriben.
 Los gates `public-1.11` demuestran la transición desde ese baseline; no rebajan el contrato de
 versión de la release actual.
@@ -213,7 +213,7 @@ con la fijada por el perfil; la presencia parcial de DLLs no concede autoridad.
 ### Sello del runtime público 1.12
 
 La salud del runtime no se deduce de que `wine --version` responda. La variante pública
-1.12.1 (39) contiene un catálogo compilado de hashes, tamaños y permisos para el wrapper
+1.12.2 (40) contiene un catálogo compilado de hashes, tamaños y permisos para el wrapper
 `bin/wine`, `bin/wineserver`, el loader `lib/wine/x86_64-unix/wine`, `ntdll.so`, `wine.inf`,
 `x86_64-windows/ntdll.dll`, `i386-windows/ntdll.dll` y VC++/UCRT de ambas arquitecturas. La
 instalación, el descubrimiento y el coordinador consumen el mismo resultado de salud antes de

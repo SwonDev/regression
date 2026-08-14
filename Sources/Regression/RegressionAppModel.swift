@@ -29,6 +29,7 @@ struct UserFacingFailure: Equatable {
         case repairRegression
         case prepareAppleGPTK
         case reviewProtectedAppleGPTK
+        case restartProtectedAppleGPTKSteam
         case reinstallRegression
     }
 
@@ -198,6 +199,10 @@ final class RegressionAppModel {
     var steamRuntimePrerequisitesHealthIsRefreshing = false
     var protectedAppleGPTKHealth: ComponentHealthReport?
     var protectedAppleGPTKAuthorizationState: ProtectedAppleGPTKAuthorizationState = .checking
+    /// Un Steam ya abierto no puede heredar las rutas GPTK autorizadas después de arrancar.
+    /// La autorización sigue siendo válida, pero el cliente debe reiniciarse antes de lanzar
+    /// cualquiera de los perfiles GPTK 3.0 blindados.
+    var protectedAppleGPTKSteamRestartRequired = false
     var appleGPTKOnboarding = AppleGPTKOnboarding(
         inputs: .init(
             platformSupport: .supported,
@@ -256,6 +261,7 @@ final class RegressionAppModel {
     @ObservationIgnored private var protectedAppleGPTKStatusRefreshInFlight = false
     @ObservationIgnored private var appleGPTKCriticalTask: Task<Void, Never>?
     @ObservationIgnored private var appleGPTKCriticalOperationID: UUID?
+    @ObservationIgnored private var steamLaunchIsInProgress = false
     @ObservationIgnored private var shutdownWasRequested = false
     @ObservationIgnored private var physicalLibraryCustodyValidationLease:
         PhysicalLibraryCustodyValidationLease?
@@ -264,6 +270,8 @@ final class RegressionAppModel {
     @ObservationIgnored private let regressionUpdateCheckCycle = 10_800
     @ObservationIgnored private let lastAttemptedRegressionReleaseKey =
         "lastAttemptedRegressionRelease"
+    @ObservationIgnored private let protectedAppleGPTKSteamRestartRequiredKey =
+        "protectedAppleGPTKSteamRestartRequired"
     @ObservationIgnored private var profilesByAppID: [String: [CompatibilityProfile]] = [:]
     @ObservationIgnored private var certificationsByAppID = Dictionary(
         grouping: VerifiedGameCatalog.all,
@@ -284,6 +292,9 @@ final class RegressionAppModel {
         }
         automaticRegressionUpdatesEnabled = defaults.bool(
             forKey: "automaticRegressionUpdatesEnabled"
+        )
+        protectedAppleGPTKSteamRestartRequired = defaults.bool(
+            forKey: "protectedAppleGPTKSteamRestartRequired"
         )
         let applicationSupport = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/Regression", isDirectory: true)
@@ -619,6 +630,10 @@ final class RegressionAppModel {
         readinessIsRefreshing = true
         defer { readinessIsRefreshing = false }
         do {
+            // El diagnóstico debe reflejar el proceso vivo en el instante del gesto. Mantener
+            // el snapshot anterior hacía que los marcadores DXMT de la sesión recién abierta
+            // siguieran apareciendo como restos de una sesión cerrada.
+            runningState = await coordinator.runningState()
             testReadiness = try await collectTestReadiness(for: nil)
         } catch {
             logger.error(
@@ -1134,11 +1149,10 @@ final class RegressionAppModel {
 
     private func inspectExistingProtectedAppleGPTK() async {
         guard !operation.isBusy,
-              !protectedAppleGPTKAuthorizationState.isBusy,
-              runningState.activeBackend == nil else {
+              !protectedAppleGPTKAuthorizationState.isBusy else {
             presentComponentFailure(
                 title: "Apple GPTK 3.0 no se puede inspeccionar todavía",
-                message: "Cierra Steam y espera a que termine la operación actual.",
+                message: "Espera a que termine la operación actual.",
                 recovery: .reviewProtectedAppleGPTK
             )
             return
@@ -1277,7 +1291,6 @@ final class RegressionAppModel {
     ) async {
         guard appleGPTKLicenseReview?.id == review.id,
               explicitConfirmation == review.source.confirmationValue,
-              runningState.activeBackend == nil,
               !operation.isBusy else {
             failAppleGPTK("La autorización ya no corresponde a la inspección activa.")
             return
@@ -1285,8 +1298,14 @@ final class RegressionAppModel {
 
         switch review.source {
         case .protectedExisting(let descriptor):
+            // Esta vía solo vuelve a verificar el payload y escribe un recibo privado. No instala,
+            // reemplaza ni relocaliza GPTK, por lo que el Steam general puede permanecer abierto.
             await authorizeExistingProtectedAppleGPTK(review, descriptor: descriptor)
         case .diskImage(let descriptor, let sourceURL):
+            guard runningState.activeBackend == nil else {
+                failAppleGPTK("Cierra Steam antes de instalar Apple GPTK desde un DMG.")
+                return
+            }
             await authorizeAppleGPTKDMG(
                 review,
                 descriptor: descriptor,
@@ -1379,6 +1398,7 @@ final class RegressionAppModel {
         _ review: AppleGPTKLicenseReview,
         descriptor: AppleGPTKExistingComponentInspectionDescriptor
     ) async {
+        let regressionSteamWasRunning = runningState.activeBackend == .regression
         protectedAppleGPTKAuthorizationState = .authorizing
         operation = .preparing("Autorizando Apple GPTK 3.0")
         statusDetail = "Volviendo a verificar el componente exacto antes de registrar la aceptación local."
@@ -1430,6 +1450,10 @@ final class RegressionAppModel {
             operation = .ready
             protectedAppleGPTKAuthorizationState = .ready
             statusDetail = "Apple GPTK 3.0 se autorizó y verificó sin copiar ni modificar su payload."
+            if regressionSteamWasRunning {
+                setProtectedAppleGPTKSteamRestartRequired(true)
+                await restartSteamAfterProtectedAppleGPTKAuthorization()
+            }
         } catch {
             appleGPTKLicenseReview = nil
             try? FileManager.default.removeItem(at: review.inspectionDirectoryURL)
@@ -1440,6 +1464,65 @@ final class RegressionAppModel {
                 recovery: .reviewProtectedAppleGPTK
             )
         }
+    }
+
+    /// Reinicia únicamente el Steam propio después de un gesto de licencia completado. No mata
+    /// juegos ni procesos ajenos: si Steam no puede cerrar de forma normal, conserva el recibo y
+    /// deja una acción explícita en la tarjeta GPTK antes de permitir perfiles históricos.
+    func restartSteamAfterProtectedAppleGPTKAuthorization() async {
+        guard protectedAppleGPTKAuthorizationState == .ready else { return }
+        guard let installations else {
+            setProtectedAppleGPTKSteamRestartRequired(true)
+            statusDetail = "Apple GPTK 3.0 está autorizado. Reinicia Steam antes de abrir un juego que lo requiera."
+            return
+        }
+
+        runningState = await coordinator.runningState()
+        guard runningState.activeBackend == .regression else {
+            setProtectedAppleGPTKSteamRestartRequired(false)
+            operation = .ready
+            statusDetail = "Apple GPTK 3.0 está autorizado y se aplicará al próximo inicio de Steam."
+            return
+        }
+
+        setProtectedAppleGPTKSteamRestartRequired(true)
+        operation = .preparing("Reiniciando Steam para Apple GPTK 3.0")
+        statusDetail = "Cerrando el Steam propio de forma normal para aplicar las rutas GPTK autorizadas…"
+        do {
+            try await coordinator.requestShutdown(
+                backend: .regression,
+                installations: installations,
+                custodyValidationLease: physicalLibraryCustodyValidationLease
+            )
+            runningState = await coordinator.runningState()
+            guard runningState.activeBackend == nil else {
+                throw RegressionCoreError.shutdownTimedOut(.regression)
+            }
+            await startSteam()
+            runningState = await coordinator.runningState()
+            guard runningState.activeBackend == .regression else {
+                throw RegressionCoreError.launchFailed(
+                    "Steam no volvió a abrirse después de autorizar Apple GPTK 3.0"
+                )
+            }
+            setProtectedAppleGPTKSteamRestartRequired(false)
+            failure = nil
+            statusDetail = "Steam se reinició con Apple GPTK 3.0 autorizado para sus perfiles blindados."
+        } catch {
+            runningState = await coordinator.runningState()
+            operation = runningState.activeBackend.map(AppOperation.running) ?? .ready
+            setProtectedAppleGPTKSteamRestartRequired(true)
+            failure = nil
+            statusDetail = "Apple GPTK 3.0 está autorizado, pero Steam no pudo reiniciarse de forma normal. Cierra cualquier juego abierto y pulsa «Reiniciar Steam»."
+            logger.error(
+                "GPTK 3.0 autorizado; reinicio de Steam pendiente: \(error.localizedDescription, privacy: .public)"
+            )
+        }
+    }
+
+    private func setProtectedAppleGPTKSteamRestartRequired(_ required: Bool) {
+        protectedAppleGPTKSteamRestartRequired = required
+        UserDefaults.standard.set(required, forKey: protectedAppleGPTKSteamRestartRequiredKey)
     }
 
     private func inspectAppleGPTKDMG(at sourceURL: URL, version: String) async {
@@ -1630,7 +1713,11 @@ final class RegressionAppModel {
 
     func startSteam() async {
         guard let installations else { return }
+        runningState = await coordinator.runningState()
         if runningState.activeBackend == .regression {
+            failure = nil
+            operation = .running(.regression)
+            statusDetail = "Steam ya estaba abierto."
             showSteam()
             return
         }
@@ -1638,6 +1725,12 @@ final class RegressionAppModel {
             presentExternalSteamConflict()
             return
         }
+        guard !steamLaunchIsInProgress else {
+            statusDetail = "Regression ya está iniciando Steam…"
+            return
+        }
+        steamLaunchIsInProgress = true
+        defer { steamLaunchIsInProgress = false }
         guard await ensureSteamRuntimeReadyForLaunch() else { return }
         invalidatePhysicalLibraryCustodyAssessment(
             notice: "La evaluación se descartó porque Steam se está iniciando. Repítela cuando Steam esté cerrado."
@@ -1661,9 +1754,19 @@ final class RegressionAppModel {
             operation = .running(backend)
             statusDetail = "Steam ya estaba abierto."
         } catch {
-            LifecycleDiagnostics.write("Fallo: \(error.localizedDescription)")
-            logger.error("Fallo al iniciar Steam: \(error.localizedDescription, privacy: .public)")
-            presentLaunchError(error)
+            runningState = await coordinator.runningState()
+            if runningState.activeBackend == .regression {
+                failure = nil
+                operation = .running(.regression)
+                statusDetail = "Steam se abrió correctamente."
+                LifecycleDiagnostics.write("Steam adoptado tras una petición concurrente")
+                logger.info("Steam de Regression adoptado tras una petición concurrente")
+                showSteam()
+            } else {
+                LifecycleDiagnostics.write("Fallo: \(error.localizedDescription)")
+                logger.error("Fallo al iniciar Steam: \(error.localizedDescription, privacy: .public)")
+                presentLaunchError(error)
+            }
         }
     }
 
@@ -2636,6 +2739,8 @@ final class RegressionAppModel {
             }
         case .reviewProtectedAppleGPTK:
             beginInspectExistingProtectedAppleGPTK()
+        case .restartProtectedAppleGPTKSteam:
+            await restartSteamAfterProtectedAppleGPTKAuthorization()
         case .reinstallRegression: openOfficialRegressionRelease()
         }
     }
@@ -2672,6 +2777,16 @@ final class RegressionAppModel {
                     message: "Los bytes coinciden, pero Regression no ejecutará este componente de Apple sin un recibo local verificable de licencia.",
                     technicalDetail: "Revisa la licencia exacta del componente protegido antes de autorizarlo.",
                     recovery: .reviewProtectedAppleGPTK
+                )
+                return false
+            }
+            guard !protectedAppleGPTKSteamRestartRequired else {
+                presentGameLaunchIssue(
+                    appID: appID,
+                    title: "Reinicia Steam para aplicar Apple GPTK 3.0",
+                    message: "La licencia ya está aceptada. El Steam que estaba abierto antes de la autorización aún no conoce las rutas protegidas.",
+                    technicalDetail: "Cierra cualquier juego abierto y reinicia únicamente el Steam propio desde la tarjeta GPTK 3.0.",
+                    recovery: .restartProtectedAppleGPTKSteam
                 )
                 return false
             }
@@ -2735,6 +2850,7 @@ final class RegressionAppModel {
     }
 
     private func refreshRuntimeState() async {
+        let previousActiveBackend = runningState.activeBackend
         runningState = await coordinator.runningState()
         if runningState.hasConflict {
             present(RegressionCoreError.backendConflict)
@@ -2748,6 +2864,12 @@ final class RegressionAppModel {
             operation = .ready
             statusDetail = "Steam se ha cerrado. Regression permanece disponible en la barra de menús."
             await refreshStoredData()
+        } else if protectedAppleGPTKSteamRestartRequired {
+            setProtectedAppleGPTKSteamRestartRequired(false)
+            statusDetail = "Apple GPTK 3.0 está autorizado y se aplicará al próximo inicio de Steam."
+        }
+        if previousActiveBackend != runningState.activeBackend {
+            await refreshTestReadiness()
         }
         scheduleAutomaticRegressionUpdateIfPossible()
     }
@@ -2983,6 +3105,11 @@ final class RegressionAppModel {
     }
 
     private func scheduleRegressionReleaseCheck(force: Bool = false) {
+        #if DEBUG
+        // El arnés visual ejecuta el binario SwiftPM fuera de un bundle instalado. No consulta
+        // red ni crea notificaciones: sus estados de actualización son fixtures explícitos.
+        guard RegressionVisualFixtureState.requested == nil else { return }
+        #endif
         guard regressionUpdateTask == nil || force else { return }
         regressionUpdateTask?.cancel()
         regressionReleaseStatus = .checking

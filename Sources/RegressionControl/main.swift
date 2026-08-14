@@ -226,22 +226,19 @@ enum RegressionControl {
             )
 
         case "acquire-windows-media-runtime-lease":
-            let joinExistingRuntime = arguments.count == 6
+            let joinExistingGameRuntime = arguments.count == 6
                 && arguments[3] == "--app-id"
                 && SteamAppID.normalized(arguments[4]) == arguments[4]
                 && arguments[5] == "--join-existing-regression-runtime"
-            guard (arguments.count == 3 || joinExistingRuntime), arguments[1] == "--owner-pid",
+            let joinExistingControlRuntime = arguments.count == 4
+                && arguments[3] == "--join-existing-regression-runtime-control"
+            guard (arguments.count == 3 || joinExistingGameRuntime || joinExistingControlRuntime),
+                  arguments[1] == "--owner-pid",
                   let ownerPID = Int32(arguments[2]), ownerPID == getppid() else {
                 throw RegressionCoreError.invalidEvidence("interlock de runtime no válido")
             }
-            let lease: WindowsMediaRepairLease
-            var acquisitionState = "issued"
-            do {
-                lease = try WindowsMediaRepairInterlock.issueRuntimeLease(
-                    ownerPID: ownerPID,
-                    applicationSupportURL: support
-                )
-            } catch WindowsMediaRepairInterlockError.leaseActive where joinExistingRuntime {
+
+            func joinObservedRegressionRuntime() async throws -> WindowsMediaRepairLease {
                 let snapshot = try WindowsMediaRepairInterlock.snapshotExistingRuntimeLease(
                     applicationSupportURL: support
                 )
@@ -254,7 +251,7 @@ enum RegressionControl {
                         "la lease activa no pertenece a un Steam de Regression observable"
                     )
                 }
-                lease = try WindowsMediaRepairInterlock.joinExistingRuntimeLease(
+                let joinedLease = try WindowsMediaRepairInterlock.joinExistingRuntimeLease(
                     ownerPID: ownerPID,
                     expectedToken: snapshot.token,
                     expectedRuntimeOwnerPIDs: observedOwners,
@@ -264,7 +261,7 @@ enum RegressionControl {
                 guard runtimeAfterJoin.activeBackend == .regression,
                       !observedOwners.isDisjoint(with: Set(runtimeAfterJoin.regressionPIDs)) else {
                     try? WindowsMediaRepairInterlock.release(
-                        token: lease.token,
+                        token: joinedLease.token,
                         ownerPID: ownerPID,
                         applicationSupportURL: support
                     )
@@ -272,7 +269,24 @@ enum RegressionControl {
                         "Steam de Regression cambió durante la unión al runtime"
                     )
                 }
+                return joinedLease
+            }
+
+            let lease: WindowsMediaRepairLease
+            var acquisitionState = "issued"
+            if joinExistingControlRuntime {
+                lease = try await joinObservedRegressionRuntime()
                 acquisitionState = "joined"
+            } else {
+                do {
+                    lease = try WindowsMediaRepairInterlock.issueRuntimeLease(
+                        ownerPID: ownerPID,
+                        applicationSupportURL: support
+                    )
+                } catch WindowsMediaRepairInterlockError.leaseActive where joinExistingGameRuntime {
+                    lease = try await joinObservedRegressionRuntime()
+                    acquisitionState = "joined"
+                }
             }
             print("REGRESSION_WINDOWS_MEDIA_RUNTIME_LEASE=\(lease.token)")
             print("REGRESSION_WINDOWS_MEDIA_RUNTIME_STATE=\(acquisitionState)")

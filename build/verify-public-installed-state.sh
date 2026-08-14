@@ -50,6 +50,12 @@ case "$MODE" in
         [[ -d "$APP" && ! -L "$APP" ]] \
             || fail "la release pública debe ser un bundle físico"
         ;;
+    --release-1.12.2)
+        EXPECTED_VERSION="1.12.2"
+        EXPECTED_BUILD="40"
+        [[ -d "$APP" && ! -L "$APP" ]] \
+            || fail "la release pública debe ser un bundle físico"
+        ;;
     --candidate-1.12.1-before-runtime-join-fix)
         EXPECTED_VERSION="1.12.1"
         EXPECTED_BUILD="39"
@@ -57,7 +63,7 @@ case "$MODE" in
             || fail "el candidato público debe ser un bundle físico"
         ;;
     *)
-        fail "uso: $0 --baseline-1.10.0 | --release-1.10.1 | --release-1.11.0 | --release-1.12.0 | --release-1.12.1 | --candidate-1.12.1-before-runtime-join-fix"
+        fail "uso: $0 --baseline-1.10.0 | --release-1.10.1 | --release-1.11.0 | --release-1.12.0 | --release-1.12.1 | --release-1.12.2 | --candidate-1.12.1-before-runtime-join-fix"
         ;;
 esac
 codesign --verify --deep --strict "$APP"
@@ -74,7 +80,18 @@ fi
 [[ "$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")" == "$EXPECTED_BUILD" ]] \
     || fail "build público no soportado"
 
-if [[ "$MODE" == "--release-1.12.1" ]]; then
+if [[ "$MODE" == "--release-1.12.2" ]]; then
+    verify_hash 8e8aad9628e9eb4f85848aba0538d10bd3c4fa242e7d96f6a826b93830329eff \
+        "$APP/Contents/MacOS/regression-engine"
+    verify_hash fed13faa895c9ea5896a6497490db26674c3dca2a318e3389d8e43ba3e00f552 \
+        "$APP/Contents/SharedSupport/wine-root/bin/wine"
+    verify_hash 8d14fb9d6d9730c300ba16b5997d98218a2a40a78008d60f3a6edb719f328db3 \
+        "$APP/Contents/SharedSupport/wine-root/bin/wineserver"
+    verify_hash 5636a6505e872c8d185d8db7ced2d4aa8e9057e81c4c579e4b623009f9c2857b \
+        "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/wine"
+    verify_hash f17cebf085a0a746224e61b4fc49341f7a0cec48741c5f12d1cc84a4dcd0ba5d \
+        "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+elif [[ "$MODE" == "--release-1.12.1" ]]; then
     verify_hash 38be0b5fd0bed42e5467f9a61c5c972733898523eeac3e34e83eb5317efb3edf \
         "$APP/Contents/MacOS/regression-engine"
     verify_hash fed13faa895c9ea5896a6497490db26674c3dca2a318e3389d8e43ba3e00f552 \
@@ -117,6 +134,33 @@ else
         "$APP/Contents/MacOS/regression-engine"
     verify_hash 25a02aedaf914ee997cabd82c538d1b139b55d342d9c9c27c149a443ab406b2b \
         "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+fi
+
+if [[ "$MODE" == "--release-1.12.2" ]]; then
+    baseline="$APP/Contents/SharedSupport/components/steam-bottle-baseline/1"
+    verify_hash 884912891b7a3f5440a46b30b9241aa604e248fbbe578498058658e2293b00f4 \
+        "$baseline/manifest.sha256"
+    (
+        cd "$baseline"
+        shasum -a 256 -c manifest.sha256 >/dev/null
+    ) || fail "el baseline gráfico de la botella no supera su manifiesto sellado"
+    for bottle_entry in \
+        d3d9.dll \
+        d3d10core.dll \
+        d3d11.dll \
+        dxgi.dll \
+        winemetal.dll
+    do
+        source_entry="$baseline/$bottle_entry"
+        bottle_entry_path="$BOTTLE/drive_c/windows/system32/$bottle_entry"
+        [[ -f "$bottle_entry_path" && ! -L "$bottle_entry_path" ]] \
+            || fail "falta el módulo gráfico de botella: $bottle_entry"
+        [[ "$(shasum -a 256 "$source_entry" | awk '{ print $1 }')" \
+            == "$(shasum -a 256 "$bottle_entry_path" | awk '{ print $1 }')" ]] \
+            || fail "la botella no coincide con el baseline gráfico sellado: $bottle_entry"
+    done
+    "$APP/Contents/SharedSupport/bin/install-windows-media-component" --verify-only >/dev/null \
+        || fail "Windows Media no está enlazado al componente público verificado"
 fi
 verify_hash da8ba98d99d157f981ef3a2472dc9d74c9ce4673ef126bdd61851b9dd21dedb3 \
     "$APP/Contents/SharedSupport/components/windows-media/1/manifest.sha256"

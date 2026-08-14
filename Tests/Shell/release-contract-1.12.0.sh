@@ -25,13 +25,13 @@ EOF
     chmod 755 "$path"
 }
 
-write_installer "$SCRATCH/matching.sh" 1.12.1 39
+write_installer "$SCRATCH/matching.sh" 1.12.2 40
 REGRESSION_RELEASE_CONTRACT_ONLY=1 \
 REGRESSION_RELEASE_INSTALLER_SOURCE="$SCRATCH/matching.sh" \
     "$PACKAGER" >/dev/null
 REGRESSION_RELEASE_CONTRACT_ONLY=1 "$PACKAGER" >/dev/null
 
-write_installer "$SCRATCH/wrong-version.sh" 1.11.0 39
+write_installer "$SCRATCH/wrong-version.sh" 1.11.0 40
 if REGRESSION_RELEASE_CONTRACT_ONLY=1 \
     REGRESSION_RELEASE_INSTALLER_SOURCE="$SCRATCH/wrong-version.sh" \
     "$PACKAGER" >/dev/null 2>&1; then
@@ -39,7 +39,7 @@ if REGRESSION_RELEASE_CONTRACT_ONLY=1 \
     exit 1
 fi
 
-write_installer "$SCRATCH/wrong-build.sh" 1.12.1 38
+write_installer "$SCRATCH/wrong-build.sh" 1.12.2 39
 if REGRESSION_RELEASE_CONTRACT_ONLY=1 \
     REGRESSION_RELEASE_INSTALLER_SOURCE="$SCRATCH/wrong-build.sh" \
     "$PACKAGER" >/dev/null 2>&1; then
@@ -105,10 +105,10 @@ if grep -F 'REGRESSION_RELEASE_SWIFT_BIN_DIR' "$PACKAGER" >/dev/null; then
 fi
 grep -F "cmp -s \"\$INSTALLER_SOURCE\" \"\$INSTALLER_TEMP\"" "$PACKAGER" >/dev/null \
     || { printf 'FAIL: package_release no exige copia byte a byte.\n' >&2; exit 1; }
-grep -Fx 'VERSION="1.12.1"' "$NATIVE_PACKAGER" >/dev/null \
-    || { printf 'FAIL: package_regression no declara 1.12.1.\n' >&2; exit 1; }
-grep -Fx 'BUILD_NUMBER="39"' "$NATIVE_PACKAGER" >/dev/null \
-    || { printf 'FAIL: package_regression no declara build 39.\n' >&2; exit 1; }
+grep -Fx 'VERSION="1.12.2"' "$NATIVE_PACKAGER" >/dev/null \
+    || { printf 'FAIL: package_regression no declara 1.12.2.\n' >&2; exit 1; }
+grep -Fx 'BUILD_NUMBER="40"' "$NATIVE_PACKAGER" >/dev/null \
+    || { printf 'FAIL: package_regression no declara build 40.\n' >&2; exit 1; }
 grep -F 'NATIVE_BACKUP_PATHS+=(Contents/SharedSupport/bin/install-apple-gptk-component)' \
     "$NATIVE_PACKAGER" >/dev/null \
     || { printf 'FAIL: el backup nativo omite el instalador GPTK.\n' >&2; exit 1; }
@@ -126,8 +126,10 @@ grep -F -- '--release-1.12.0)' "$PUBLIC_STATE_GATE" >/dev/null \
     || { printf 'FAIL: falta el seam público 1.12.0.\n' >&2; exit 1; }
 grep -F -- '--release-1.12.1)' "$PUBLIC_STATE_GATE" >/dev/null \
     || { printf 'FAIL: falta el seam público 1.12.1.\n' >&2; exit 1; }
+grep -F -- '--release-1.12.2)' "$PUBLIC_STATE_GATE" >/dev/null \
+    || { printf 'FAIL: falta el seam público 1.12.2.\n' >&2; exit 1; }
 for installed_pin in \
-    38be0b5fd0bed42e5467f9a61c5c972733898523eeac3e34e83eb5317efb3edf \
+    8e8aad9628e9eb4f85848aba0538d10bd3c4fa242e7d96f6a826b93830329eff \
     fed13faa895c9ea5896a6497490db26674c3dca2a318e3389d8e43ba3e00f552 \
     8d14fb9d6d9730c300ba16b5997d98218a2a40a78008d60f3a6edb719f328db3 \
     5636a6505e872c8d185d8db7ced2d4aa8e9057e81c4c579e4b623009f9c2857b \

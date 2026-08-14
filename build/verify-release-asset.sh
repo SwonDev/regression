@@ -11,7 +11,8 @@ WORK_DIR=""
 
 # REGRESSION_RELEASE_AUTHORITY_V2_BEGIN
 EXPECTED_MEDIA_MANIFEST_SHA256="da8ba98d99d157f981ef3a2472dc9d74c9ce4673ef126bdd61851b9dd21dedb3"
-EXPECTED_ENGINE_SHA256="38be0b5fd0bed42e5467f9a61c5c972733898523eeac3e34e83eb5317efb3edf"
+EXPECTED_STEAM_BOTTLE_BASELINE_MANIFEST_SHA256="884912891b7a3f5440a46b30b9241aa604e248fbbe578498058658e2293b00f4"
+EXPECTED_ENGINE_SHA256="8e8aad9628e9eb4f85848aba0538d10bd3c4fa242e7d96f6a826b93830329eff"
 EXPECTED_GPTK_INSTALLER_SHA256="f6bcd552320e3713693d0a0bbf1af4932b573fc35798282c1724f2b52a688660"
 # Hashes del ensemble público derivados del builder raw sellado mediante strip,
 # saneado literal y firma ad hoc del staging.
@@ -32,6 +33,17 @@ f03a7c92ed8cda87fc0bf72a5af29962d26ca981b546b3ce0550fb57ca3ee7ff lib/wine/x86_64
 02037225c495c37747ae4cde08de6ff31119b850997799fa27237ca61bed7b35 lib/wine/i386-windows/vcruntime140.dll
 2727caf41f37eec4141c891e42365e261cc909b01d0ae568b12b9bf2fdcffa85 lib/wine/i386-windows/msvcp140.dll
 935fbefeb5462924e628df486ebfdad49b70a91154c9a8a57d9aa221fc91c119 lib/wine/i386-windows/ucrtbase.dll
+EOF
+}
+
+steam_bottle_baseline_authority()
+{
+    cat <<'EOF'
+ff2062e17cfb5d4a0e4259e01fb264bb53e33fa093816e60c6e5a8f1e201b0eb d3d9.dll
+0b97d99a61eeeefefc4451d49477d31dc8c6e50ecca7651003655ac67f72aef4 d3d10core.dll
+e6209af3a04947504af1f12b4533eded103687841197cff45a92d1a5f916c0a8 d3d11.dll
+25f74dafc3ebaf77ddc5a7b32d933853462c303a2636399860e80937cda82941 dxgi.dll
+d53c92237bc98e1b8a17139f6bb22aa8a93c6cc1c7307a7146e38529acefa179 winemetal.dll
 EOF
 }
 # REGRESSION_RELEASE_AUTHORITY_V2_END
@@ -169,6 +181,7 @@ tar --xattrs --no-mac-metadata -xf "$ASSET" -C "$WORK_DIR" --no-same-owner
 APP="$WORK_DIR/Regression.app"
 WINE_ROOT="$APP/Contents/SharedSupport/wine-root"
 MEDIA_ROOT="$APP/Contents/SharedSupport/components/windows-media/1"
+BOTTLE_BASELINE_ROOT="$APP/Contents/SharedSupport/components/steam-bottle-baseline/1"
 
 verify_confined_symlinks "$APP"
 FIRST_LABORATORY_COPY="$(find "$APP" -type f \
@@ -186,10 +199,10 @@ fi
     || fail "falta el onboarding y verificador Apple GPTK"
 [[ "$(shasum -a 256 "$APP/Contents/MacOS/regression-engine" | awk '{print $1}')" \
     == "$EXPECTED_ENGINE_SHA256" ]] \
-    || fail "el lanzador público no coincide con la autoridad 1.12.1"
+    || fail "el lanzador público no coincide con la autoridad 1.12.2"
 [[ "$(shasum -a 256 "$APP/Contents/SharedSupport/bin/install-apple-gptk-component" \
     | awk '{print $1}')" == "$EXPECTED_GPTK_INSTALLER_SHA256" ]] \
-    || fail "el onboarding GPTK público no coincide con la autoridad 1.12.1"
+    || fail "el onboarding GPTK público no coincide con la autoridad 1.12.2"
 [[ "$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")" == "$EXPECTED_VERSION" ]] \
     || fail "la versión del bundle no coincide con $EXPECTED_VERSION"
 [[ "$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")" == "$EXPECTED_BUILD" ]] \
@@ -270,6 +283,27 @@ done < <(release_runtime_authority_v2)
     || fail "el manifiesto Windows Media no coincide con la autoridad pública compilada"
 codesign --verify --strict "$MEDIA_ROOT/gstreamer-1.0/libgstasf.dylib"
 codesign --verify --strict "$MEDIA_ROOT/gstreamer-1.0/libgstlibav.dylib"
+
+[[ -d "$BOTTLE_BASELINE_ROOT" && ! -L "$BOTTLE_BASELINE_ROOT" \
+    && -f "$BOTTLE_BASELINE_ROOT/manifest.sha256" \
+    && ! -L "$BOTTLE_BASELINE_ROOT/manifest.sha256" ]] \
+    || fail "falta la receta gráfica de botella sellada"
+[[ "$(shasum -a 256 "$BOTTLE_BASELINE_ROOT/manifest.sha256" | awk '{print $1}')" \
+    == "$EXPECTED_STEAM_BOTTLE_BASELINE_MANIFEST_SHA256" ]] \
+    || fail "el manifiesto de la receta gráfica no coincide"
+[[ "$(stat -f %Lp "$BOTTLE_BASELINE_ROOT")" == 755 \
+    && "$(stat -f %Lp "$BOTTLE_BASELINE_ROOT/manifest.sha256")" == 644 ]] \
+    || fail "la receta gráfica tiene permisos inesperados"
+[[ "$(find "$BOTTLE_BASELINE_ROOT" -mindepth 1 -maxdepth 1 -print | wc -l | tr -d ' ')" == 6 ]] \
+    || fail "la receta gráfica contiene entradas inesperadas"
+while IFS=' ' read -r expected module; do
+    candidate="$BOTTLE_BASELINE_ROOT/$module"
+    [[ -f "$candidate" && ! -L "$candidate" \
+        && "$(stat -f %Lp "$candidate")" == 644 ]] \
+        || fail "el módulo de botella $module no es un fichero 0644 físico"
+    [[ "$(shasum -a 256 "$candidate" | awk '{print $1}')" == "$expected" ]] \
+        || fail "el módulo de botella $module no coincide"
+done < <(steam_bottle_baseline_authority)
 
 FIRST_GPTK_FILE="$(find "$WINE_ROOT/lib/apple_gptk" -type f -print -quit)"
 if [[ -n "$FIRST_GPTK_FILE" ]]; then

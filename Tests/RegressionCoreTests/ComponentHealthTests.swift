@@ -605,8 +605,8 @@ final class ComponentHealthTests: XCTestCase {
       applicationSupportURL: roots.applicationSupport
     )
     let current = TrustedComponentCatalog.windowsMediaDescriptor(
-      applicationVersion: "1.12.1",
-      buildIdentifier: "39",
+      applicationVersion: "1.12.2",
+      buildIdentifier: "40",
       variant: .publicInstalled,
       applicationBundleURL: roots.bundle,
       applicationSupportURL: roots.applicationSupport
@@ -746,8 +746,8 @@ final class ComponentHealthTests: XCTestCase {
     )
 
     let descriptor = TrustedComponentCatalog.steamRuntimePrerequisitesDescriptor(
-      applicationVersion: "1.12.1",
-      buildIdentifier: "39",
+      applicationVersion: "1.12.2",
+      buildIdentifier: "40",
       variant: .publicInstalled,
       wineRootURL: root
     )
@@ -755,13 +755,13 @@ final class ComponentHealthTests: XCTestCase {
     XCTAssertEqual(descriptor.identity.componentID, "steam-runtime-prerequisites")
     XCTAssertEqual(descriptor.identity.componentVersion, "3")
     XCTAssertEqual(descriptor.identity.variant, .publicInstalled)
-    XCTAssertEqual(descriptor.identity.buildIdentifier, "39")
+    XCTAssertEqual(descriptor.identity.buildIdentifier, "40")
     XCTAssertEqual(descriptor.payloadRootURL, root.standardizedFileURL)
     XCTAssertEqual(
       descriptor.identity,
       TrustedComponentCatalog.steamRuntimePrerequisitesDescriptor(
-        applicationVersion: "1.12.1",
-        buildIdentifier: "39",
+        applicationVersion: "1.12.2",
+        buildIdentifier: "40",
         variant: .publicInstalled,
         wineRootURL: root
       ).identity
@@ -849,8 +849,8 @@ final class ComponentHealthTests: XCTestCase {
       isDirectory: true
     )
     let descriptor = TrustedComponentCatalog.steamRuntimePrerequisitesDescriptor(
-      applicationVersion: "1.12.1",
-      buildIdentifier: "39",
+      applicationVersion: "1.12.2",
+      buildIdentifier: "40",
       variant: .development,
       wineRootURL: root
     )
@@ -861,7 +861,7 @@ final class ComponentHealthTests: XCTestCase {
     XCTAssertEqual(report.recovery, .installSupportedApplicationBuild)
     XCTAssertEqual(
       report.issue,
-      .unsupportedVariant("Regression 1.12.1 (39): runtime de desarrollo sin PIN reproducible")
+      .unsupportedVariant("Regression 1.12.2 (40): runtime de desarrollo sin PIN reproducible")
     )
   }
 

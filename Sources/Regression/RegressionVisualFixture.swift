@@ -132,6 +132,7 @@
 
   enum RegressionVisualFixtureScroll: String {
     case game
+    case maintenance
 
     private static let argumentPrefix = "--regression-visual-scroll="
 
@@ -161,6 +162,8 @@
     case gptkInstalling = "gptk-installing"
     case gptk3Blocked = "gptk3-blocked"
     case gptk3License = "gptk3-license"
+    case gptk3LicenseSteamActive = "gptk3-license-steam-active"
+    case gptk3RestartRequired = "gptk3-restart-required"
     case gptk3Authorizing = "gptk3-authorizing"
     case preflightWarning = "preflight-warning"
     case preflightBlocked = "preflight-blocked"
@@ -192,7 +195,8 @@
       case .runtimeReady, .runtimeMissing, .runtimeDrifted, .runtimeBrokenWithUpdate,
            .mediaRepairable, .mediaMissing,
            .preflightWarning, .preflightBlocked,
-           .updaterAvailable, .updaterFailed:
+           .updaterAvailable, .updaterFailed, .gptk3LicenseSteamActive,
+           .gptk3RestartRequired:
         true
       case .ready, .working, .empty, .error, .custodyEligible, .custodyPreparing,
            .custodyPreCutover, .custodyCutover, .custodyVerifying, .custodyPendingValidation,
@@ -260,6 +264,7 @@
         recovery: .none
       )
       protectedAppleGPTKAuthorizationState = .ready
+      protectedAppleGPTKSteamRestartRequired = false
 
       switch state {
       case .ready:
@@ -438,6 +443,17 @@
               .utf8
           )
         )
+      case .gptk3LicenseSteamActive:
+        applyReadyVisualFixture()
+        runningState = RunningBackendState(regressionPIDs: [42])
+        protectedAppleGPTKAuthorizationState = .requiresAuthorization
+        appleGPTKLicenseReview = nil
+      case .gptk3RestartRequired:
+        applyReadyVisualFixture()
+        runningState = RunningBackendState(regressionPIDs: [42])
+        protectedAppleGPTKAuthorizationState = .ready
+        protectedAppleGPTKSteamRestartRequired = true
+        statusDetail = "Apple GPTK 3.0 está autorizado; el Steam activo necesita reiniciarse."
       case .gptk3Authorizing:
         applyReadyVisualFixture()
         protectedAppleGPTKAuthorizationState = .authorizing

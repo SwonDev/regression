@@ -19,6 +19,7 @@ BEFORE_BORDERLANDS4_PROCESS_ISOLATION=false
 BEFORE_1_11_PROMOTION=false
 RELEASE_1_11_DEVELOPMENT_CANDIDATE=false
 RELEASE_1_12_DEVELOPMENT_CANDIDATE=false
+CANDIDATE_1_12_2_BEFORE_RUNTIME_CONTROL_FIX=false
 
 for argument in "$@"; do
     case "$argument" in
@@ -64,8 +65,11 @@ for argument in "$@"; do
         --release-1.12-development-candidate)
             RELEASE_1_12_DEVELOPMENT_CANDIDATE=true
             ;;
+        --candidate-1.12.2-before-runtime-control-fix)
+            CANDIDATE_1_12_2_BEFORE_RUNTIME_CONTROL_FIX=true
+            ;;
         *)
-            echo "Uso: $0 [--include-bottle] [--before-dd2-promotion|--before-dragonsword-promotion|--before-hwr2-promotion|--before-tq2-route-unification|--before-windows-media-promotion|--before-windows-media-link-fix|--before-three-games-promotion|--before-three-games-hardening|--before-borderlands4-promotion|--before-borderlands4-process-isolation|--before-1.11-promotion|--release-1.11-development-candidate|--release-1.12-development-candidate]" >&2
+            echo "Uso: $0 [--include-bottle] [--before-dd2-promotion|--before-dragonsword-promotion|--before-hwr2-promotion|--before-tq2-route-unification|--before-windows-media-promotion|--before-windows-media-link-fix|--before-three-games-promotion|--before-three-games-hardening|--before-borderlands4-promotion|--before-borderlands4-process-isolation|--before-1.11-promotion|--release-1.11-development-candidate|--release-1.12-development-candidate|--candidate-1.12.2-before-runtime-control-fix]" >&2
             exit 64
             ;;
     esac
@@ -85,6 +89,7 @@ $BEFORE_BORDERLANDS4_PROCESS_ISOLATION && PROMOTION_BASELINES=$((PROMOTION_BASEL
 $BEFORE_1_11_PROMOTION && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
 $RELEASE_1_11_DEVELOPMENT_CANDIDATE && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
 $RELEASE_1_12_DEVELOPMENT_CANDIDATE && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
+$CANDIDATE_1_12_2_BEFORE_RUNTIME_CONTROL_FIX && PROMOTION_BASELINES=$((PROMOTION_BASELINES + 1))
 if (( PROMOTION_BASELINES > 1 )); then
     echo "ERROR: los modos de verificación protegida son mutuamente excluyentes." >&2
     exit 64
@@ -322,8 +327,13 @@ verify_release_1_12_development_runtime_authority()
     exit 1
 }
 
-if $RELEASE_1_12_DEVELOPMENT_CANDIDATE; then
-    verify_hash 38be0b5fd0bed42e5467f9a61c5c972733898523eeac3e34e83eb5317efb3edf \
+if $RELEASE_1_12_DEVELOPMENT_CANDIDATE || $CANDIDATE_1_12_2_BEFORE_RUNTIME_CONTROL_FIX; then
+    if $CANDIDATE_1_12_2_BEFORE_RUNTIME_CONTROL_FIX; then
+        expected_engine_hash="38be0b5fd0bed42e5467f9a61c5c972733898523eeac3e34e83eb5317efb3edf"
+    else
+        expected_engine_hash="8e8aad9628e9eb4f85848aba0538d10bd3c4fa242e7d96f6a826b93830329eff"
+    fi
+    verify_hash "$expected_engine_hash" \
         "Contents/MacOS/regression-engine"
     verify_mode 755 "Contents/MacOS/regression-engine"
     verify_hash f6bcd552320e3713693d0a0bbf1af4932b573fc35798282c1724f2b52a688660 \
@@ -341,9 +351,18 @@ if $RELEASE_1_12_DEVELOPMENT_CANDIDATE; then
         echo "ERROR: el payload Windows Media 1.12 no supera su manifiesto." >&2
         exit 1
     }
+    verify_hash 884912891b7a3f5440a46b30b9241aa604e248fbbe578498058658e2293b00f4 \
+        "Contents/SharedSupport/components/steam-bottle-baseline/1/manifest.sha256"
+    (
+        cd "$APP/Contents/SharedSupport/components/steam-bottle-baseline/1"
+        shasum -a 256 -c manifest.sha256 >/dev/null
+    ) || {
+        echo "ERROR: la receta gráfica de botella 1.12 no supera su manifiesto." >&2
+        exit 1
+    }
     verify_release_1_12_development_runtime_authority
     codesign --verify --deep --strict "$APP"
-    echo "Candidato de desarrollo 1.12 verificado: scripts actuales, medios y runtime sellado."
+    echo "Candidato de desarrollo 1.12 verificado: medios y runtime sellado."
     exit 0
 fi
 

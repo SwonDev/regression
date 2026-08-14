@@ -7,8 +7,8 @@ MACOS_DIR="$APP/Contents/MacOS"
 PLIST="$APP/Contents/Info.plist"
 RESOURCES_DIR="$APP/Contents/Resources"
 STATE_ICON_DIR="$ROOT/assets/menubar/states"
-VERSION="1.12.1"
-BUILD_NUMBER="39"
+VERSION="1.12.2"
+BUILD_NUMBER="40"
 BACKUP_ROOT="$ROOT/backups/native-packaging"
 COMPATIBILITY_ROOT="${REGRESSION_COMPATIBILITY_ROOT:-$HOME/Library/Application Support/Regression/Compatibility}"
 COMPATIBILITY_DB="$COMPATIBILITY_ROOT/compatibility.sqlite"
@@ -27,6 +27,8 @@ verify_protected_state()
         arguments+=(--release-1.11-development-candidate)
     elif [[ "$phase" == "release-1.12-development-candidate" ]]; then
         arguments+=(--release-1.12-development-candidate)
+    elif [[ "$phase" == "candidate-1.12.2-before-runtime-control-fix" ]]; then
+        arguments+=(--candidate-1.12.2-before-runtime-control-fix)
     elif [[ "$phase" == "before-tq2-route-unification" ]]; then
         arguments+=(--before-tq2-route-unification)
     elif [[ "$phase" == "before-windows-media-promotion" ]]; then
@@ -62,7 +64,7 @@ verify_prepackage_state()
     source_hash="$(shasum -a 256 "$source_engine" | awk '{print $1}')"
     installed_ntdll_hash="$(shasum -a 256 "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so" | awk '{print $1}')"
 
-    if [[ "$installed_hash" == "38be0b5fd0bed42e5467f9a61c5c972733898523eeac3e34e83eb5317efb3edf" &&
+    if [[ "$installed_hash" == "8e8aad9628e9eb4f85848aba0538d10bd3c4fa242e7d96f6a826b93830329eff" &&
           "$source_hash" == "$installed_hash" ]]; then
         # La línea 1.12 sustituye el conjunto entero de arranque Wine después
         # del backup. El bundle previo no se puede acreditar aún con ese builder,
@@ -79,6 +81,9 @@ verify_prepackage_state()
             exit 1
         }
         codesign --verify --deep --strict "$APP"
+    elif [[ "$installed_hash" == "38be0b5fd0bed42e5467f9a61c5c972733898523eeac3e34e83eb5317efb3edf" &&
+          "$source_hash" == "8e8aad9628e9eb4f85848aba0538d10bd3c4fa242e7d96f6a826b93830329eff" ]]; then
+        verify_protected_state candidate-1.12.2-before-runtime-control-fix
     elif [[ "$installed_hash" == "767c2c54bfd395ad957f394038c5a930abc46296bb471d4696e186b9a68166f4" &&
           "$source_hash" == "38be0b5fd0bed42e5467f9a61c5c972733898523eeac3e34e83eb5317efb3edf" ]]; then
         REGRESSION_APP_PATH="$APP" "$ROOT/build/verify-public-installed-state.sh" \
@@ -258,6 +263,7 @@ COMPONENT_INSTALLER_SOURCE="$ROOT/Scripts/install_apple_gptk_component.sh"
 }
 WINDOWS_MEDIA_BUILD="${REGRESSION_WINDOWS_MEDIA_BUILD:-$ROOT/build/windows-media-component/1}"
 WINDOWS_MEDIA_INSTALLER_SOURCE="$ROOT/Scripts/install_windows_media_component.sh"
+STEAM_BOTTLE_BASELINE_BUILD="${REGRESSION_STEAM_BOTTLE_BASELINE_BUILD:-$ROOT/build/steam-bottle-baseline/1}"
 [[ -f "$WINDOWS_MEDIA_BUILD/manifest.sha256" ]] || {
     echo "ERROR: falta el componente Windows Media; ejecuta build/build-windows-media-component.sh" >&2
     exit 1
@@ -268,6 +274,19 @@ WINDOWS_MEDIA_INSTALLER_SOURCE="$ROOT/Scripts/install_windows_media_component.sh
 )
 [[ -x "$WINDOWS_MEDIA_INSTALLER_SOURCE" ]] || {
     echo "ERROR: falta el instalador autorreparable de Windows Media." >&2
+    exit 1
+}
+[[ -f "$STEAM_BOTTLE_BASELINE_BUILD/manifest.sha256" ]] || {
+    echo "ERROR: falta la receta gráfica de botella; ejecuta build/build-steam-bottle-baseline.sh" >&2
+    exit 1
+}
+(
+    cd "$STEAM_BOTTLE_BASELINE_BUILD"
+    shasum -a 256 -c manifest.sha256
+)
+[[ "$(shasum -a 256 "$STEAM_BOTTLE_BASELINE_BUILD/manifest.sha256" | awk '{print $1}')" \
+    == "884912891b7a3f5440a46b30b9241aa604e248fbbe578498058658e2293b00f4" ]] || {
+    echo "ERROR: la receta gráfica de botella no coincide con la autoridad compilada." >&2
     exit 1
 }
 
@@ -297,6 +316,9 @@ if [[ -e "$APP/Contents/SharedSupport/bin/install-windows-media-component" ]]; t
 fi
 if [[ -d "$APP/Contents/SharedSupport/components/windows-media/1" ]]; then
     NATIVE_BACKUP_PATHS+=(Contents/SharedSupport/components/windows-media/1)
+fi
+if [[ -d "$APP/Contents/SharedSupport/components/steam-bottle-baseline/1" ]]; then
+    NATIVE_BACKUP_PATHS+=(Contents/SharedSupport/components/steam-bottle-baseline/1)
 fi
 tar -czf "$NATIVE_BACKUP" -C "$APP" "${NATIVE_BACKUP_PATHS[@]}"
 tar -tzf "$NATIVE_BACKUP" >/dev/null
@@ -355,6 +377,17 @@ mv "$WINDOWS_MEDIA_SOURCE.new" "$WINDOWS_MEDIA_SOURCE"
 TEMP_WINDOWS_MEDIA_INSTALLER="$APP/Contents/SharedSupport/bin/.install-windows-media-component.new"
 install -m 755 "$WINDOWS_MEDIA_INSTALLER_SOURCE" "$TEMP_WINDOWS_MEDIA_INSTALLER"
 mv "$TEMP_WINDOWS_MEDIA_INSTALLER" "$WINDOWS_MEDIA_INSTALLER"
+
+STEAM_BOTTLE_BASELINE_SOURCE="$APP/Contents/SharedSupport/components/steam-bottle-baseline/1"
+mkdir -p "$(dirname "$STEAM_BOTTLE_BASELINE_SOURCE")"
+rm -rf "$STEAM_BOTTLE_BASELINE_SOURCE.new"
+ditto "$STEAM_BOTTLE_BASELINE_BUILD" "$STEAM_BOTTLE_BASELINE_SOURCE.new"
+(
+    cd "$STEAM_BOTTLE_BASELINE_SOURCE.new"
+    shasum -a 256 -c manifest.sha256
+)
+rm -rf "$STEAM_BOTTLE_BASELINE_SOURCE"
+mv "$STEAM_BOTTLE_BASELINE_SOURCE.new" "$STEAM_BOTTLE_BASELINE_SOURCE"
 
 mkdir -p "$RESOURCES_DIR"
 for state in ready working running error; do

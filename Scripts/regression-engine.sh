@@ -245,10 +245,15 @@ prepare_process_dll_isolation_routes
 
 windows_media_runtime_lease_file="$CONTROLLER_QUERY_DIR/windows-media-runtime-lease"
 windows_media_runtime_lease_arguments=(acquire-windows-media-runtime-lease --owner-pid $$)
-if [[ -n "$windows_media_app_id" ]]; then
+windows_media_runtime_expected_state='issued'
+if [[ "${1:-}" == "-shutdown" && $# -eq 1 ]]; then
+    windows_media_runtime_lease_arguments+=(--join-existing-regression-runtime-control)
+    windows_media_runtime_expected_state='joined'
+elif [[ -n "$windows_media_app_id" ]]; then
     windows_media_runtime_lease_arguments+=(
         --app-id "$windows_media_app_id" --join-existing-regression-runtime
     )
+    windows_media_runtime_expected_state='(issued|joined)'
 fi
 if ! "$ROOT/Contents/SharedSupport/bin/regressionctl" \
     "${windows_media_runtime_lease_arguments[@]}" >"$windows_media_runtime_lease_file"; then
@@ -259,10 +264,6 @@ windows_media_runtime_lease="$(/usr/bin/grep -E '^REGRESSION_WINDOWS_MEDIA_RUNTI
     "$windows_media_runtime_lease_file" || true)"
 windows_media_runtime_state="$(/usr/bin/grep -E '^REGRESSION_WINDOWS_MEDIA_RUNTIME_STATE=(issued|joined)$' \
     "$windows_media_runtime_lease_file" || true)"
-windows_media_runtime_expected_state='issued'
-if [[ -n "$windows_media_app_id" ]]; then
-    windows_media_runtime_expected_state='(issued|joined)'
-fi
 [[ "$windows_media_runtime_lease" =~ ^REGRESSION_WINDOWS_MEDIA_RUNTIME_LEASE=[0-9a-f-]{36}$ &&
    "$windows_media_runtime_state" =~ ^REGRESSION_WINDOWS_MEDIA_RUNTIME_STATE=${windows_media_runtime_expected_state}$ ]] || {
     printf 'Regression: el interlock de runtime devolvió un lease no válido.\n' >&2

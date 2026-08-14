@@ -8,8 +8,8 @@ export PATH
 # Ningún smoke, wineboot, instalador ni wineserver puede heredar la sesión de otro runtime.
 unset WINESERVERSOCKET
 
-VERSION="1.12.1"
-BUILD_NUMBER="39"
+VERSION="1.12.2"
+BUILD_NUMBER="40"
 REPO="SwonDev/regression"
 ASSET_NAME="Regression-${VERSION}-macos-arm64.tar.gz"
 APP_NAME="Regression.app"
@@ -44,11 +44,14 @@ BOTTLE_EXISTED=0
 BOTTLE_REPLACEMENT_STARTED=0
 BOTTLE_STEAMAPPS_PRESERVED=0
 GPTK_RECOVERED_COMPONENT=""
+WINDOWS_MEDIA_LINK_CREATED=0
+WINDOWS_MEDIA_PROVISIONED_LINK=""
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
 # REGRESSION_RELEASE_AUTHORITY_V2_BEGIN
 EXPECTED_MEDIA_MANIFEST_SHA256="da8ba98d99d157f981ef3a2472dc9d74c9ce4673ef126bdd61851b9dd21dedb3"
-EXPECTED_ENGINE_SHA256="38be0b5fd0bed42e5467f9a61c5c972733898523eeac3e34e83eb5317efb3edf"
+EXPECTED_STEAM_BOTTLE_BASELINE_MANIFEST_SHA256="884912891b7a3f5440a46b30b9241aa604e248fbbe578498058658e2293b00f4"
+EXPECTED_ENGINE_SHA256="8e8aad9628e9eb4f85848aba0538d10bd3c4fa242e7d96f6a826b93830329eff"
 EXPECTED_GPTK_INSTALLER_SHA256="f6bcd552320e3713693d0a0bbf1af4932b573fc35798282c1724f2b52a688660"
 # Hashes del ensemble público derivados del builder raw sellado mediante strip,
 # saneado literal y firma ad hoc del staging.
@@ -69,6 +72,17 @@ f03a7c92ed8cda87fc0bf72a5af29962d26ca981b546b3ce0550fb57ca3ee7ff lib/wine/x86_64
 02037225c495c37747ae4cde08de6ff31119b850997799fa27237ca61bed7b35 lib/wine/i386-windows/vcruntime140.dll
 2727caf41f37eec4141c891e42365e261cc909b01d0ae568b12b9bf2fdcffa85 lib/wine/i386-windows/msvcp140.dll
 935fbefeb5462924e628df486ebfdad49b70a91154c9a8a57d9aa221fc91c119 lib/wine/i386-windows/ucrtbase.dll
+EOF
+}
+
+steam_bottle_baseline_authority()
+{
+    cat <<'EOF'
+ff2062e17cfb5d4a0e4259e01fb264bb53e33fa093816e60c6e5a8f1e201b0eb d3d9.dll
+0b97d99a61eeeefefc4451d49477d31dc8c6e50ecca7651003655ac67f72aef4 d3d10core.dll
+e6209af3a04947504af1f12b4533eded103687841197cff45a92d1a5f916c0a8 d3d11.dll
+25f74dafc3ebaf77ddc5a7b32d933853462c303a2636399860e80937cda82941 dxgi.dll
+d53c92237bc98e1b8a17139f6bb22aa8a93c6cc1c7307a7146e38529acefa179 winemetal.dll
 EOF
 }
 # REGRESSION_RELEASE_AUTHORITY_V2_END
@@ -158,6 +172,16 @@ rollback() {
     ROLLBACK_RUNNING=1
     trap - ERR INT TERM EXIT
     set +e
+    if [[ $WINDOWS_MEDIA_LINK_CREATED -eq 1 \
+        && -n "$WINDOWS_MEDIA_PROVISIONED_LINK" \
+        && -L "$WINDOWS_MEDIA_PROVISIONED_LINK" ]]; then
+        local provisioned_target
+        provisioned_target="$(/usr/bin/readlink "$WINDOWS_MEDIA_PROVISIONED_LINK")"
+        if [[ "$provisioned_target" \
+            == "/Applications/Regression.app/Contents/SharedSupport/components/windows-media/1" ]]; then
+            /bin/unlink "$WINDOWS_MEDIA_PROVISIONED_LINK"
+        fi
+    fi
     if [[ $REPLACEMENT_STARTED -eq 1 && $COMMITTED -eq 0 && -n "$DESTINATION" ]]; then
         fail "La instalación no terminó; restaurando la aplicación anterior."
         if [[ $APP_EXISTED -eq 1 ]]; then
@@ -269,6 +293,149 @@ path_chain_is_physical()
         [[ ! -L "$cursor" ]] || return 1
         cursor="$(/usr/bin/dirname "$cursor")"
     done
+}
+
+verify_steam_bottle_baseline()
+{
+    local root="$1"
+    local expected module actual unexpected_count
+    [[ -d "$root" && ! -L "$root" && -f "$root/manifest.sha256" \
+        && ! -L "$root/manifest.sha256" ]] || {
+        fail "La receta gráfica de botella no es un componente físico verificable."
+        return 1
+    }
+    [[ "$(/usr/bin/shasum -a 256 "$root/manifest.sha256" | /usr/bin/awk '{print $1}')" \
+        == "$EXPECTED_STEAM_BOTTLE_BASELINE_MANIFEST_SHA256" ]] || {
+        fail "El manifiesto de la receta gráfica de botella no coincide."
+        return 1
+    }
+    [[ "$(/usr/bin/stat -f %Lp "$root")" == 755 \
+        && "$(/usr/bin/stat -f %Lp "$root/manifest.sha256")" == 644 ]] || {
+        fail "La receta gráfica de botella tiene permisos inesperados."
+        return 1
+    }
+    while IFS=' ' read -r expected module; do
+        [[ -f "$root/$module" && ! -L "$root/$module" ]] || {
+            fail "Falta el módulo gráfico sellado $module."
+            return 1
+        }
+        actual="$(/usr/bin/shasum -a 256 "$root/$module" | /usr/bin/awk '{print $1}')"
+        [[ "$actual" == "$expected" ]] || {
+            fail "El módulo gráfico sellado $module no coincide."
+            return 1
+        }
+        [[ "$(/usr/bin/stat -f %Lp "$root/$module")" == 644 ]] || {
+            fail "El módulo gráfico sellado $module tiene un modo inesperado."
+            return 1
+        }
+    done < <(steam_bottle_baseline_authority)
+    unexpected_count="$(/usr/bin/find "$root" -mindepth 1 -maxdepth 1 -print \
+        | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
+    [[ "$unexpected_count" == 6 ]] || {
+        fail "La receta gráfica contiene entradas no autorizadas."
+        return 1
+    }
+}
+
+verify_installed_steam_bottle_baseline()
+{
+    local source_root="$1"
+    local bottle_root="$2"
+    local system32="$bottle_root/drive_c/windows/system32"
+    local expected module actual
+    verify_steam_bottle_baseline "$source_root"
+    [[ -d "$system32" && ! -L "$system32" ]] || {
+        fail "system32 no es un directorio físico después de preparar Steam."
+        return 1
+    }
+    while IFS=' ' read -r expected module; do
+        [[ -f "$system32/$module" && ! -L "$system32/$module" ]] || {
+            fail "La botella no contiene $module."
+            return 1
+        }
+        actual="$(/usr/bin/shasum -a 256 "$system32/$module" | /usr/bin/awk '{print $1}')"
+        [[ "$actual" == "$expected" ]] || {
+            fail "La botella no conserva el módulo blindado $module."
+            return 1
+        }
+    done < <(steam_bottle_baseline_authority)
+}
+
+install_steam_bottle_baseline()
+{
+    local source_root="$1"
+    local bottle_root="$2"
+    local system32="$bottle_root/drive_c/windows/system32"
+    local expected module actual temporary
+    verify_steam_bottle_baseline "$source_root"
+    [[ -d "$system32" && ! -L "$system32" ]] || {
+        fail "wineboot no preparó un system32 físico."
+        return 1
+    }
+    while IFS=' ' read -r expected module; do
+        actual=""
+        if [[ -f "$system32/$module" && ! -L "$system32/$module" ]]; then
+            actual="$(/usr/bin/shasum -a 256 "$system32/$module" \
+                | /usr/bin/awk '{print $1}')"
+        fi
+        [[ -f "$system32/$module" && ! -L "$system32/$module" \
+            && "$actual" == "$expected" ]] && continue
+        temporary="$system32/.${module}.regression-new-$$"
+        [[ ! -e "$temporary" && ! -L "$temporary" ]] || cleanup_path "$temporary"
+        /usr/bin/install -m 0644 "$source_root/$module" "$temporary"
+        [[ "$(/usr/bin/shasum -a 256 "$temporary" | /usr/bin/awk '{print $1}')" \
+            == "$expected" ]] || {
+            cleanup_path "$temporary"
+            fail "No se pudo verificar el staging de $module."
+            return 1
+        }
+        /bin/mv -f "$temporary" "$system32/$module"
+    done < <(steam_bottle_baseline_authority)
+    verify_installed_steam_bottle_baseline "$source_root" "$bottle_root"
+}
+
+provision_fresh_windows_media_link()
+{
+    local payload="$DESTINATION/Contents/SharedSupport/components/windows-media/1"
+    local components_root="$APP_SUPPORT/Components"
+    local media_root="$components_root/WindowsMedia"
+    local link="$media_root/1"
+    local stage="$media_root/.1.install-$VERSION-$$"
+
+    [[ -d "$payload" && ! -L "$payload" ]] || {
+        fail "El payload Windows Media verificado no es físico."
+        return 1
+    }
+    if [[ ! -d "$APP_SUPPORT" || -L "$APP_SUPPORT" ]] \
+        || ! path_chain_is_physical "$APP_SUPPORT"; then
+        fail "Application Support no es una raíz física segura."
+        return 1
+    fi
+    for directory in "$components_root" "$media_root"; do
+        if [[ ! -e "$directory" && ! -L "$directory" ]]; then
+            /bin/mkdir -m 700 "$directory"
+        fi
+        [[ -d "$directory" && ! -L "$directory" ]] || {
+            fail "La ruta local Windows Media no es un directorio físico."
+            return 1
+        }
+    done
+
+    # Un estado preexistente se conserva: solo el reparador autorizado por App ID puede hacer
+    # backup o reemplazarlo. La instalación fresca únicamente provisiona una ausencia real.
+    if [[ -e "$link" || -L "$link" ]]; then
+        return 0
+    fi
+    [[ ! -e "$stage" && ! -L "$stage" ]] || cleanup_path "$stage"
+    /bin/ln -s "$payload" "$stage"
+    /bin/mv "$stage" "$link"
+    [[ -L "$link" && "$(/usr/bin/readlink "$link")" == "$payload" ]] || {
+        cleanup_path "$link"
+        fail "No se pudo verificar el enlace Windows Media recién provisionado."
+        return 1
+    }
+    WINDOWS_MEDIA_LINK_CREATED=1
+    WINDOWS_MEDIA_PROVISIONED_LINK="$link"
 }
 
 semantic_version_compare()
@@ -476,6 +643,7 @@ verify_staged_release() {
     local wine_root="$app/Contents/SharedSupport/wine-root"
     local ntdll="$wine_root/lib/wine/x86_64-unix/ntdll.so"
     local media="$app/Contents/SharedSupport/components/windows-media/1"
+    local bottle_baseline="$app/Contents/SharedSupport/components/steam-bottle-baseline/1"
     local binary required expected relative actual
 
     for binary in \
@@ -494,15 +662,16 @@ verify_staged_release() {
 
     [[ "$(/usr/bin/shasum -a 256 "$app/Contents/MacOS/regression-engine" \
         | /usr/bin/awk '{print $1}')" == "$EXPECTED_ENGINE_SHA256" ]] || {
-        fail "El lanzador no coincide con la autoridad compilada 1.12.1."
+        fail "El lanzador no coincide con la autoridad compilada 1.12.2."
         return 1
     }
     [[ "$(/usr/bin/shasum -a 256 \
         "$app/Contents/SharedSupport/bin/install-apple-gptk-component" \
         | /usr/bin/awk '{print $1}')" == "$EXPECTED_GPTK_INSTALLER_SHA256" ]] || {
-        fail "El onboarding GPTK no coincide con la autoridad compilada 1.12.1."
+        fail "El onboarding GPTK no coincide con la autoridad compilada 1.12.2."
         return 1
     }
+    verify_steam_bottle_baseline "$bottle_baseline" || return 1
 
 
     for required in \
@@ -762,7 +931,7 @@ else
         ok "Apple GPTK 3.0 externo se conserva fuera del bundle actualizado"
     else
         warn "Apple GPTK 3.0 aún no está instalado en Regression; la instalación base continuará."
-        say "      Regression te guiará para descargarlo desde Apple y seleccionar su DMG."
+        say "      Regression te guiará para instalar Apple GPTK desde Apple cuando la abras."
     fi
 fi
 
@@ -925,6 +1094,10 @@ fi
 if [[ ! -d "$APP_SUPPORT" ]]; then
     mkdir -m 700 "$APP_SUPPORT"
 fi
+provision_fresh_windows_media_link
+if [[ $WINDOWS_MEDIA_LINK_CREATED -eq 1 ]]; then
+    ok "Windows Media quedó provisionado sin activarlo globalmente"
+fi
 if [[ -L "$BOTTLES_ROOT" || ( -e "$BOTTLES_ROOT" && ! -d "$BOTTLES_ROOT" ) ]]; then
     fail "El directorio de botellas de Regression no es físico ni seguro."
     exit 1
@@ -1058,6 +1231,20 @@ if [[ ! -f "$STEAM_EXE" ]]; then
 else
     ok "Steam existente conservado en la botella transaccional"
 fi
+
+# SteamSetup y wineboot pueden restaurar las DLL Wine genéricas. Con el runtime todavía aislado
+# en BOTTLE_STAGE, se detiene su wineserver, se aplica el conjunto gráfico exacto y se verifica
+# antes del único cutover. Una actualización repara de la misma forma una botella incompleta.
+env "${WINE_ENV[@]}" "$WINESERVER" -k >/dev/null 2>&1 || true
+env "${WINE_ENV[@]}" "$WINESERVER" -w >/dev/null 2>&1 || {
+    fail "El wineserver temporal no terminó antes de sellar la botella."
+    exit 1
+}
+BOTTLE_BASELINE_ROOT="$DESTINATION/Contents/SharedSupport/components/steam-bottle-baseline/1"
+verify_steam_bottle_baseline "$BOTTLE_BASELINE_ROOT"
+install_steam_bottle_baseline "$BOTTLE_BASELINE_ROOT" "$BOTTLE_STAGE"
+verify_installed_steam_bottle_baseline "$BOTTLE_BASELINE_ROOT" "$BOTTLE_STAGE"
+ok "DXMT, DXVK y winemetal preparados desde la receta sellada"
 
 # Switch2Bridge necesita que winebus consulte SDL. Este cambio también ocurre en staging.
 if [[ -f "$BOTTLE_STAGE/system.reg" ]] \

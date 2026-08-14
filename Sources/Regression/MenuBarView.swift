@@ -120,6 +120,10 @@ struct MenuBarView: View {
           DispatchQueue.main.async {
             scrollProxy.scrollTo("game-\(game.appID)", anchor: .center)
           }
+        } else if RegressionVisualFixtureScroll.requested == .maintenance {
+          DispatchQueue.main.async {
+            scrollProxy.scrollTo("maintenance", anchor: .top)
+          }
         }
       #endif
       }
@@ -1142,6 +1146,7 @@ struct MenuBarView: View {
           .regressionFont(.headline)
       }
     }
+    .id("maintenance")
   }
 
   private func certificationRow(_ certification: VerifiedGameCertification) -> some View {
@@ -1751,7 +1756,9 @@ struct MenuBarView: View {
     case .checking, .authorizing:
       "Steam y los juegos deben permanecer cerrados durante esta operación."
     case .ready:
-      "Regression conserva únicamente un recibo privado; no sustituye 3.0 por 4.0b2."
+      model.protectedAppleGPTKSteamRestartRequired
+        ? "La licencia ya está aceptada. Reinicia el Steam propio para que herede las rutas GPTK 3.0."
+        : "Regression conserva únicamente un recibo privado; no sustituye 3.0 por 4.0b2."
     case .requiresAuthorization:
       "No necesitas elegir un DMG: Regression mostrará la licencia incluida en el componente exacto que ya custodia."
     case .unavailable(let message), .failed(let message):
@@ -1792,7 +1799,7 @@ struct MenuBarView: View {
       }
       .buttonStyle(.borderedProminent)
       .regressionAccessibleControl()
-      .disabled(model.operation.isBusy || model.runningState.activeBackend != nil)
+      .disabled(model.operation.isBusy)
       .accessibilityHint(
         model.appleGPTKLicenseReview?.source.isProtectedVersion == true
           ? "Muestra la licencia exacta extraída del DMG oficial ya verificado"
@@ -1802,6 +1809,14 @@ struct MenuBarView: View {
       protectedAppleGPTKSourceActions(includeRefresh: true)
     case .unavailable:
       protectedAppleGPTKSourceActions(includeRefresh: false)
+    case .ready where model.protectedAppleGPTKSteamRestartRequired:
+      Button("Reiniciar Steam") {
+        Task { await model.restartSteamAfterProtectedAppleGPTKAuthorization() }
+      }
+      .buttonStyle(.borderedProminent)
+      .regressionAccessibleControl()
+      .disabled(model.operation.isBusy)
+      .accessibilityHint("Cierra y vuelve a abrir únicamente el Steam propio para aplicar GPTK 3.0")
     case .checking, .ready, .authorizing:
       EmptyView()
     }
@@ -1915,6 +1930,7 @@ struct MenuBarView: View {
     case .repairRegression: "Reparar Regression"
     case .prepareAppleGPTK: "Preparar Apple GPTK"
     case .reviewProtectedAppleGPTK: "Ver requisito GPTK 3.0…"
+    case .restartProtectedAppleGPTKSteam: "Reiniciar Steam"
     case .reinstallRegression: "Reinstalar Regression…"
     }
   }
