@@ -223,10 +223,10 @@ verify_release_1_12_development_runtime_authority()
     local runtime_build="${REGRESSION_1_12_DEVELOPMENT_RUNTIME_BUILD:-$ROOT/build/release-1.12.0/wine64-public}"
     local build_relative app_relative expected expected_normalized actual_normalized
     local -a runtime_entries=(
-        "668a88221884f4e62f3d40bed4a125a45e2e745c1d56610f8e3a33273a219299:tools/wine/wine:bin/wine"
-        "173c4926f53d0551d85ee6efe48e641867230a27bda7fc6a226ac484012d13fb:server/wineserver:bin/wineserver"
-        "48ae6acb327148f3d8f02afcc93d8f8e61ab333b1dec752918244e58828cf5c9:loader/wine:lib/wine/x86_64-unix/wine"
-        "fc649b130b3ee28f44841283b2a4822397187e2efcf631f82fd1faf3ddbbb349:dlls/ntdll/ntdll.so:lib/wine/x86_64-unix/ntdll.so"
+        "df8f8a90bd48389fb7e5e0a32ea365e9d8d7e9ad49ad93e91cd7908d703f35ff:tools/wine/wine:bin/wine"
+        "49cd7061cef48c1da9d3ddd030c15e20d7f8e9dc5657df3c1519c961efdc769a:server/wineserver:bin/wineserver"
+        "9ca585914934ec3924f7a4f007e78fde9e249d98be3119b4dde73bfad3f5fe44:loader/wine:lib/wine/x86_64-unix/wine"
+        "b0a4958629c2661036b77d400b86a5a1d38e0ef8ac2477fe25984040a64315be:dlls/ntdll/ntdll.so:lib/wine/x86_64-unix/ntdll.so"
     )
 
     # El árbol de compilación pesa gigabytes y nunca se versiona, así que acaba
@@ -423,7 +423,7 @@ elif $BEFORE_THREE_GAMES_PROMOTION || $BEFORE_TQ2_ROUTE_UNIFICATION || \
 elif $BEFORE_THREE_GAMES_HARDENING; then
     verify_hash bf4f25e96883150e955f4465a5a15cbd6adaf0f152a8e1239004486dfbf2b81a "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
 else
-    verify_hash f0920b7994cf6c2f8bbe215e95fea6239b942a509d620b889f5b31f754d6e615 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+    verify_hash a91d345dad3cbfacb5d20f862754de0eabf0e1b0a447bab729f3149fe334d942 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
 fi
 
 DRAGONSWORD_PROFILE="$WINE_ROOT/lib/profiles/dragonsword"

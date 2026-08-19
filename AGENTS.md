@@ -403,6 +403,25 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
     No convertir esto en una lista de App IDs ni ampliar el conjunto de funciones sin repetir la
     matriz y comprobar en el log que ningún stub llega a ejecutarse. Run perfecto de Cursemark:
     `2798D808-2007-4C66-ADC9-D5E4A3AB1A11`; ver `docs/games/cursemark.md`.
+52. **El runtime se compila desde el tar FOSS oficial más la serie versionada, nunca desde el
+    árbol de trabajo tal como esté.** `sources-26.3.0/wine` es un artefacto reproducible, no una
+    fuente de verdad: si quedó editado a mano, lo que compiles no será lo publicado. Extraer
+    `crossover-sources-26.3.0.tar.gz` en limpio, pasar `build/apply-wine-patches.sh` sin un solo
+    rechazo y comprobar que `loader.c` ya no contiene `REGRESSION_EXTERNAL_D3DMETAL_(EXECUTABLE|
+    WINE_ROOT)`. Un parche que no aplica sobre el tar oficial está mal generado y se regenera
+    contra el árbol canónico; no se fuerza su contexto. Los módulos `lib/wine/x86_64-unix/*.so` se
+    pueden sustituir uno a uno firmándolos **ad hoc**, pero `bin/wine`, `bin/wineserver` y el loader
+    Unix **no**: el asset público pasó por `strip` y saneado de rutas y no convive con binarios
+    crudos, que dejan el arranque colgado. Tras cualquier cambio, `build/refresh-release-pins.sh`
+    propaga los digests y escribe la evidencia que permite acreditar sin el árbol de compilación.
+    Ver `docs/runtime-rebuild.md`.
+53. **La versión del bundle se sube al publicar la release, nunca antes.** Con el canal estable en
+    una versión anterior, la reparación se bloquea por downgrade y la app se queda sin vía de
+    recuperación; además `supportedApplicationVersion` y `supportedBuildIdentifier` van siempre
+    juntos y cambiar uno solo resuelve `unsupportedVariant`, vaciando el conjunto sellado y
+    reportando «Runtime incompleto». Un runtime corregido puede convivir con la versión publicada
+    actualizando solo su digest en el conjunto sellado, que es como se valida un cambio en la
+    instalación real antes de comprometer una versión nueva.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 

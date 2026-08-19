@@ -1,7 +1,7 @@
 diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
 --- a/dlls/ntdll/unix/loader.c
 +++ b/dlls/ntdll/unix/loader.c
-@@ -801,8 +801,48 @@
+@@ -875,8 +875,48 @@
      free( plugin_path );
      free( game_root );
      free( unix_executable );
@@ -19,14 +19,14 @@ diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
 +    return S_ISREG( st.st_mode );
  }
  
-+/* HashLink ships one runtime for every Heaps/HashLink title.  Its Windows
-+ * build resolves the whole GL import table through wglGetProcAddress and stops
-+ * at the first entry that fails to resolve, so the compute and SSBO entry
-+ * points macOS cannot expose above GL 4.1 abort the game before it draws.  The
-+ * evidence is the runtime itself, never a per-title list: only a game root that
-+ * carries the HashLink bytecode and its runtime library selects the compiled
-+ * compatibility set, so every present and future HashLink title is covered and
-+ * no other engine is touched. */
++/* HashLink ships one runtime for every Heaps/HashLink title.  Its Windows build
++ * resolves the whole GL import table through wglGetProcAddress and stops at the
++ * first entry that fails to resolve, so the compute and SSBO entry points macOS
++ * cannot expose above GL 4.1 abort the game before it draws.  The evidence is
++ * the runtime itself, never a per-title list: only a game root that carries the
++ * HashLink bytecode and its runtime library selects the compiled compatibility
++ * set, so every present and future HashLink title is covered and no other
++ * engine is touched. */
 +static void regression_set_hashlink_gl_compatibility(void)
 +{
 +    char *unix_executable = NULL, *game_root = NULL;
@@ -50,14 +50,14 @@ diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
  static void regression_set_graphics_backend(void)
  {
      const char *backend = getenv( "REGRESSION_GRAPHICS_BACKEND" );
-@@ -2825,6 +2865,7 @@
- 
+@@ -2907,6 +2947,7 @@
      regression_set_process_dll_isolation();
+     regression_set_process_abi_compatibility();
      regression_set_windows_media_compatibility();
 +    regression_set_hashlink_gl_compatibility();
      regression_set_graphics_backend();
- 
      server_init_process_done();
+ }
 diff --git a/dlls/opengl32/unix_wgl.c b/dlls/opengl32/unix_wgl.c
 --- a/dlls/opengl32/unix_wgl.c
 +++ b/dlls/opengl32/unix_wgl.c

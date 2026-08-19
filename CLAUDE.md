@@ -257,6 +257,13 @@ screencapture -x -l <CGWindowID> /tmp/check.png   # capturar y MIRAR la imagen
     por ejecutable ni App ID. Solo esos procesos resuelven stubs para las siete funciones GL de
     compute/SSBO que macOS no ofrece sobre GL 4.1; los stubs no hacen el trabajo y registran un
     `ERR` si alguna vez se invocan. Ver `docs/games/cursemark.md`.
+27. **El runtime se compila desde el tar FOSS oficial + `apply-wine-patches.sh`**, nunca desde
+    `sources-26.3.0/wine` tal como esté. Los `.so` se sustituyen uno a uno con firma **ad hoc**;
+    `bin/wine`, `bin/wineserver` y el loader **no** admiten binarios crudos. Después,
+    `build/refresh-release-pins.sh`. Ver `docs/runtime-rebuild.md`.
+28. **La versión del bundle se sube al publicar, nunca antes**, y `supportedApplicationVersion` y
+    `supportedBuildIdentifier` van siempre juntos: subir una sin release deja la app bloqueada por
+    downgrade y en `unsupportedVariant`.
 
 ---
 
