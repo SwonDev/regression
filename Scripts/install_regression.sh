@@ -8,8 +8,8 @@ export PATH
 # Ningún smoke, wineboot, instalador ni wineserver puede heredar la sesión de otro runtime.
 unset WINESERVERSOCKET
 
-VERSION="1.12.4"
-BUILD_NUMBER="42"
+VERSION="1.12.3"
+BUILD_NUMBER="41"
 REPO="SwonDev/regression"
 ASSET_NAME="Regression-${VERSION}-macos-arm64.tar.gz"
 APP_NAME="Regression.app"

@@ -974,7 +974,15 @@ extension CompatibilityRepository {
         case .awaitingTelemetry, .awaitingVerification:
             return results == [.awaitingTelemetry]
         case .completed:
+            // `launch_envelope_receipts.envelope_id` es UNIQUE, de modo que el esquema v17 solo
+            // admite un recibo por sobre: el `INSERT OR IGNORE` de `verificationRecorded` no puede
+            // añadirse cuando el de telemetría ya existe. Las tres formas describen el mismo cierre
+            // y la autoridad la da la fase, que solo se alcanza desde `awaitingVerification` con una
+            // verificación explícita; exigir el par convertía cada certificación de un run con sobre
+            // durable en una violación permanente de integridad.
             return results == [.awaitingTelemetry, .verificationRecorded]
+                || results == [.verificationRecorded]
+                || results == [.awaitingTelemetry]
         case .failedBeforeSpawn:
             // La recuperación v17 conserva el recibo de telemetría cuando descubre después
             // que no existe ningún proceso registrable.
