@@ -25,7 +25,7 @@ EOF
     chmod 755 "$path"
 }
 
-write_installer "$SCRATCH/matching.sh" 1.12.3 41
+write_installer "$SCRATCH/matching.sh" 1.12.4 42
 REGRESSION_RELEASE_CONTRACT_ONLY=1 \
 REGRESSION_RELEASE_INSTALLER_SOURCE="$SCRATCH/matching.sh" \
     "$PACKAGER" >/dev/null
@@ -39,7 +39,7 @@ if REGRESSION_RELEASE_CONTRACT_ONLY=1 \
     exit 1
 fi
 
-write_installer "$SCRATCH/wrong-build.sh" 1.12.3 40
+write_installer "$SCRATCH/wrong-build.sh" 1.12.4 41
 if REGRESSION_RELEASE_CONTRACT_ONLY=1 \
     REGRESSION_RELEASE_INSTALLER_SOURCE="$SCRATCH/wrong-build.sh" \
     "$PACKAGER" >/dev/null 2>&1; then
@@ -105,9 +105,9 @@ if grep -F 'REGRESSION_RELEASE_SWIFT_BIN_DIR' "$PACKAGER" >/dev/null; then
 fi
 grep -F "cmp -s \"\$INSTALLER_SOURCE\" \"\$INSTALLER_TEMP\"" "$PACKAGER" >/dev/null \
     || { printf 'FAIL: package_release no exige copia byte a byte.\n' >&2; exit 1; }
-grep -Fx 'VERSION="1.12.3"' "$NATIVE_PACKAGER" >/dev/null \
-    || { printf 'FAIL: package_regression no declara 1.12.3.\n' >&2; exit 1; }
-grep -Fx 'BUILD_NUMBER="41"' "$NATIVE_PACKAGER" >/dev/null \
+grep -Fx 'VERSION="1.12.4"' "$NATIVE_PACKAGER" >/dev/null \
+    || { printf 'FAIL: package_regression no declara 1.12.4.\n' >&2; exit 1; }
+grep -Fx 'BUILD_NUMBER="42"' "$NATIVE_PACKAGER" >/dev/null \
     || { printf 'FAIL: package_regression no declara build 41.\n' >&2; exit 1; }
 grep -F 'NATIVE_BACKUP_PATHS+=(Contents/SharedSupport/bin/install-apple-gptk-component)' \
     "$NATIVE_PACKAGER" >/dev/null \

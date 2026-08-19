@@ -7,6 +7,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PUBLIC_BUILD="${REGRESSION_PUBLIC_WINE_BUILD:-$ROOT/build/release-1.12.0/wine64-public}"
 MODE="${1:-}"
+PRINT_DERIVED=false
 WINE_ROOT="${2:-}"
 SCRATCH=""
 
@@ -21,10 +22,10 @@ trap cleanup EXIT
 
 runtime_entries() {
     cat <<'EOF'
-tools/wine/wine bin/wine fed13faa895c9ea5896a6497490db26674c3dca2a318e3389d8e43ba3e00f552
-server/wineserver bin/wineserver 8d14fb9d6d9730c300ba16b5997d98218a2a40a78008d60f3a6edb719f328db3
-loader/wine lib/wine/x86_64-unix/wine 5636a6505e872c8d185d8db7ced2d4aa8e9057e81c4c579e4b623009f9c2857b
-dlls/ntdll/ntdll.so lib/wine/x86_64-unix/ntdll.so 687717fa95835146dfe4b45c6a29d7a82fb37742810fdb4213908dd3176b82e9
+tools/wine/wine bin/wine 3f8de8c0045104d3fea31a8bb4c3bd6f1c3eead55c9f847e2b5dfac0498ec77c
+server/wineserver bin/wineserver 82602c3bd85171586d094050e4671035045f39767d82cc4eff3ca4cb8a3052e3
+loader/wine lib/wine/x86_64-unix/wine 30593a00cbb40cb3f0a47a30964d52f35beed8c864e38d985d97eb07b7e62800
+dlls/ntdll/ntdll.so lib/wine/x86_64-unix/ntdll.so 00b29dbede3ae10a61d5c211831aca4d375d250426b0ed1eb5eb386f794891ce
 EOF
 }
 
@@ -67,6 +68,10 @@ derive_runtime() {
         destination_path="$destination/$destination_relative"
         codesign --force --sign - "$destination_path" >/dev/null
         actual="$(shasum -a 256 "$destination_path" | awk '{print $1}')"
+        if [[ "$PRINT_DERIVED" == "true" ]]; then
+            printf '%s %s %s\n' "$source_relative" "$destination_relative" "$actual"
+            continue
+        fi
         [[ "$actual" == "$expected" ]] \
             || fail "la transformación pública 1.12 no deriva el PIN esperado: $destination_relative"
     done < <(runtime_entries)
@@ -117,6 +122,14 @@ REGRESSION_PUBLIC_WINE_BUILD="$PUBLIC_BUILD" \
     "$ROOT/build/verify-sealed-public-runtime-1.12.sh" >/dev/null
 
 case "$MODE" in
+    --print-derived)
+        # Emite la tabla que debe fijarse arriba tras recompilar el runtime.
+        PRINT_DERIVED=true
+        SCRATCH="$(mktemp -d /private/tmp/regression-public-runtime-print.XXXXXX)"
+        derive_runtime "$SCRATCH"
+        find "$SCRATCH" -depth -delete
+        exit 0
+        ;;
     --derive)
         [[ -n "$WINE_ROOT" ]] || fail "uso: $0 --derive WINE_ROOT | --verify WINE_ROOT"
         [[ -d "$WINE_ROOT" && ! -L "$WINE_ROOT" ]] \
