@@ -1,0 +1,4 @@
+# Evidencia del builder sellado del runtime público.
+# Generado por build/refresh-release-pins.sh; no editar a mano.
+# sha256-builder  sha256-sin-firma  ruta-en-el-builder  ruta-en-el-runtime
+fc649b130b3ee28f44841283b2a4822397187e2efcf631f82fd1faf3ddbbb349  43ad9aa7667d9f558a84e43e79944abaa3c649f7e2e7d99e66ee5ab378b63ca5  dlls/ntdll/ntdll.so  lib/wine/x86_64-unix/ntdll.so

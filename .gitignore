@@ -31,3 +31,7 @@ build/*
 !build/*.sh
 !build/d3d12test.c
 !build/crossover-foss-26.3.0.contract
+# La evidencia del builder sustituye al árbol de compilación, que no se versiona:
+# sin ella una release no puede acreditarse cuando ese árbol desaparece.
+!build/release-runtime-pins.txt
+!build/normalized-macho-sha256.py
