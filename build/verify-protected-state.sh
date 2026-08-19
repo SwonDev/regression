@@ -201,45 +201,7 @@ normalized_macho_sha256()
     fi
 
     set +e
-    digest="$(/usr/bin/python3 - "$scratch/payload" <<'PY'
-import hashlib
-import struct
-import sys
-
-payload = bytearray(open(sys.argv[1], "rb").read())
-if len(payload) < 32 or struct.unpack_from("<I", payload, 0)[0] != 0xFEEDFACF:
-    raise SystemExit("no es un Mach-O fino de 64 bits little-endian")
-
-ncmds, sizeofcmds = struct.unpack_from("<II", payload, 16)
-commands_end = 32 + sizeofcmds
-if commands_end > len(payload):
-    raise SystemExit("cabecera Mach-O truncada")
-
-offset = 32
-linkedit_count = 0
-for _ in range(ncmds):
-    if offset + 8 > commands_end:
-        raise SystemExit("load command truncado")
-    command, command_size = struct.unpack_from("<II", payload, offset)
-    if command_size < 8 or offset + command_size > commands_end:
-        raise SystemExit("load command inválido")
-    if command == 0x19 and command_size >= 72:
-        name = bytes(payload[offset + 8:offset + 24]).split(b"\0", 1)[0]
-        if name == b"__LINKEDIT":
-            # codesign --remove-signature recupera el binario pero deja actualizados
-            # vmsize/filesize por el blob que acaba de retirar. Son los únicos dos
-            # campos de enlace que normalizamos; toda la carga ejecutable permanece
-            # en la huella, incluida la cabecera y los demás load commands.
-            payload[offset + 32:offset + 40] = b"\0" * 8
-            payload[offset + 48:offset + 56] = b"\0" * 8
-            linkedit_count += 1
-    offset += command_size
-
-if offset != commands_end or linkedit_count != 1:
-    raise SystemExit("topología Mach-O inesperada para normalización")
-print(hashlib.sha256(payload).hexdigest())
-PY
-)"
+    digest="$(/usr/bin/python3 "$ROOT/build/normalized-macho-sha256.py" "$scratch/payload")"
     status=$?
     set -e
     find "$scratch" -depth -delete
@@ -264,13 +226,33 @@ verify_release_1_12_development_runtime_authority()
         "668a88221884f4e62f3d40bed4a125a45e2e745c1d56610f8e3a33273a219299:tools/wine/wine:bin/wine"
         "173c4926f53d0551d85ee6efe48e641867230a27bda7fc6a226ac484012d13fb:server/wineserver:bin/wineserver"
         "48ae6acb327148f3d8f02afcc93d8f8e61ab333b1dec752918244e58828cf5c9:loader/wine:lib/wine/x86_64-unix/wine"
-        "ff2a734999bf918507c90de4e910a740b6c4da2e05d0d028733eff82fb0239f2:dlls/ntdll/ntdll.so:lib/wine/x86_64-unix/ntdll.so"
+        "fc649b130b3ee28f44841283b2a4822397187e2efcf631f82fd1faf3ddbbb349:dlls/ntdll/ntdll.so:lib/wine/x86_64-unix/ntdll.so"
     )
 
-    [[ -d "$runtime_build" && ! -L "$runtime_build" ]] || {
-        echo "ERROR: falta el builder sellado del runtime 1.12: $runtime_build" >&2
-        exit 1
-    }
+    # El árbol de compilación pesa gigabytes y nunca se versiona, así que acaba
+    # desapareciendo y con él la posibilidad de acreditar o publicar nada. La
+    # evidencia versionada conserva, por binario, su hash en el builder y su
+    # huella sin firma: con eso basta para acreditar el runtime instalado.
+    local evidence="$ROOT/build/release-runtime-pins.txt"
+    if [[ ! -d "$runtime_build" || -L "$runtime_build" ]]; then
+        [[ -f "$evidence" ]] || {
+            echo "ERROR: no hay builder sellado ($runtime_build) ni evidencia versionada" >&2
+            echo "       genera la evidencia con build/refresh-release-pins.sh" >&2
+            exit 1
+        }
+        local evidence_normalized actual_normalized app_relative_from_evidence
+        while read -r _builder_sha builder_normalized _build_relative app_relative_from_evidence; do
+            [[ "$_builder_sha" == \#* || -z "${app_relative_from_evidence:-}" ]] && continue
+            actual_normalized="$(normalized_macho_sha256 \
+                "$WINE_ROOT/$app_relative_from_evidence" true)" || exit 1
+            [[ "$actual_normalized" == "$builder_normalized" ]] || {
+                echo "ERROR: el runtime instalado no coincide con la evidencia del builder: $app_relative_from_evidence" >&2
+                exit 1
+            }
+            verify_mode 755 "Contents/SharedSupport/wine-root/$app_relative_from_evidence"
+        done < "$evidence"
+        return 0
+    fi
     for entry in "${runtime_entries[@]}"; do
         IFS=: read -r expected build_relative app_relative <<< "$entry"
         [[ -f "$runtime_build/$build_relative" && ! -L "$runtime_build/$build_relative" ]] || {
@@ -441,7 +423,7 @@ elif $BEFORE_THREE_GAMES_PROMOTION || $BEFORE_TQ2_ROUTE_UNIFICATION || \
 elif $BEFORE_THREE_GAMES_HARDENING; then
     verify_hash bf4f25e96883150e955f4465a5a15cbd6adaf0f152a8e1239004486dfbf2b81a "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
 else
-    verify_hash b16896f1e120b8e2736cbdd6047c80d81dcb7a0ffda455b28aaa67e108f5fbf4 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+    verify_hash f0920b7994cf6c2f8bbe215e95fea6239b942a509d620b889f5b31f754d6e615 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
 fi
 
 DRAGONSWORD_PROFILE="$WINE_ROOT/lib/profiles/dragonsword"

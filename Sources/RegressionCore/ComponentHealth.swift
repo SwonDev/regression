@@ -159,7 +159,7 @@ public enum TrustedComponentCatalog {
     ),
     TrustedComponentFile(
       relativePath: "lib/wine/x86_64-unix/ntdll.so",
-      expectedSHA256: "b16896f1e120b8e2736cbdd6047c80d81dcb7a0ffda455b28aaa67e108f5fbf4"
+      expectedSHA256: "f0920b7994cf6c2f8bbe215e95fea6239b942a509d620b889f5b31f754d6e615"
     ),
     TrustedComponentFile(
       relativePath: "share/wine/wine.inf",
