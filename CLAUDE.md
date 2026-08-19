@@ -13,7 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > Si algo de este archivo difiere de `AGENTS.md`, **manda `AGENTS.md`**. `README.md` es la portada
 > del producto y `docs/README.md` el índice técnico.
 
-> **Contrato del checkout:** Regression **1.12.3 (41)**, release estable publicada, y SQLite **v17**.
+> **Contrato del checkout:** Regression **1.12.4 (42)**, release estable publicada, y SQLite **v17**.
 > **v1.11.0 (37)** es el baseline histórico: conservar sus gates `public-1.11` de transición no
 > autoriza a saltarse la matriz global de futuras releases.
 
@@ -347,7 +347,7 @@ exacto que recibirá GitHub.** Actualizar también la nota de contrato en `READM
 
 ## 7. Estado actual (2026-08-14)
 
-- **Release estable**: v1.12.3 (41), instalada en `/Applications/Regression.app`. Baseline
+- **Release estable**: v1.12.4 (42), instalada en `/Applications/Regression.app`. Baseline
   histórico: v1.11.0 (37).
 - **27 certificaciones activas** en SQLite (catálogo `2026-08-19.1` + certificaciones locales).
   Con expediente público: Grim Dawn, Clair Obscur, DragonSword, Hell Clock, Heroes of Hammerwatch II,

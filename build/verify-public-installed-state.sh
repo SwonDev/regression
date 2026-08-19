@@ -62,6 +62,12 @@ case "$MODE" in
         [[ -d "$APP" && ! -L "$APP" ]] \
             || fail "la release pública debe ser un bundle físico"
         ;;
+    --release-1.12.4)
+        EXPECTED_VERSION="1.12.4"
+        EXPECTED_BUILD="42"
+        [[ -d "$APP" && ! -L "$APP" ]] \
+            || fail "la release pública debe ser un bundle físico"
+        ;;
     --candidate-1.12.1-before-runtime-join-fix)
         EXPECTED_VERSION="1.12.1"
         EXPECTED_BUILD="39"
@@ -69,7 +75,7 @@ case "$MODE" in
             || fail "el candidato público debe ser un bundle físico"
         ;;
     *)
-        fail "uso: $0 --baseline-1.10.0 | --release-1.10.1 | --release-1.11.0 | --release-1.12.0 | --release-1.12.1 | --release-1.12.2 | --release-1.12.3 | --candidate-1.12.1-before-runtime-join-fix"
+        fail "uso: $0 --baseline-1.10.0 | --release-1.10.1 | --release-1.11.0 | --release-1.12.0 | --release-1.12.1 | --release-1.12.2 | --release-1.12.3 | --release-1.12.4 | --candidate-1.12.1-before-runtime-join-fix"
         ;;
 esac
 codesign --verify --deep --strict "$APP"
@@ -86,17 +92,17 @@ fi
 [[ "$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")" == "$EXPECTED_BUILD" ]] \
     || fail "build público no soportado"
 
-if [[ "$MODE" == "--release-1.12.2" || "$MODE" == "--release-1.12.3" ]]; then
+if [[ "$MODE" == "--release-1.12.2" || "$MODE" == "--release-1.12.3" || "$MODE" == "--release-1.12.4" ]]; then
     verify_hash 8e8aad9628e9eb4f85848aba0538d10bd3c4fa242e7d96f6a826b93830329eff \
         "$APP/Contents/MacOS/regression-engine"
-    verify_hash fed13faa895c9ea5896a6497490db26674c3dca2a318e3389d8e43ba3e00f552 \
+    verify_hash 3f8de8c0045104d3fea31a8bb4c3bd6f1c3eead55c9f847e2b5dfac0498ec77c \
         "$APP/Contents/SharedSupport/wine-root/bin/wine"
-    verify_hash 8d14fb9d6d9730c300ba16b5997d98218a2a40a78008d60f3a6edb719f328db3 \
+    verify_hash 82602c3bd85171586d094050e4671035045f39767d82cc4eff3ca4cb8a3052e3 \
         "$APP/Contents/SharedSupport/wine-root/bin/wineserver"
-    verify_hash 5636a6505e872c8d185d8db7ced2d4aa8e9057e81c4c579e4b623009f9c2857b \
+    verify_hash 30593a00cbb40cb3f0a47a30964d52f35beed8c864e38d985d97eb07b7e62800 \
         "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/wine"
-    if [[ "$MODE" == "--release-1.12.3" ]]; then
-        verify_hash 687717fa95835146dfe4b45c6a29d7a82fb37742810fdb4213908dd3176b82e9 \
+    if [[ "$MODE" == "--release-1.12.3" || "$MODE" == "--release-1.12.4" ]]; then
+        verify_hash 00b29dbede3ae10a61d5c211831aca4d375d250426b0ed1eb5eb386f794891ce \
             "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
     else
         verify_hash f17cebf085a0a746224e61b4fc49341f7a0cec48741c5f12d1cc84a4dcd0ba5d \
@@ -105,33 +111,33 @@ if [[ "$MODE" == "--release-1.12.2" || "$MODE" == "--release-1.12.3" ]]; then
 elif [[ "$MODE" == "--release-1.12.1" ]]; then
     verify_hash 38be0b5fd0bed42e5467f9a61c5c972733898523eeac3e34e83eb5317efb3edf \
         "$APP/Contents/MacOS/regression-engine"
-    verify_hash fed13faa895c9ea5896a6497490db26674c3dca2a318e3389d8e43ba3e00f552 \
+    verify_hash 3f8de8c0045104d3fea31a8bb4c3bd6f1c3eead55c9f847e2b5dfac0498ec77c \
         "$APP/Contents/SharedSupport/wine-root/bin/wine"
-    verify_hash 8d14fb9d6d9730c300ba16b5997d98218a2a40a78008d60f3a6edb719f328db3 \
+    verify_hash 82602c3bd85171586d094050e4671035045f39767d82cc4eff3ca4cb8a3052e3 \
         "$APP/Contents/SharedSupport/wine-root/bin/wineserver"
-    verify_hash 5636a6505e872c8d185d8db7ced2d4aa8e9057e81c4c579e4b623009f9c2857b \
+    verify_hash 30593a00cbb40cb3f0a47a30964d52f35beed8c864e38d985d97eb07b7e62800 \
         "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/wine"
     verify_hash f17cebf085a0a746224e61b4fc49341f7a0cec48741c5f12d1cc84a4dcd0ba5d \
         "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
 elif [[ "$MODE" == "--candidate-1.12.1-before-runtime-join-fix" ]]; then
     verify_hash 767c2c54bfd395ad957f394038c5a930abc46296bb471d4696e186b9a68166f4 \
         "$APP/Contents/MacOS/regression-engine"
-    verify_hash fed13faa895c9ea5896a6497490db26674c3dca2a318e3389d8e43ba3e00f552 \
+    verify_hash 3f8de8c0045104d3fea31a8bb4c3bd6f1c3eead55c9f847e2b5dfac0498ec77c \
         "$APP/Contents/SharedSupport/wine-root/bin/wine"
-    verify_hash 8d14fb9d6d9730c300ba16b5997d98218a2a40a78008d60f3a6edb719f328db3 \
+    verify_hash 82602c3bd85171586d094050e4671035045f39767d82cc4eff3ca4cb8a3052e3 \
         "$APP/Contents/SharedSupport/wine-root/bin/wineserver"
-    verify_hash 5636a6505e872c8d185d8db7ced2d4aa8e9057e81c4c579e4b623009f9c2857b \
+    verify_hash 30593a00cbb40cb3f0a47a30964d52f35beed8c864e38d985d97eb07b7e62800 \
         "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/wine"
     verify_hash f17cebf085a0a746224e61b4fc49341f7a0cec48741c5f12d1cc84a4dcd0ba5d \
         "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
 elif [[ "$MODE" == "--release-1.12.0" ]]; then
     verify_hash 5cd7370ade8fe210cdc74e6c58f354e7d9cf4e3833012d6482ff6924a4f09fe9 \
         "$APP/Contents/MacOS/regression-engine"
-    verify_hash fed13faa895c9ea5896a6497490db26674c3dca2a318e3389d8e43ba3e00f552 \
+    verify_hash 3f8de8c0045104d3fea31a8bb4c3bd6f1c3eead55c9f847e2b5dfac0498ec77c \
         "$APP/Contents/SharedSupport/wine-root/bin/wine"
-    verify_hash 8d14fb9d6d9730c300ba16b5997d98218a2a40a78008d60f3a6edb719f328db3 \
+    verify_hash 82602c3bd85171586d094050e4671035045f39767d82cc4eff3ca4cb8a3052e3 \
         "$APP/Contents/SharedSupport/wine-root/bin/wineserver"
-    verify_hash 5636a6505e872c8d185d8db7ced2d4aa8e9057e81c4c579e4b623009f9c2857b \
+    verify_hash 30593a00cbb40cb3f0a47a30964d52f35beed8c864e38d985d97eb07b7e62800 \
         "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/wine"
     verify_hash 66622d2832d99c37cdaa2872c5409b5f9a5dc04d1fdb9dcd426ae37f8365942e \
         "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
@@ -147,13 +153,13 @@ else
         "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
 fi
 
-if [[ "$MODE" == "--release-1.12.3" ]]; then
+if [[ "$MODE" == "--release-1.12.3" || "$MODE" == "--release-1.12.4" ]]; then
     strings -a "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/winemac.so" \
         | grep -Fx 'explorer.exe' >/dev/null \
         || fail "winemac no conserva el shell explorer.exe como auxiliar sin Dock"
 fi
 
-if [[ "$MODE" == "--release-1.12.2" || "$MODE" == "--release-1.12.3" ]]; then
+if [[ "$MODE" == "--release-1.12.2" || "$MODE" == "--release-1.12.3" || "$MODE" == "--release-1.12.4" ]]; then
     baseline="$APP/Contents/SharedSupport/components/steam-bottle-baseline/1"
     verify_hash 884912891b7a3f5440a46b30b9241aa604e248fbbe578498058658e2293b00f4 \
         "$baseline/manifest.sha256"
