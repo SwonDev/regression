@@ -441,7 +441,7 @@ elif $BEFORE_THREE_GAMES_PROMOTION || $BEFORE_TQ2_ROUTE_UNIFICATION || \
 elif $BEFORE_THREE_GAMES_HARDENING; then
     verify_hash bf4f25e96883150e955f4465a5a15cbd6adaf0f152a8e1239004486dfbf2b81a "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
 else
-    verify_hash 6bcb718ba386311aa6b985ef33e1c2e4717f2ce233a07b2852bcae6abc0f5d19 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+    verify_hash b16896f1e120b8e2736cbdd6047c80d81dcb7a0ffda455b28aaa67e108f5fbf4 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
 fi
 
 DRAGONSWORD_PROFILE="$WINE_ROOT/lib/profiles/dragonsword"
