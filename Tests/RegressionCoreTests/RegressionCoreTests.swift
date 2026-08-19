@@ -94,7 +94,7 @@ final class RegressionCoreTests: XCTestCase {
             borderlands?.engineFingerprint,
             "d7172135a42000c3c4f672663500351f27df9b89bea0d76551dc79be828b95d0"
         )
-        XCTAssertEqual(VerifiedGameCatalog.revision, "2026-08-19.1")
+        XCTAssertEqual(VerifiedGameCatalog.revision, "2026-08-19.2")
         XCTAssertNil(VerifiedGameCatalog.certification(for: "999999999"))
     }
 

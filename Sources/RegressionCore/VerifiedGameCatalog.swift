@@ -67,7 +67,7 @@ public struct VerifiedGameCertification: Codable, Equatable, Identifiable, Senda
 /// motor ni sustituye la telemetría: evita perder el estado blindado al regenerar los datos
 /// locales. Solo se añade una entrada después de validar render, entrada, opciones y gameplay.
 public enum VerifiedGameCatalog {
-    public static let revision = "2026-08-19.1"
+    public static let revision = "2026-08-19.2"
 
     public static let all: [VerifiedGameCertification] = [
         VerifiedGameCertification(
@@ -260,6 +260,114 @@ public enum VerifiedGameCatalog {
                 "37acbb8104deaf303e4e3a276a12d92ae126c7478f0d1105c15123629efa5903",
             engineFingerprint:
                 "37acbb8104deaf303e4e3a276a12d92ae126c7478f0d1105c15123629efa5903"
+        ),
+        VerifiedGameCertification(
+            appID: "2436940",
+            gameName: "Sephiria",
+            backend: .regression,
+            verifiedAt: "2026-08-01",
+            evidence: "Validación directa del usuario sobre el baseline general, sin perfil por ejecutable",
+            sourceRunID: UUID(uuidString: "A9A054C4-84A3-4773-87C4-31DC5D04CAFC"),
+            configurationFingerprint:
+                "fa91f00364ac70790ecc2f9debc186ac5f0dc6ee99bcc7c3248aa987ba2425e4",
+            engineFingerprint:
+                "2dca5d61f65d10ac63fa3876c4af0c62f078b7f6f884c208d9590db8f746b820"
+        ),
+        VerifiedGameCertification(
+            appID: "2015240",
+            gameName: "Dwarven Realms",
+            backend: .regression,
+            verifiedAt: "2026-08-05",
+            evidence: "Validación directa del usuario sobre el baseline general, sin perfil por ejecutable",
+            sourceRunID: UUID(uuidString: "D3E08436-3AD9-4ECF-8B5F-E7222A1190D9"),
+            configurationFingerprint:
+                "2dca5d61f65d10ac63fa3876c4af0c62f078b7f6f884c208d9590db8f746b820",
+            engineFingerprint:
+                "2dca5d61f65d10ac63fa3876c4af0c62f078b7f6f884c208d9590db8f746b820"
+        ),
+        VerifiedGameCertification(
+            appID: "2193400",
+            gameName: "Monsuta",
+            backend: .regression,
+            verifiedAt: "2026-08-05",
+            evidence: "Validación directa del usuario sobre el baseline general, sin perfil por ejecutable",
+            sourceRunID: UUID(uuidString: "C52030EA-EA79-4F27-8151-01ECD47E3429"),
+            configurationFingerprint:
+                "c1afa3fe0dd57ebe2182ded9c2ffb287a71bd4ff765670caf7a04552fab44f0f",
+            engineFingerprint:
+                "2dca5d61f65d10ac63fa3876c4af0c62f078b7f6f884c208d9590db8f746b820"
+        ),
+        VerifiedGameCertification(
+            appID: "2408820",
+            gameName: "Luma Island",
+            backend: .regression,
+            verifiedAt: "2026-08-05",
+            evidence: "Validación directa del usuario sobre el baseline general, sin perfil por ejecutable",
+            sourceRunID: UUID(uuidString: "8A62C631-B300-4709-BCDA-914103856925"),
+            configurationFingerprint:
+                "5d7448789c90dbf73e573f86859d674a1e021493e9f3feb1d2a5ba07bd963f8b",
+            engineFingerprint:
+                "2dca5d61f65d10ac63fa3876c4af0c62f078b7f6f884c208d9590db8f746b820"
+        ),
+        VerifiedGameCertification(
+            appID: "1401730",
+            gameName: "Crashlands 2",
+            backend: .regression,
+            verifiedAt: "2026-08-08",
+            evidence: "Validación directa del usuario sobre el baseline general, sin perfil por ejecutable",
+            sourceRunID: UUID(uuidString: "46EE2F82-B994-4FC4-8403-F8642F9CB466"),
+            configurationFingerprint:
+                "4ed204c66b28fdd8f1f90d5a9043a8e66be10f5dc711b2af0efeba64fbfb6c10",
+            engineFingerprint:
+                "84f9885b0934b7b3a3a0af29e0053bd1027aec49402d12bd0985c27efb5e6eb2"
+        ),
+        VerifiedGameCertification(
+            appID: "1466060",
+            gameName: "Tainted Grail: The Fall of Avalon",
+            backend: .regression,
+            verifiedAt: "2026-08-08",
+            evidence: "Validación directa del usuario sobre el baseline general, sin perfil por ejecutable",
+            sourceRunID: UUID(uuidString: "23AB6DA9-212C-4146-931D-D6E280D4CA7A"),
+            configurationFingerprint:
+                "2bace373a251b88b30c99b09b7769f3c0edbc3807021834eed04daf9616a8a49",
+            engineFingerprint:
+                "84f9885b0934b7b3a3a0af29e0053bd1027aec49402d12bd0985c27efb5e6eb2"
+        ),
+        VerifiedGameCertification(
+            appID: "4300500",
+            gameName: "IRON NEST: Heavy Turret Simulator Demo",
+            backend: .regression,
+            verifiedAt: "2026-08-08",
+            evidence: "Validación directa del usuario sobre el baseline general, sin perfil por ejecutable",
+            sourceRunID: UUID(uuidString: "95F6BF45-DBFF-468A-8655-EC83F8923CE0"),
+            configurationFingerprint:
+                "512a61a79278dd8b52f9be4c788f07c760572836685c980f9111caab6a4657a1",
+            engineFingerprint:
+                "9937f35909f470add3681f0a6748d95436408c8bfc4c191fd2c48ae55bbaa933"
+        ),
+        VerifiedGameCertification(
+            appID: "881020",
+            gameName: "Granblue Fantasy: Relink",
+            backend: .regression,
+            verifiedAt: "2026-08-09",
+            evidence: "Validación directa del usuario sobre el baseline general, sin perfil por ejecutable",
+            sourceRunID: UUID(uuidString: "DBBE9D04-7F1C-4AD8-860D-6C54C5AD503C"),
+            configurationFingerprint:
+                "fa3cb7e58e5fc638ad9e4d1e20161a3ecf07ba2e1acd05db280f1a3af2d4a3b0",
+            engineFingerprint:
+                "fa3cb7e58e5fc638ad9e4d1e20161a3ecf07ba2e1acd05db280f1a3af2d4a3b0"
+        ),
+        VerifiedGameCertification(
+            appID: "2510960",
+            gameName: "Temtem: Swarm",
+            backend: .regression,
+            verifiedAt: "2026-08-09",
+            evidence: "Validación directa del usuario sobre el baseline general, sin perfil por ejecutable",
+            sourceRunID: UUID(uuidString: "067E57EC-A75A-4B30-97F6-F844E98650F5"),
+            configurationFingerprint:
+                "d90f95400f5d80f10ef67ff9f579b3b7a7988d0fe7c04748c681a42808e723c8",
+            engineFingerprint:
+                "fa3cb7e58e5fc638ad9e4d1e20161a3ecf07ba2e1acd05db280f1a3af2d4a3b0"
         )
     ]
 

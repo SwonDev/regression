@@ -178,6 +178,15 @@ Los expedientes públicos explican causa, receta, evidencia y regla de no regres
 | Luminary Demo | Verificado perfecto | [Ver expediente](docs/games/luminary-demo.md) |
 | Borderlands® 4 | Verificado perfecto | [Ver expediente](docs/games/borderlands-4.md) |
 | Cursemark | Verificado perfecto | [Ver expediente](docs/games/cursemark.md) |
+| Sephiria | Verificado perfecto | Validación directa del usuario |
+| Dwarven Realms | Verificado perfecto | Validación directa del usuario |
+| Monsuta | Verificado perfecto | Validación directa del usuario |
+| Luma Island | Verificado perfecto | Validación directa del usuario |
+| Crashlands 2 | Verificado perfecto | Validación directa del usuario |
+| Tainted Grail: The Fall of Avalon | Verificado perfecto | Validación directa del usuario |
+| IRON NEST: Heavy Turret Simulator Demo | Verificado perfecto | Validación directa del usuario |
+| Granblue Fantasy: Relink | Verificado perfecto | Validación directa del usuario |
+| Temtem: Swarm | Verificado perfecto | Validación directa del usuario |
 
 También forman parte de la matriz de regresión Steam/CEF, Palworld y la ruta D3D9. Moonlighter 2
 es a la vez un juego certificado y el control Unity obligatorio para cambios comunes de Wine.

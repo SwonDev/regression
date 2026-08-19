@@ -68,6 +68,25 @@ tampoco crea un veredicto perfecto.
 Cube World y FINAL FANTASY TACTICS — The Ivalice Chronicles también están certificados en el
 catálogo integrado; sus primeras evidencias son anteriores al formato actual de expediente.
 
+### Verificados por el usuario, sin expediente propio
+
+Estos títulos funcionaron desde el primer lanzamiento sobre el baseline general: no necesitaron
+perfil por ejecutable, receta compilada ni investigación, así que no tienen expediente que contar.
+Su certificación procede de la validación directa del usuario y está fijada en el catálogo
+compilado con el run exacto que la respalda.
+
+| Juego | App ID |
+|---|---|
+| Sephiria | 2436940 |
+| Dwarven Realms | 2015240 |
+| Monsuta | 2193400 |
+| Luma Island | 2408820 |
+| Crashlands 2 | 1401730 |
+| Tainted Grail: The Fall of Avalon | 1466060 |
+| IRON NEST: Heavy Turret Simulator Demo | 4300500 |
+| Granblue Fantasy: Relink | 881020 |
+| Temtem: Swarm | 2510960 |
+
 ### Validados con incidencia
 
 | Juego | Incidencia conservada | Documento |

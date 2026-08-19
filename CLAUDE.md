@@ -349,16 +349,20 @@ exacto que recibirá GitHub.** Actualizar también la nota de contrato en `READM
 
 - **Release estable**: v1.12.4 (42), instalada en `/Applications/Regression.app`. Baseline
   histórico: v1.11.0 (37).
-- **27 certificaciones activas** en SQLite (catálogo `2026-08-19.1` + certificaciones locales).
+- **27 certificaciones activas**, todas fijadas en el catálogo compilado (revisión `2026-08-19.2`).
   Con expediente público: Grim Dawn, Clair Obscur, DragonSword, Hell Clock, Heroes of Hammerwatch II,
   Secrets of Grindea, Fields of Mistria, Titan Quest II, Forsaken Isle, Dragonwilds, Tinkerlands,
-  Moonlighter 2, Cross Blitz, Luminary Demo, Borderlands 4, Cursemark; más Cube World y FFT en el catálogo
-  integrado. Certificaciones locales **sin expediente todavía**: Sephiria, Dwarven Realms, Monsuta,
-  Luma Island, Crashlands 2, Tainted Grail, IRON NEST, Granblue Fantasy: Relink, Temtem: Swarm.
+  Moonlighter 2, Cross Blitz, Luminary Demo, Borderlands 4, Cursemark; más Cube World y FFT en el
+  catálogo integrado. **Verificados por el usuario sin expediente propio** —funcionaron sobre el
+  baseline general desde el primer lanzamiento, sin perfil ni receta, así que no hay investigación
+  que contar—: Sephiria, Dwarven Realms, Monsuta, Luma Island, Crashlands 2, Tainted Grail,
+  IRON NEST, Granblue Fantasy: Relink y Temtem: Swarm.
 - **Validados con incidencia**: Dragon's Dogma 2 (letterbox 16:9), Rotwood (superficie 1512×870).
-- **Investigación abierta**: FANTASY LIFE i, bloqueado por la política oficial de EAC en entornos
-  virtualizados (`208 Cannot run under Virtual Machine`). No se elude, no se oculta la VM, no se
-  presenta como compatible. La vía no-VM (FEXCore nativo arm64) sigue siendo I+D sin integración.
+- **Investigación abierta y separada**: FANTASY LIFE i, bloqueado por la política oficial de EAC en
+  entornos virtualizados (`208 Cannot run under Virtual Machine`). No se elude, no se oculta la VM,
+  no se presenta como compatible. La línea de trabajo es Proton sobre ARM en Mac (FEXCore nativo
+  arm64) para los títulos con anticheat; vive en `tools/research/` y `work/` como **rama de
+  investigación aparte**, no forma parte del producto y solo se integraría si diera resultados.
 - **Matriz de regresión permanente**: Steam/CEF, Palworld, Moonlighter 2 (control Unity) y la ruta D3D9.
 - La botella vive en `~/Library/Application Support/Regression/Bottles/Steam/` (datos del usuario,
   fuera del repo).
