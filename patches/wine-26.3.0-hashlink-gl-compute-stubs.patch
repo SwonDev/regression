@@ -1,0 +1,193 @@
+diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
+--- a/dlls/ntdll/unix/loader.c
++++ b/dlls/ntdll/unix/loader.c
+@@ -801,8 +801,48 @@
+     free( plugin_path );
+     free( game_root );
+     free( unix_executable );
++}
++
++static int regression_directory_has_file( const char *directory, const char *name )
++{
++    char path[PATH_MAX];
++    struct stat st;
++    int length;
++
++    length = snprintf( path, sizeof(path), "%s/%s", directory, name );
++    if (length < 0 || (size_t)length >= sizeof(path)) return 0;
++    if (lstat( path, &st )) return 0;
++    return S_ISREG( st.st_mode );
+ }
+ 
++/* HashLink ships one runtime for every Heaps/HashLink title.  Its Windows
++ * build resolves the whole GL import table through wglGetProcAddress and stops
++ * at the first entry that fails to resolve, so the compute and SSBO entry
++ * points macOS cannot expose above GL 4.1 abort the game before it draws.  The
++ * evidence is the runtime itself, never a per-title list: only a game root that
++ * carries the HashLink bytecode and its runtime library selects the compiled
++ * compatibility set, so every present and future HashLink title is covered and
++ * no other engine is touched. */
++static void regression_set_hashlink_gl_compatibility(void)
++{
++    char *unix_executable = NULL, *game_root = NULL;
++    NTSTATUS status;
++
++    status = ntdll_get_unix_file_name( main_wargv[0], &unix_executable, FILE_OPEN );
++    if (status && status != STATUS_NO_SUCH_FILE) goto done;
++    if (!unix_executable || !(game_root = regression_steam_game_root( unix_executable ))) goto done;
++    if (!regression_directory_has_file( game_root, "hlboot.dat" )) goto done;
++    if (!regression_directory_has_file( game_root, "libhl.dll" )) goto done;
++
++    setenv( "REGRESSION_GL_HASHLINK_RUNTIME", "1", 1 );
++    fprintf( stderr, "Regression: HashLink runtime detected for %s; unavailable GL compute "
++             "entry points resolve to reporting stubs.\n", unix_executable );
++
++done:
++    free( game_root );
++    free( unix_executable );
++}
++
+ static void regression_set_graphics_backend(void)
+ {
+     const char *backend = getenv( "REGRESSION_GRAPHICS_BACKEND" );
+@@ -2825,6 +2865,7 @@
+ 
+     regression_set_process_dll_isolation();
+     regression_set_windows_media_compatibility();
++    regression_set_hashlink_gl_compatibility();
+     regression_set_graphics_backend();
+ 
+     server_init_process_done();
+diff --git a/dlls/opengl32/unix_wgl.c b/dlls/opengl32/unix_wgl.c
+--- a/dlls/opengl32/unix_wgl.c
++++ b/dlls/opengl32/unix_wgl.c
+@@ -959,13 +959,114 @@
+ {
+     const struct registry_entry *entry_a = a, *entry_b = b;
+     return strcmp( entry_a->name, entry_b->name );
++}
++
++/* Regression: HashLink resolves its entire GL import table through
++ * wglGetProcAddress before the first frame and stops at the first entry that
++ * fails to resolve.  macOS froze OpenGL at 4.1, so the compute, SSBO and
++ * indirect entry points it asks for can never resolve and every Heaps title
++ * dies with a driver error even though it never issues a compute dispatch.
++ * These stubs let that resolution succeed without pretending to do the work:
++ * each one reports the first time it is actually invoked, so a title that does
++ * depend on compute leaves evidence in the log instead of rendering silently
++ * wrong.  Only a process the loader recognised as a HashLink runtime reaches
++ * them; every other engine keeps the unmodified failure and its own fallback. */
++static BOOL regression_hashlink_runtime(void)
++{
++    static int cached = -1;
++
++    if (cached < 0)
++    {
++        const char *value = getenv( "REGRESSION_GL_HASHLINK_RUNTIME" );
++        cached = value && value[0] == '1';
++    }
++    return cached != 0;
++}
++
++static void regression_report_missing_gl( const char *name, int *reported )
++{
++    if (*reported) return;
++    *reported = 1;
++    ERR( "%s is unavailable on this driver and the HashLink stub did nothing\n", name );
+ }
+ 
++#define REGRESSION_REPORT_MISSING_GL( name ) \
++    do { static int reported; regression_report_missing_gl( (name), &reported ); } while (0)
++
++static void GLAPIENTRY regression_stub_dispatch_compute( GLuint x, GLuint y, GLuint z )
++{
++    REGRESSION_REPORT_MISSING_GL( "glDispatchCompute" );
++}
++
++static void GLAPIENTRY regression_stub_memory_barrier( GLbitfield barriers )
++{
++    REGRESSION_REPORT_MISSING_GL( "glMemoryBarrier" );
++}
++
++static void GLAPIENTRY regression_stub_bind_image_texture( GLuint unit, GLuint texture, GLint level,
++                                                           GLboolean layered, GLint layer,
++                                                           GLenum access, GLenum format )
++{
++    REGRESSION_REPORT_MISSING_GL( "glBindImageTexture" );
++}
++
++static void GLAPIENTRY regression_stub_shader_storage_block_binding( GLuint program, GLuint index,
++                                                                     GLuint binding )
++{
++    REGRESSION_REPORT_MISSING_GL( "glShaderStorageBlockBinding" );
++}
++
++static GLuint GLAPIENTRY regression_stub_get_program_resource_index( GLuint program,
++                                                                     GLenum programInterface,
++                                                                     const char *name )
++{
++    REGRESSION_REPORT_MISSING_GL( "glGetProgramResourceIndex" );
++    return ~0u;
++}
++
++static void GLAPIENTRY regression_stub_multi_draw_elements_indirect( GLenum mode, GLenum type,
++                                                                     const void *indirect,
++                                                                     GLsizei drawcount, GLsizei stride )
++{
++    REGRESSION_REPORT_MISSING_GL( "glMultiDrawElementsIndirect" );
++}
++
++static void GLAPIENTRY regression_stub_multi_draw_elements_indirect_count( GLenum mode, GLenum type,
++                                                                           const void *indirect,
++                                                                           GLintptr drawcount,
++                                                                           GLsizei maxdrawcount,
++                                                                           GLsizei stride )
++{
++    REGRESSION_REPORT_MISSING_GL( "glMultiDrawElementsIndirectCountARB" );
++}
++
++static const void *regression_hashlink_gl_stub( const char *name )
++{
++    static const struct { const char *name; const void *stub; } stubs[] =
++    {
++        { "glBindImageTexture", (const void *)regression_stub_bind_image_texture },
++        { "glDispatchCompute", (const void *)regression_stub_dispatch_compute },
++        { "glGetProgramResourceIndex", (const void *)regression_stub_get_program_resource_index },
++        { "glMemoryBarrier", (const void *)regression_stub_memory_barrier },
++        { "glMultiDrawElementsIndirect", (const void *)regression_stub_multi_draw_elements_indirect },
++        { "glMultiDrawElementsIndirectCountARB",
++          (const void *)regression_stub_multi_draw_elements_indirect_count },
++        { "glShaderStorageBlockBinding", (const void *)regression_stub_shader_storage_block_binding },
++    };
++    unsigned int i;
++
++    if (!regression_hashlink_runtime()) return NULL;
++    for (i = 0; i < ARRAY_SIZE(stubs); i++)
++        if (!strcmp( name, stubs[i].name )) return stubs[i].stub;
++    return NULL;
++}
++
+ PROC wrap_wglGetProcAddress( TEB *teb, LPCSTR name )
+ {
+     const struct registry_entry entry = {.name = name}, *found;
+     struct opengl_funcs *funcs = teb->glTable;
+     const void **func_ptr;
++    const void *stub;
+     struct context *ctx;
+ 
+     /* Without an active context opengl32 doesn't know to what
+@@ -1004,6 +1105,14 @@
+                 WARN( "Extension %s required for %s not supported, trying %s\n", found->extension,
+                       name, alternatives[i].alt );
+                 return wrap_wglGetProcAddress( teb, alternatives[i].alt );
++            }
++
++            if ((stub = regression_hashlink_gl_stub( name )))
++            {
++                WARN( "Extension %s required for %s not supported, resolving a HashLink stub\n",
++                      found->extension, name );
++                *func_ptr = stub;
++                return (void *)(UINT_PTR)(found - extension_registry);
+             }
+ 
+             WARN( "Extension %s required for %s not supported\n", found->extension, name );

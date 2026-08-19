@@ -17,6 +17,8 @@ PATCHES=(
     "$ROOT/patches/wine-26.3.0-process-scoped-dll-isolation.patch"
     "$ROOT/patches/wine-26.3.0-unity-borderless-focus.patch"
     "$ROOT/patches/wine-26.3.0-macos-linux-uname-sigsys.patch"
+    "$ROOT/patches/wine-26.3.0-opengl-core-forward-compat.patch"
+    "$ROOT/patches/wine-26.3.0-hashlink-gl-compute-stubs.patch"
 )
 
 LEGACY_EXTERNAL_D3DMETAL_MIGRATION="$ROOT/patches/wine-26.3.0-remove-legacy-external-d3dmetal-env.patch"

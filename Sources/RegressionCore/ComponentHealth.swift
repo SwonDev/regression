@@ -120,7 +120,7 @@ public enum TrustedComponentCatalog {
   public static let windowsMediaComponentVersion = "1"
   public static let steamRuntimePrerequisitesComponentID = "steam-runtime-prerequisites"
   public static let steamRuntimePrerequisitesComponentVersion = "3"
-  public static let supportedApplicationVersion = "1.12.3"
+  public static let supportedApplicationVersion = "1.12.4"
   public static let supportedBuildIdentifier = "41"
 
   private static let windowsMediaDevelopmentManifestSHA256 =
@@ -159,7 +159,7 @@ public enum TrustedComponentCatalog {
     ),
     TrustedComponentFile(
       relativePath: "lib/wine/x86_64-unix/ntdll.so",
-      expectedSHA256: "687717fa95835146dfe4b45c6a29d7a82fb37742810fdb4213908dd3176b82e9"
+      expectedSHA256: "6bcb718ba386311aa6b985ef33e1c2e4717f2ce233a07b2852bcae6abc0f5d19"
     ),
     TrustedComponentFile(
       relativePath: "share/wine/wine.inf",

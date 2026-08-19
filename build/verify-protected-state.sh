@@ -388,18 +388,18 @@ elif $BEFORE_THREE_GAMES_PROMOTION || $BEFORE_DD2_PROMOTION || \
     verify_hash 5d99cae95a60c84b8bc9759736ed9e9bec1dafe9b9af8a8190f26c232781ec60 \
         "Contents/MacOS/regression-engine"
 else
-    verify_hash ccd590e7e5d395757add0b561bf9fa76d54deb56c491706e28004259c0df913e \
+    verify_hash 8e8aad9628e9eb4f85848aba0538d10bd3c4fa242e7d96f6a826b93830329eff \
         "Contents/MacOS/regression-engine"
 fi
 if $RELEASE_1_11_DEVELOPMENT_CANDIDATE; then
     verify_hash 291bc4ecf61dc9c7efdebbe9e8e5737baff594ee4bfa626b90b1647a64333073 \
         "Contents/SharedSupport/bin/install-apple-gptk-component"
 else
-    verify_hash 6942782b7baf0049bb56aba2b9a4e00a107984b1b0198f2307fb63e87ce3103c \
+    verify_hash f6bcd552320e3713693d0a0bbf1af4932b573fc35798282c1724f2b52a688660 \
         "Contents/SharedSupport/bin/install-apple-gptk-component"
 fi
 if ! $BEFORE_WINDOWS_MEDIA_PROMOTION; then
-    verify_hash c43da8ed5b54d6c663a5455d4296accde8d96f5237384f9322bea548e5c6d00d \
+    verify_hash b1469e452c6ebe94b27fb64504c31f50e251c24ea571ab8eee32ae5015fd0d5f \
         "Contents/SharedSupport/bin/install-windows-media-component"
     if $BEFORE_1_11_PROMOTION || $RELEASE_1_11_DEVELOPMENT_CANDIDATE; then
         verify_hash da8ba98d99d157f981ef3a2472dc9d74c9ce4673ef126bdd61851b9dd21dedb3 \
@@ -408,7 +408,7 @@ if ! $BEFORE_WINDOWS_MEDIA_PROMOTION; then
         verify_hash d93847ced54536cbaaf8ed7922537dfb043448e0168184375c552e774fe35199 \
             "Contents/SharedSupport/components/windows-media/1/manifest.sha256"
     else
-        verify_hash ac662661fb3384c6ad100066391cab209f9de60b2e129fb92e07365ee6fe9bb1 \
+        verify_hash da8ba98d99d157f981ef3a2472dc9d74c9ce4673ef126bdd61851b9dd21dedb3 \
             "Contents/SharedSupport/components/windows-media/1/manifest.sha256"
     fi
     (
@@ -441,7 +441,7 @@ elif $BEFORE_THREE_GAMES_PROMOTION || $BEFORE_TQ2_ROUTE_UNIFICATION || \
 elif $BEFORE_THREE_GAMES_HARDENING; then
     verify_hash bf4f25e96883150e955f4465a5a15cbd6adaf0f152a8e1239004486dfbf2b81a "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
 else
-    verify_hash e3d336ec0691a2025546318cb65f37d868458ed9786fbc10e20a2a7bdd4fcfcc "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+    verify_hash 6bcb718ba386311aa6b985ef33e1c2e4717f2ce233a07b2852bcae6abc0f5d19 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
 fi
 
 DRAGONSWORD_PROFILE="$WINE_ROOT/lib/profiles/dragonsword"

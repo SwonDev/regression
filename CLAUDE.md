@@ -1,219 +1,357 @@
-# CLAUDE.md — Proyecto Regression
+# CLAUDE.md
 
-> Aplicación nativa de barra de menús con Regression como único motor operativo. Su runtime,
-> botella y única biblioteca física de juegos son propios; CrossOver no se invoca, no comparte
-> estado y solo aparece en expedientes históricos fechados. No existe red, CLI ni backend de
-> CodeWeavers en el producto. La telemetría local
-> conserva evidencia, pero no aplica perfiles automáticamente.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+> **Regression** es una app nativa de barra de menús (`LSUIElement`) que ejecuta Steam de Windows
+> en macOS con **su propio motor** de compatibilidad. Regression es el **único backend operativo**:
+> su runtime, su botella y la única biblioteca física de juegos son propios. CrossOver **no se
+> invoca, no comparte estado y solo aparece en expedientes históricos fechados**; tampoco existe
+> red, CLI ni backend de CodeWeavers en el producto. La telemetría local conserva evidencia, pero
+> **no aplica perfiles automáticamente**.
 >
-> Documentación hermana: `AGENTS.md` (reglas inviolables + protocolo, fuente de verdad que
-> comparte con Codex) y `README.md` (arquitectura, build reproducible, diagnósticos, método).
-> Si algo aquí difiere de `AGENTS.md`, manda `AGENTS.md`.
+> **`AGENTS.md` es la fuente de verdad** (reglas inviolables + protocolo, compartida con Codex).
+> Si algo de este archivo difiere de `AGENTS.md`, **manda `AGENTS.md`**. `README.md` es la portada
+> del producto y `docs/README.md` el índice técnico.
 
-> **Contrato actual del checkout (14 de agosto de 2026):** Regression **1.12.3 (41)**, release
-> estable publicada, y SQLite **v17**. **v1.11.0 (37)** es el baseline histórico; conservar sus
-> gates de transición no autoriza a saltarse la matriz global de futuras releases.
-
----
-
-## 1. Estado conseguido (2026-07-28)
-
-**Baseline histórico verificado con capturas (2026-07-28; no describe la arquitectura actual):**
-- La etapa anterior integraba la botella Steam de CrossOver, conmutación segura de backend, app
-  `LSUIElement` sin Dock, biblioteca compartida y base SQLite v11 de aprendizaje exportable. Ese
-  diseño se conserva solo como historia y ya no describe la arquitectura operativa. La
-  base normaliza motores por Wine/componentes/registro, separa opciones del juego, vincula cada
-  blindado con su evidencia/configuración/motor exactos, conserva el preflight de cada prueba y
-  conservaba entonces comparaciones no vinculantes con metadatos públicos de CodeWeavers. Esa
-  integración fue retirada. Los
-  datos técnicos locales usan permisos `0700`/`0600` y los logs del lanzador tienen retención
-  acotada.
-- Steam completo: tienda, login, biblioteca, navegación, clicks precisos (CEF/Chromium vía
-  parche propio de presentación cross-process IOSurface en DXMT + consumer en winemac.drv).
-- Palworld completo (personaje + mundo + HUD), Moonlighter 2 (Unity IL2CPP), Grim Dawn,
-  Romestead. D3D9 vía DXVK 1.10.3.
-- App autocontenida y firmada con identidad de desarrollo estable. La única instalación
-  descubrible es el bundle físico `/Applications/Regression.app`; `Regression.app/` en el
-  checkout es solo un artefacto de desarrollo desregistrado. El runtime público lleva el
-  `--prefix` horneado para `/Applications`, por lo que no se mueve sin recompilar Wine.
-- Repo privado en GitHub: `SwonDev/regression` (docs + scripts + parches propios; sin
-  binarios de Apple ni fuentes de CrossOver, ver `NOTICE.md`).
-- Icono oficial del usuario integrado (`assets/icon/oficial/`).
-- Backups consolidados: base general en `regression-last-good-20260726.tar.gz`, perfil posterior
-  verificado en `grimdawn-d3dmetal-perfect-20260727-1802/`, baseline anterior y configuración de
-  botella. `backups/README.md` distingue recuperación, evidencia rechazada y datos de usuario.
-- Catálogo canónico `VerifiedGameCatalog`: Cube World, FFT y Grim Dawn permanecen marcados como
-  `Verificado perfecto: Regression` aunque se regenere SQLite. La base conserva todos los runs,
-  configuraciones e incidencias que explican cómo se blindó cada perfil.
-
-**Perfiles importantes:**
-- **FFT**: funcionamiento perfecto confirmado por el usuario en el motor propio; el crash de
-  la ruta vkd3d queda como diagnóstico histórico, no como veredicto del juego.
-- **Cube World**: perfecto confirmado en Regression. La botella CrossOver reinstalada falla
-  actualmente con pantalla negra/Direct3D; no debe degradar el perfil propio blindado.
+> **Contrato del checkout:** Regression **1.12.4 (42)**, release estable publicada, y SQLite **v17**.
+> **v1.11.0 (37)** es el baseline histórico: conservar sus gates `public-1.11` de transición no
+> autoriza a saltarse la matriz global de futuras releases.
 
 ---
 
-## 2. Reglas inviolables
+## 0. Antes de tocar nada
 
-### Principios (valen más que cualquier arreglo concreto)
+```bash
+git status --short && git log -1 --oneline    # ¿en qué rama y commit estoy?
+git fetch origin && git log --oneline -1 origin/master
+ls build Scripts patches                       # los tres deben existir
+```
 
-1. **JAMÁS se integra algo que rompe lo que ya funciona.** Un arreglo que apaga otra cosa
-   no es un arreglo: se revierte al instante y se repiensa. Lo que decide es la matriz de
-   validación (§3), no las intenciones.
-2. **El baseline propio y las fuentes FOSS mandan.** Las versiones exactas, convenciones de
-   build, wiring de DLLs, configuración y código oficial del runtime se contrastan antes de
-   cambiar nada. Baseline y candidato se ejecutan dentro de Regression; no se instala, abre,
-   consulta o inspecciona CrossOver para diagnosticar.
-3. **Autonomía operativa estricta.** Regression no invoca CrossOver ni comparte con él botella,
-   juegos, credenciales, registro o configuración. No se copian DLLs/dylibs ni binarios
-   propietarios; las observaciones históricas no tienen autoridad y toda implementación actual
-   procede de fuentes FOSS oficiales o recursos Apple autorizados localmente.
-4. **Legalidad limpia.** Solo fuentes open-source oficiales. Nada de descompilar ni extraer
-   código de binarios propietarios (GUI de CrossOver, licencias, forks privados). Los
-   binarios de Apple (GPTK: D3DMetal.framework, libd3dshared.dylib) se usan tal cual los
-   distribuye Apple, solo en local, jamás redistribuidos.
+El trabajo publicado vive en **`origin/master`**. Antes de investigar o cambiar algo, comprueba
+que el checkout coincide con él: una rama antigua contiene reglas, PIN, versiones y verificadores
+caducados, y llevaría a "arreglar" sobre un estado que ya no existe. `build/` contiene todos los
+verificadores del estado protegido; si falta, el checkout está incompleto.
 
-### Reglas técnicas duras (errores que YA se han cometido y NO se repiten)
+Al empezar una sesión que continúa trabajo previo: `mem_session_start` + `mem_search` (Engram)
+antes de actuar, y `mem_save` proactivamente ante cada decisión, bug resuelto o hallazgo.
+
+---
+
+## Agent skills
+
+### Issue tracker
+
+Las tareas publicables se gestionan como issues de GitHub. Consulta `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Se usa el vocabulario canónico de cinco estados. Consulta `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+El repositorio usa un único contexto de dominio y ADR globales. Consulta `docs/agents/domain.md`.
+
+---
+
+## 1. Arquitectura (la parte que hay que entender leyendo varios archivos)
+
+Regression son **tres capas acopladas**; casi todo el trabajo real ocurre en la frontera entre ellas.
+
+### 1.1 App nativa (SwiftPM, Swift 6.2, macOS 14+)
+
+`Package.swift` define cuatro targets y **ningún proyecto Xcode**:
+
+| Target | Rol |
+|---|---|
+| `RegressionCore` (librería) | Todo el dominio: repositorio SQLite, preflight, telemetría, perfiles, catálogos, recetas |
+| `Regression` (ejecutable) | UI SwiftUI de barra de menús (`MenuBarView`, `RegressionAppModel`) |
+| `RegressionControl` (ejecutable `regressionctl`) | CLI con la **misma** lógica de `RegressionCore`; es la vía de trabajo del agente |
+| `CSQLite` (systemLibrary) | Shim de SQLite del sistema; no hay dependencias externas |
+
+Piezas de `RegressionCore` que conviene conocer antes de cambiar comportamiento:
+
+- `CompatibilityRepository(.swift|+Preflight|+Research|+RuntimeEvolution|+LaunchEnvelope)` — todo
+  el acceso a SQLite, dividido por área. Es el archivo más grande del proyecto.
+- `GameTestPreflight` — diagnóstico **de solo lectura** previo a cualquier lanzamiento.
+- `LaunchEnvelope` / `CompatibilityRepository+LaunchEnvelope` — el sobre durable v17 que autoriza
+  un `spawn`: vincula run, App ID, preflight fresco y las identidades cerradas de componentes y
+  perfiles. **Nunca contiene comandos, rutas ni DLLs.**
+- `TelemetryCoordinator`, `SteamLogMonitor`, `GameSessionArtifactCleaner` — observación de la
+  sesión de Steam, agrupación launcher + ejecutable en un solo run y limpieza acotada al run exacto.
+- `GameRuntimeProfileCatalog` — catálogo **compilado** de perfiles por ejecutable; gobierna
+  `identifier`, `revision` y `executable`, y sobrescribe metadatos contradictorios.
+- `VerifiedGameCatalog` — certificaciones perfectas embebidas en el binario; sobreviven a una
+  regeneración de SQLite.
+- `CompiledGameRepairs`, `WindowsMediaRepairInterlock`, `UnrealBootstrapRouteDetector`,
+  `AppleGPTKOnboarding` — reparaciones **compiladas, cerradas y versionadas**. La base de
+  aprendizaje jamás ejecuta un comando almacenado.
+- `RegressionReleaseUpdate` — canal único de autoactualización estable.
+
+### 1.2 Runtime (Wine + capas gráficas), fuera de Swift
+
+Vive en el bundle: `Regression.app/Contents/SharedSupport/wine-root`, con el `--prefix` **horneado**
+a la ruta absoluta de instalación. El lanzador es `Scripts/regression-engine.sh` →
+`Contents/MacOS/regression-engine`.
+
+El aislamiento por juego **no se hace con variables globales ni con el registro**: se hace con
+parches propios de Wine en `patches/`, activados por *basename* exacto del ejecutable —
+`per-process-graphics-routing`, `process-scoped-dll-isolation`, `macos-linux-uname-sigsys`
+(Borderlands 4), `winemac-gl-surface-resync` (Fields of Mistria), `unreal-bootstrap-autodetect`,
+`unity-borderless-focus`, `windows-media-autodetect`, `device-notification-invalid-handle`.
+Ese es el patrón a replicar al blindar un juego nuevo.
+
+Capas gráficas: **DXMT v0.72 + parche cross-process** (D3D11), **DXVK 1.10.3** (D3D9),
+**Apple GPTK/D3DMetal** por perfil aislado (D3D12), `winemac.drv` y perfiles OpenGL.
+
+### 1.3 Datos locales (SQLite v17)
+
+`~/Library/Application Support/Regression/Compatibility/compatibility.sqlite` (`0700`/`0600`).
+Cadena que importa: `games` → `runs` → `run_processes` → `run_preflight_reports` →
+`run_verifications` → `verified_game_certifications`, con `configuration_snapshots` y
+`engine_snapshots` aportando las huellas. La identidad de motor **excluye** `gameconfig.*`: cambiar
+resolución no crea un stack falso, cambiar Wine/DLL/registro sí.
+
+**Un `perfect` exige custodia completa de procesos**: `runs.process_id` = la única fila
+`run_processes.is_representative=1`, run terminado, verificación posterior al cierre. Mutar después
+esa cadena invalida el veredicto sin borrar el historial. Un `exit code 0` **nunca** certifica nada.
+
+---
+
+## 2. Comandos
+
+### Desarrollo Swift
+
+```bash
+swift build                       # compilación de depuración
+swift build -c release            # binarios de release
+swift test                        # suite XCTest completa (RegressionCoreTests)
+swift test --filter TelemetryCoordinatorTests                       # una clase
+swift test --filter TelemetryCoordinatorTests/testNombreDelCaso     # un solo test
+```
+
+### Contratos de shell (no los ejecuta `swift test`)
+
+`Tests/Shell/*.sh` son ejecutables independientes que verifican release, instalador, entitlements,
+autoridad del runtime sellado y coherencia de versión. No hay runner: se invocan uno a uno.
+
+```bash
+bash Tests/Shell/release-version-coherence.sh     # versión coherente en todos los archivos
+bash Tests/Shell/documentation-contract-1.12.sh
+bash Tests/Shell/no-codeweavers-runtime.sh        # el producto no toca CrossOver
+for t in Tests/Shell/*.sh; do bash "$t" || echo "FALLA: $t"; done
+```
+
+### Estado protegido y verificadores
+
+```bash
+bash build/verify-protected-state.sh --include-bottle   # todos los PIN, sin lanzar juegos
+bash build/verify-canonical-installation.sh             # una única app descubrible
+bash build/install-game-profiles.sh                     # fija perfiles por juego y firma
+bash build/verify-release-asset.sh ASSET CHECKSUM VERSION BUILD
+bash build/verify-public-installed-state.sh --release-1.12.3
+```
+
+### Build del runtime (solo si cambia el runtime)
+
+```bash
+bash build/apply-wine-patches.sh   # serie de parches propios sobre sources-26.3.0
+bash build/build-wine.sh           # wine CX 26.3.0 → Regression.app
+bash build/build-dxmt.sh           # DXMT v0.72 + parches
+bash build/build-public-wine-runtime.sh   # recompila el arranque para /Applications
+Scripts/sign_regression.sh Regression.app # SIEMPRE tras tocar el bundle
+```
+
+Toolchain x86 ya compilado en `toolchain/x86/` — no recompilar salvo cambio de versiones.
+
+### CLI `regressionctl` (la herramienta de trabajo para validar juegos)
+
+```bash
+regressionctl status
+regressionctl preflight APP_ID --backend regression   # obligatorio antes de lanzar
+regressionctl launch APP_ID --backend regression
+regressionctl runs | processes RUN_ID | profiles | engines | certifications
+regressionctl verify RUN_ID perfect|playable|failed [--note TEXTO]
+regressionctl observe APP_ID perfect|playable|failed --backend regression --name NOMBRE
+regressionctl research-protocol | research-open | research-hypothesis | research-stage \
+              research-attach-run | research-gate | research-artifact | research-finish
+regressionctl library-status | validate-library APP_ID --run RUN_ID
+regressionctl database | export RUTA
+```
+
+### Validación visual (no opcional)
+
+```bash
+open /Applications/Regression.app
+swift tools/diagnostics/list-windows.swift steam
+screencapture -x -l <CGWindowID> /tmp/check.png   # capturar y MIRAR la imagen
+```
+
+---
+
+## 3. Reglas inviolables (resumen; el detalle está en `AGENTS.md`)
+
+### Principios
+
+1. **JAMÁS se integra algo que rompe lo que ya funciona.** Lo decide la matriz de validación (§4),
+   no las intenciones. Si algo que antes funcionaba falla → revertir primero, preguntar después.
+2. **El baseline propio y las fuentes FOSS mandan.** Baseline y candidato se ejecutan **dentro de
+   Regression**; no se instala, abre, consulta ni inspecciona CrossOver para diagnosticar.
+3. **Autonomía operativa estricta.** Ni botella, ni juegos, ni credenciales, ni registro, ni
+   configuración compartidos. Nada de DLLs, dylibs ni binarios propietarios copiados.
+4. **Legalidad limpia.** Solo fuentes open-source oficiales. Los binarios de Apple (GPTK:
+   `D3DMetal.framework`, `libd3dshared.dylib`) se usan tal cual, solo en local, jamás redistribuidos.
+5. **I+D sin techo, promoción aislada y con evidencia.** Los PIN protegen el motor estable, no
+   limitan la investigación en un perfil aislado con rollback.
+
+### Reglas técnicas duras (errores ya cometidos, no se repiten)
 
 1. **Backup antes de tocar botella o bundle** (`backups/`). Sin excepciones.
-2. **Validación visual obligatoria tras cualquier cambio gráfico**: relanzar, capturar la
-   ventana de Steam (`screencapture -x -l <CGWindowID>`), confirmar que la tienda renderiza.
-   Negra → revertir al instante.
-3. **NO overrides `d3d11/d3d10core/dxgi=native`** en el registro de la botella: las DLLs de
-   DXMT son módulos wine (formato builtin) y el override las hace "not found". DXMT va en
-   system32 sin override. Overrides solo para PE planas (d3d9 de DXVK sí).
-4. **La dxgi de DXMT es intocable EN PAREJA**: va en system32 Y en wine-root. Wine valida la
-   pareja; si wine-root lleva otra dxgi, la de DXMT deja de cargar y TODOS los juegos D3D11
-   mueren al instante (exit 53). El conflicto con D3D12 (que necesita la dxgi de wine) está
-   documentado con sus vías de solución en README §8.
-5. **No mezclar d3d11/dxgi de Apple con DXMT** en system32 (CEF muere). d3d12* de Apple sí
-   coexiste. Las dlls de Apple del GPTK son formato builtin: como "native" dan "not found";
-   se cargan solo desde su propio árbol (`lib/apple_gptk/wine`).
-6. **Grim Dawn está fijado a D3DMetal por proceso.** `grim dawn.exe` usa
-   `lib/profiles/grim-dawn` → `../apple_gptk/wine`, activa D3DMetal solo en ese proceso y
-   fuerza `atidxx64/d3d9/nvapi64/nvngx=builtin`. Nunca convertirlo en ajuste global.
-7. **Cerrar siempre la validación en la UI.** Tras la confirmación visual, verificar el run como
-   `perfect`, refrescar Regression y comprobar la fila verde. Conservar los fallos históricos y
-   añadir el juego a `VerifiedGameCatalog` al blindarlo en una versión publicada.
-8. **Limpiar `dxmt-cxpresent-*.id` antes de lanzar** (ya en el launcher): ficheros stale →
-   pantalla negra por hwnd reutilizado.
-9. **No experimentar sobre el estado bueno.** Experimentos en copia de la botella o con
-   dlls respaldadas; solo se aplica tras validar.
+2. **Validación visual obligatoria tras cualquier cambio gráfico**: relanzar, capturar la ventana
+   de Steam, confirmar que la tienda renderiza. Negra → revertir al instante.
+3. **NO overrides `d3d11/d3d10core/dxgi=native`**: las DLLs de DXMT son módulos wine (builtin) y el
+   override las hace "not found". Overrides solo para PE planas (`d3d9` de DXVK sí).
+4. **La dxgi de DXMT es intocable EN PAREJA**: system32 **y** wine-root. Romper la pareja mata
+   todos los juegos D3D11 al instante (exit 53). D3D12 necesita la dxgi de wine → conflicto
+   documentado en README §8.
+5. **No mezclar `d3d11`/`dxgi` de Apple con DXMT** en system32 (CEF muere). `d3d12*` sí coexiste;
+   las DLLs de Apple solo se cargan desde `lib/apple_gptk/wine`.
+6. **Cada perfil de juego se activa por proceso, nunca globalmente** (Grim Dawn, DragonSword,
+   Titan Quest II, Borderlands 4, Dragonwilds, HWR2…). Convertirlo en registro o entorno global es
+   la causa reproducida de negros, parpadeos y congelaciones.
+7. **Cerrar siempre la validación en la UI**: verificar el run como `perfect`, refrescar Regression,
+   capturar la fila verde. Los fallos históricos se conservan.
+8. **Limpiar `dxmt-cxpresent-*.id` antes de lanzar** (ya en el launcher): stale → pantalla negra.
+9. **No experimentar sobre el estado bueno.** Copia de la botella o DLLs respaldadas.
 10. **Antes de diagnosticar, descartar el entorno** (la mitad de los "bugs" históricos):
-   wineservers de otros builds corriendo (muerte silenciosa), `services.exe` huérfanos
-   (iconos Steam fantasma en la barra de menús de macOS), diálogo modal de Steam Cloud
-   bloqueando el IPC (los juegos mueren al instante sin log → desactivar cloud del appid
-   en `userdata/<id>/config/localconfig.vdf`), juego que necesita Steam activo por DRM.
-11. **Tras `make install` o tocar el bundle: `Scripts/sign_regression.sh Regression.app`**. La
-    firma estable conserva los permisos; la firma ad hoc es solo un fallback explícito.
-12. **PE sin strip** (el strip rompe unwind SEH y la firma de módulos builtin).
+    wineservers de otros builds, `services.exe` huérfanos (iconos Steam fantasma), diálogo modal
+    de Steam Cloud bloqueando el IPC, juego que exige Steam activo por DRM.
+11. **Tras tocar el bundle: `Scripts/sign_regression.sh Regression.app`.** Firma estable, no ad hoc.
+12. **PE sin strip** (rompe unwind SEH y la firma de módulos builtin).
 13. **No cambiar el modelo de IA ni el stack decidido** sin permiso explícito del usuario.
-14. Responde siempre en **español**, con tildes. Código y comentarios del repo en el idioma
-    del código existente.
-15. **No atribuir un Steam Wine solo por el texto de `ps`.** macOS puede mostrar únicamente
-    `C:\...\Steam.exe` tras el desacople. Excluir `steamwebhelper.exe`, resolver el backend por
-    los ficheros abiertos del cliente real (`lsof`) y no tratar un wineserver vivo como prueba
-    suficiente de que Steam está activo.
-16. **La terminación nativa no espera indefinidamente a la red.** Cancelar las tareas, serializar
-    reconciliación y cierre SQLite, y responder entonces a AppKit. Validar el cierre instalado
-    después de tocar este flujo.
-17. **No anidar layouts perezosos en el popover.** Las filas actuales usan `VStack` dentro del
-    único `ScrollView`; `LazyVStack` con grupos desplegables produjo un ciclo de AttributeGraph.
-    Tras cambios de UI, estresar Aprendizaje y comprobar respuesta, cierre y CPU en reposo.
-18. **Toda prueba de juego empieza con el preflight canónico.** Un bloqueo detiene el lanzamiento;
-    un aviso se conserva con el run. El diagnóstico solo observa: no termina procesos, elimina
-    archivos, modifica botellas ni concede por sí mismo una certificación.
-19. **Solo `/Applications/Regression.app` puede ser una aplicación descubrible.** Los artefactos
-    de desarrollo se desregistran y los rollbacks se conservan en directorios `.noindex`. La
-    sesión no termina hasta que `build/verify-canonical-installation.sh` confirma firma,
-    Spotlight, LaunchServices y ausencia de otras instalaciones. Ver
-    `docs/canonical-installation.md`.
-20. **Un `perfect` requiere custodia completa de procesos.** El PID del run debe ser la fila
-    representativa exacta, todos los procesos deben estar cerrados y la verificación debe ser
-    posterior. Cambiar después `run_processes` invalida el veredicto y su certificación.
-21. **No ocultar degradaciones de telemetría.** Rotación, truncado, lectura parcial, log ausente o
-    formato inesperado se propagan como incidencias tipadas y acotadas. Una nueva época de log no
-    puede consumir eventos antiguos para satisfacer una intención reciente.
-22. **Windows Media solo se repara para un juego exacto.** Exigir App ID canónico, inventario
-    anclado y fresco con WMA/WMV/ASF, Steam en reposo, payload autorizado, lease exclusivo, WAL,
-    backup, rollback, recibo y verificación posterior. Nunca ejecutar la reparación al abrir Steam
-    sin App ID ni tomar rutas o comandos desde SQLite.
-23. **El runtime público es un conjunto sellado.** Wrapper, wineserver, loader, `ntdll.so`,
-    `wine.inf`, las dos `ntdll.dll` PE y VC++/UCRT deben coincidir con hashes/permisos compilados.
-    Usar rutas absolutas al Wine y `WINESERVER` sellados, fijar `PATH` exactamente a
-    `/usr/bin:/bin:/usr/sbin:/sbin`, borrar `WINESERVERSOCKET` heredado y no aceptar Wine,
-    wineserver ni un `PATH` hostil del entorno.
-24. **El sobre de lanzamiento v17 precede al `spawn`.** Debe vincular App ID, run, preflight
-    reciente, generación fresca de requisitos e identidades cerradas. No guarda comandos ni
-    rutas. La telemetría puede adoptar el run y solo la verificación explícita lo completa. Las
-    políticas puras de retry/recuperación no ejecutan auto-retry ni rollback: ambas mutaciones
-    permanecen bloqueadas hasta integrar receta compilada, verificador y recibo. Steam observado
-    exige gesto; un recibo o telemetría cerrada nunca sustituyen la verificación funcional.
+14. Responder siempre en **español con tildes**; código y comentarios en el idioma del código existente.
+15. **No atribuir un Steam Wine solo por el texto de `ps`**: excluir `steamwebhelper.exe` y resolver
+    el backend por `lsof` del cliente real.
+16. **La terminación nativa no espera a la red**: cancelar tareas, serializar SQLite, responder a AppKit.
+17. **No anidar layouts perezosos en el popover** (`LazyVStack` + `DisclosureGroup` provocó un ciclo
+    de AttributeGraph al 99,7 % de CPU).
+18. **Toda prueba empieza por el preflight canónico**, que **solo observa**: no mata procesos, no
+    borra archivos, no modifica botellas, no certifica.
+19. **Solo `/Applications/Regression.app` puede ser descubrible.** `Regression.app/` del checkout es
+    staging de desarrollo, desregistrado; los rollbacks viven en `.noindex`.
+20. **Un `perfect` requiere custodia completa de procesos** (§1.3).
+21. **No ocultar degradaciones de telemetría**: rotación, truncado o formato inesperado se propagan
+    como incidencias tipadas.
+22. **Windows Media solo se repara para un App ID exacto**, con inventario fresco, Steam en reposo,
+    lease, WAL, backup, rollback y recibo.
+23. **El runtime público es un conjunto sellado**: hashes y permisos compilados de wrapper,
+    wineserver, loader, `ntdll.so`, `wine.inf`, ambas `ntdll.dll` PE y VC++/UCRT; `PATH` fijado a
+    `/usr/bin:/bin:/usr/sbin:/sbin` y `WINESERVERSOCKET` heredado eliminado.
+24. **El sobre de lanzamiento v17 precede al `spawn`** y no guarda comandos ni rutas. Auto-retry y
+    rollback automáticos permanecen **bloqueados** hasta tener receta compilada, verificador y recibo.
+25. **Un contexto OpenGL core 3.2+ sin bit forward-compatible se concede, no se rechaza.** macOS
+    solo expone ese contexto en forma forward-compatible, así que rechazarlo era un fallo cierto.
+    Corrección **general** en `winemac.drv`; `CX_FWD_COMPAT_GL_CTX` por ejecutable queda como
+    compatibilidad histórica y no se usa para blindar juegos nuevos. `REGRESSION_GL_CORE_FORWARD_COMPAT=0`
+    restaura el rechazo para A/B.
+26. **HashLink se detecta por contenido** (`hlboot.dat` + `libhl.dll` en la raíz del juego), nunca
+    por ejecutable ni App ID. Solo esos procesos resuelven stubs para las siete funciones GL de
+    compute/SSBO que macOS no ofrece sobre GL 4.1; los stubs no hacen el trabajo y registran un
+    `ERR` si alguna vez se invocan. Ver `docs/games/cursemark.md`.
 
 ---
 
-## 3. Cómo se trabaja aquí (resumen del protocolo de AGENTS.md)
+## 4. Cómo se trabaja aquí (protocolo)
 
-- **Una variable por cambio.** Si cambias dos cosas y algo se rompe (o se arregla), no
-  sabes cuál fue — eso ya ha costado días.
-- **Ciclo obligatorio**: reproducir → descartar entorno → backup → UNA variable →
-  validar matriz → solo entonces integrar (y nuevo backup si es mejor).
-- **Matriz de validación según lo tocado** (siempre con captura visual):
-  - Wine build / dlls wine-root → tienda + Moonlighter 2 + Palworld.
-  - Perfil aislado por ejecutable → juego objetivo completo + tienda + un perfil blindado no afectado.
-  - DXMT (d3d11/dxgi/d3d10core) → tienda (CEF) + Palworld (personajes visibles).
-  - DXVK / d3d9 → un juego D3D9 + tienda.
-  - winemac.drv / parche cross-process → tienda + clicks + Palworld.
-  - Launcher (env, rutas) → arranque desde cero: tienda + un juego.
-  - Registro botella → tienda + clicks + un juego.
-- **"Compila" o "el proceso corre" NO es validación.** Validar = captura visual mirada.
-- **PINs** (no tocar sin validar la matriz completa): DXMT v0.72 + parche cross-process
-  (`main` rompe los skeletal meshes de Palworld); wine CX 26.3.0 con `--prefix` horneado a
-  la app; dxgi de DXMT en pareja; Grim Dawn con D3DMetal completo y overrides builtin por
-  proceso; RetinaMode=n; 55 fuentes TTF en la botella; PE sin strip.
+- **Una variable por cambio.** Dos cambios a la vez ya han costado días en este proyecto.
+- **Ciclo obligatorio**: preflight → reproducir → descartar entorno → backup → UNA variable →
+  validar matriz → solo entonces integrar (y nuevo backup si el estado es mejor).
+
+**Matriz de validación** (siempre con captura visual mirada):
+
+| Si tocaste… | Valida |
+|---|---|
+| Wine (build, dlls de wine-root) | Steam tienda + Moonlighter 2 (Unity) + Palworld |
+| Perfil aislado por ejecutable | Juego objetivo completo + tienda + un perfil blindado no afectado |
+| DXMT (d3d11/dxgi/d3d10core) | Tienda (CEF) + Palworld (personajes visibles) |
+| DXVK / d3d9 | Un juego D3D9 + tienda |
+| `winemac.drv` / parche cross-process | Tienda + clicks precisos + Palworld |
+| Launcher (env, rutas) | Arranque desde cero: tienda + un juego |
+| Registro de la botella | Tienda + clicks + un juego |
+| Fuentes de la botella | Steam arranca (sin ellas crashea con assert Win32Font) |
+
+**"Compila" o "el proceso corre" NO es validación.**
+
+**PINs** (no tocar sin la matriz completa): DXMT v0.72 + parche cross-process · Wine CX 26.3.0 con
+`--prefix` horneado · dxgi de DXMT en pareja · perfiles D3DMetal por proceso · `RetinaMode=n` ·
+55 fuentes TTF en la botella · PE sin strip.
+
+**Definición de hecho**: (1) el problema no se reproduce, (2) la matriz de su fila pasa entera con
+capturas, (3) hay backup del estado nuevo si es mejor, (4) `README`/`AGENTS`/`CLAUDE` y el
+expediente reflejan el cambio.
 
 ---
 
-## 4. Build rápido
+## 5. Flujo: blindar un juego que el usuario reporta como roto
+
+1. **Expediente primero**: `regressionctl research-open` y `docs/games/<juego>.md` con síntoma,
+   hipótesis falsables y referencia. Registrar antes del primer cambio (`research-hypothesis`).
+2. **Preflight** (`regressionctl preflight APP_ID --backend regression`) y descarte ambiental.
+3. **Reproducir** el fallo y capturarlo; guardar el run fallido — el historial no se borra.
+4. **Una variable por experimento**, aislada (`research-stage`), con rollback y `research-gate`.
+5. **Implementar la corrección acotada**: parche de Wine por basename exacto, entrada en
+   `GameRuntimeProfileCatalog`, o receta en `CompiledGameRepairs`. Nunca variable global,
+   nunca registro global, nunca comando aprendido desde SQLite.
+6. **Tests**: `swift test` + los `Tests/Shell` afectados; añadir el caso de no regresión.
+7. **Matriz de validación** de la fila correspondiente, con capturas.
+8. **Certificar**: `regressionctl verify RUN_ID perfect`, refrescar la app y capturar la fila verde
+   `Verificado perfecto: Regression`. Si comparte limitación con la referencia histórica y no hay
+   modo de pantalla adecuado → `playableWithIssues`, **no** se maquilla como perfecto.
+9. **Publicar el conocimiento**: expediente en `docs/games/`, regla nueva en `AGENTS.md` (+ espejo
+   aquí), PIN si procede, fila en `docs/README.md` y en la tabla de compatibilidad del `README.md`,
+   y alta en `VerifiedGameCatalog` al blindarlo en una versión publicada.
+10. `mem_save` con la causa raíz, la receta y el run exacto.
+
+---
+
+## 6. Flujo: publicar una versión nueva
+
+La versión vive en **cinco sitios** que deben coincidir; `Tests/Shell/release-version-coherence.sh`
+es la puerta que lo verifica:
+
+`Scripts/install_regression.sh` · `Scripts/package_regression.sh` · `Scripts/package_release.sh` ·
+`Sources/RegressionCore/ComponentHealth.swift` (`supportedApplicationVersion`) · `Info.plist` del bundle.
 
 ```bash
-bash build/build-wine.sh    # wine CX 26.3.0 + parche winemac → instala en Regression.app
-bash build/install-game-profiles.sh  # verifica/fija Grim Dawn y firma el bundle
-bash build/verify-protected-state.sh --include-bottle  # comprueba todos los PIN sin lanzar juegos
-# DXMT: meson compile -C build/toolchain/dxmt72  (fuente: build/toolchain/dxmt-src, v0.72 + parches)
-Scripts/sign_regression.sh Regression.app  # SIEMPRE tras instalar
-open /Applications/Regression.app          # validación visual obligatoria
-bash build/verify-canonical-installation.sh # una única app descubrible
+swift test && for t in Tests/Shell/*.sh; do bash "$t" || echo "FALLA: $t"; done
+bash build/verify-protected-state.sh --include-bottle
+bash Scripts/package_regression.sh          # staging firmado
+bash Scripts/package_release.sh             # asset público portable (sin botella, GPTK ni rutas locales)
+bash build/verify-release-asset.sh ASSET CHECKSUM VERSION BUILD   # sobre el MISMO asset que se sube
+gh release create vX.Y.Z ...                # solo si el verificador pasa
+bash build/verify-public-installed-state.sh --release-X.Y.Z
+bash build/verify-canonical-installation.sh
 ```
 
-- Toolchain ya compilado en `toolchain/x86/` — no recompilar salvo cambio de versiones.
-- Detalles y receta completa: README §5. Scripts: `build/*.sh`.
-- La botella vive en `~/Library/Application Support/Regression/Bottles/Steam/` (datos del
-  usuario, fuera del repo).
+**No se publica ni se instala una versión que no supere `verify-release-asset.sh` sobre el asset
+exacto que recibirá GitHub.** Actualizar también la nota de contrato en `README.md`, `docs/README.md`,
+`AGENTS.md` y este archivo.
 
 ---
 
-## 5. Hoja de ruta actual
+## 7. Estado actual (2026-08-14)
 
-1. Mantener Regression como único backend estable y verificar visualmente cada ejecución desde
-   su menú; no inferir éxito por exit code.
-2. Validar Steam y los juegos desde la única biblioteca física dentro de la botella Regression,
-   manteniendo cada perfil blindado sin cambios globales.
-3. Conservar las observaciones históricas en SQLite/JSON y trasladar mejoras al motor propio solo
-   desde fuentes públicas o reimplementación legal, de forma aislada por juego.
-4. Mantener MoltenVK/D3D12 como investigación aislada del motor propio, sin invalidar FFT ni
-   otros juegos ya confirmados por rutas distintas. `cxcompatdb` no se consulta ni se replica.
-5. Menores: Wine Mono 10.4.1 cuando un juego real lo requiera y comparativas de rendimiento.
-
----
-
-## 6. Verificación rápida del estado bueno
-
-```bash
-open /Applications/Regression.app   # debe abrir Steam y renderizar la tienda
-swift -e 'import CoreGraphics
-let l = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as! [[String: Any]]
-for w in l { if let n = w[kCGWindowName as String] as? String, !n.isEmpty { print("\(w[kCGWindowNumber as String]!)  \(w[kCGWindowOwnerName as String]!)  \(n)") } }'
-screencapture -x -l <id> /tmp/check.png   # capturar y MIRAR la imagen
-```
+- **Release estable**: v1.12.4 (42), instalada en `/Applications/Regression.app`. Baseline
+  histórico: v1.11.0 (37).
+- **27 certificaciones activas** en SQLite (catálogo `2026-08-19.1` + certificaciones locales).
+  Con expediente público: Grim Dawn, Clair Obscur, DragonSword, Hell Clock, Heroes of Hammerwatch II,
+  Secrets of Grindea, Fields of Mistria, Titan Quest II, Forsaken Isle, Dragonwilds, Tinkerlands,
+  Moonlighter 2, Cross Blitz, Luminary Demo, Borderlands 4, Cursemark; más Cube World y FFT en el catálogo
+  integrado. Certificaciones locales **sin expediente todavía**: Sephiria, Dwarven Realms, Monsuta,
+  Luma Island, Crashlands 2, Tainted Grail, IRON NEST, Granblue Fantasy: Relink, Temtem: Swarm.
+- **Validados con incidencia**: Dragon's Dogma 2 (letterbox 16:9), Rotwood (superficie 1512×870).
+- **Investigación abierta**: FANTASY LIFE i, bloqueado por la política oficial de EAC en entornos
+  virtualizados (`208 Cannot run under Virtual Machine`). No se elude, no se oculta la VM, no se
+  presenta como compatible. La vía no-VM (FEXCore nativo arm64) sigue siendo I+D sin integración.
+- **Matriz de regresión permanente**: Steam/CEF, Palworld, Moonlighter 2 (control Unity) y la ruta D3D9.
+- La botella vive en `~/Library/Application Support/Regression/Bottles/Steam/` (datos del usuario,
+  fuera del repo).

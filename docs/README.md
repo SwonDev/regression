@@ -3,8 +3,8 @@
 Este índice separa la portada del producto de la documentación técnica. Empieza por la ruta que
 corresponda a tu objetivo y consulta `AGENTS.md` antes de cambiar runtime, perfiles o botella.
 
-> **Contrato actual del código fuente:** Regression **1.12.3 (41)** y SQLite **v17**.
-> **v1.12.3 (41)** es la release estable actual y **v1.11.0 (37)** el baseline histórico. Los documentos de
+> **Contrato actual del código fuente:** Regression **1.12.4 (42)** y SQLite **v17**.
+> **v1.12.4 (42)** es la release estable actual y **v1.11.0 (37)** el baseline histórico. Los documentos de
 > expedientes conservan versiones anteriores como evidencia y no deben reinterpretarse como el
 > estado de la release actual.
 
@@ -62,6 +62,7 @@ tampoco crea un veredicto perfecto.
 | Cross Blitz | [`cross-blitz.md`](games/cross-blitz.md) |
 | Luminary Demo | [`luminary-demo.md`](games/luminary-demo.md) |
 | Borderlands® 4 | [`borderlands-4.md`](games/borderlands-4.md) |
+| Cursemark | [`cursemark.md`](games/cursemark.md) |
 
 Cube World y FINAL FANTASY TACTICS — The Ivalice Chronicles también están certificados en el
 catálogo integrado; sus primeras evidencias son anteriores al formato actual de expediente.

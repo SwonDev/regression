@@ -67,7 +67,7 @@ public struct VerifiedGameCertification: Codable, Equatable, Identifiable, Senda
 /// motor ni sustituye la telemetría: evita perder el estado blindado al regenerar los datos
 /// locales. Solo se añade una entrada después de validar render, entrada, opciones y gameplay.
 public enum VerifiedGameCatalog {
-    public static let revision = "2026-08-14.5"
+    public static let revision = "2026-08-19.1"
 
     public static let all: [VerifiedGameCertification] = [
         VerifiedGameCertification(
@@ -248,6 +248,18 @@ public enum VerifiedGameCatalog {
                 "a2ec1490e641083b69d63e39f5d013a84760ccf50ca4fb8333b2843f191feeec",
             engineFingerprint:
                 "d7172135a42000c3c4f672663500351f27df9b89bea0d76551dc79be828b95d0"
+        ),
+        VerifiedGameCertification(
+            appID: "3219180",
+            gameName: "Cursemark",
+            backend: .regression,
+            verifiedAt: "2026-08-19",
+            evidence: "docs/games/cursemark.md",
+            sourceRunID: UUID(uuidString: "2798D808-2007-4C66-ADC9-D5E4A3AB1A11"),
+            configurationFingerprint:
+                "37acbb8104deaf303e4e3a276a12d92ae126c7478f0d1105c15123629efa5903",
+            engineFingerprint:
+                "37acbb8104deaf303e4e3a276a12d92ae126c7478f0d1105c15123629efa5903"
         )
     ]
 

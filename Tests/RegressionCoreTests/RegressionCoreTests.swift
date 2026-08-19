@@ -94,8 +94,27 @@ final class RegressionCoreTests: XCTestCase {
             borderlands?.engineFingerprint,
             "d7172135a42000c3c4f672663500351f27df9b89bea0d76551dc79be828b95d0"
         )
-        XCTAssertEqual(VerifiedGameCatalog.revision, "2026-08-14.5")
+        XCTAssertEqual(VerifiedGameCatalog.revision, "2026-08-19.1")
         XCTAssertNil(VerifiedGameCatalog.certification(for: "999999999"))
+    }
+
+    /// Cursemark quedó blindado por la corrección general del contexto OpenGL core
+    /// forward-compatible y por los stubs GL acotados a la familia HashLink, no por un perfil
+    /// propio. Un perfil por ejecutable volvería a esconder la clase de fallo detrás de un juego
+    /// concreto, que es exactamente lo que la corrección eliminó.
+    func testCursemarkIsCertifiedWithoutAnExecutableProfile() {
+        let cursemark = VerifiedGameCatalog.certification(for: "3219180")
+        XCTAssertEqual(cursemark?.gameName, "Cursemark")
+        XCTAssertEqual(cursemark?.backend, .regression)
+        XCTAssertEqual(cursemark?.evidence, "docs/games/cursemark.md")
+        XCTAssertEqual(
+            cursemark?.sourceRunID,
+            UUID(uuidString: "2798D808-2007-4C66-ADC9-D5E4A3AB1A11")
+        )
+        XCTAssertTrue(
+            GameRuntimeProfileCatalog.all.allSatisfy { $0.appID != "3219180" },
+            "Cursemark no puede recibir un perfil por ejecutable: su corrección es general."
+        )
     }
 
     func testNewerGlobalRuntimeNeverBecomesEligibleByVersionAlone() {

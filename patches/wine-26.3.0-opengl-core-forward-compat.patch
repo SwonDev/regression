@@ -1,0 +1,33 @@
+diff --git a/dlls/winemac.drv/opengl.c b/dlls/winemac.drv/opengl.c
+--- a/dlls/winemac.drv/opengl.c
++++ b/dlls/winemac.drv/opengl.c
+@@ -2184,12 +2184,26 @@
+     if ((major == 3 && (minor == 2 || minor == 3)) ||
+         (major == 4 && (minor == 0 || minor == 1)))
+     {
+-        /* CW Hack 24834 */
++        /* CW Hack 24834, generalized by Regression.  macOS only ever exposes
++         * core 3.2+ contexts in forward-compatible form, so a request that
++         * omits the bit cannot be satisfied any other way and always ended in a
++         * hard failure.  Granting it turns a certain failure into a working
++         * context and cannot regress a title that already runs today.  SDL2,
++         * bgfx and HashLink all request core 3.2 without the bit, so the former
++         * per-executable opt-in left every other title of that family broken.
++         * REGRESSION_GL_CORE_FORWARD_COMPAT=0 restores the strict rejection so
++         * an A/B comparison never requires rebuilding the driver. */
++        const char *fwd_compat_policy = getenv("REGRESSION_GL_CORE_FORWARD_COMPAT");
+         const char *fwd_compat_context = getenv("CX_FWD_COMPAT_GL_CTX");
++        BOOL grant_fwd_compat = !(fwd_compat_policy && fwd_compat_policy[0] == '0');
++
+         if (fwd_compat_context && fwd_compat_context[0] == '1')
++            grant_fwd_compat = TRUE;
++
++        if (grant_fwd_compat && !(flags & WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB))
+         {
+-            if (!(flags & WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB))
+-                flags |= WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB;
++            TRACE("granting a forward-compatible %u.%u core context\n", major, minor);
++            flags |= WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB;
+         }
+ 
+         if (!(flags & WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB))

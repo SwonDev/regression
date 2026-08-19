@@ -384,6 +384,25 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
     verificador y recibo durable. Steam observado, una receta desconocida o el límite agotado
     exige gesto explícito; cerrar telemetría o emitir un recibo nunca certifica render, entrada,
     opciones ni gameplay.
+50. **Un contexto OpenGL core 3.2+ sin el bit forward-compatible se concede, no se rechaza.**
+    macOS solo expone contextos core 3.2+ en forma forward-compatible, así que esa petición no
+    puede satisfacerse de otra manera y antes terminaba siempre en `ERROR_INVALID_VERSION_ARB`.
+    `macdrv_context_create` añade ahora el bit para cualquier proceso: convierte un fallo cierto en
+    un contexto válido y no puede degradar un título que ya funcione. Es una corrección **general**;
+    la variable `CX_FWD_COMPAT_GL_CTX` por ejecutable queda como compatibilidad histórica y no debe
+    usarse para blindar un juego nuevo. `REGRESSION_GL_CORE_FORWARD_COMPAT=0` restaura el rechazo
+    para una A/B sin recompilar. SDL2, bgfx y HashLink piden ese contexto exacto; ver
+    `patches/wine-26.3.0-opengl-core-forward-compat.patch` y `docs/games/cursemark.md`.
+51. **La familia HashLink se reconoce por contenido, nunca por ejecutable.** El runtime de
+    Heaps/HashLink resuelve toda su tabla de imports GL y se detiene en la primera entrada que no
+    resuelve, de modo que las siete funciones de compute/SSBO/indirect que macOS no puede ofrecer
+    por encima de GL 4.1 matan el juego antes del primer fotograma. `loader.c` exige `hlboot.dat` y
+    `libhl.dll` en la raíz del juego bajo `steamapps/common` antes de exportar
+    `REGRESSION_GL_HASHLINK_RUNTIME=1`, y solo entonces `unix_wgl.c` resuelve stubs que **no hacen
+    el trabajo** y registran un `ERR` la primera vez que se los invoca. Ningún otro motor los ve.
+    No convertir esto en una lista de App IDs ni ampliar el conjunto de funciones sin repetir la
+    matriz y comprobar en el log que ningún stub llega a ejecutarse. Run perfecto de Cursemark:
+    `2798D808-2007-4C66-ADC9-D5E4A3AB1A11`; ver `docs/games/cursemark.md`.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 
@@ -495,7 +514,7 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
 ## Estado rápido (2026-08-14)
 
 - **Contrato de este corte**: el código fuente y los empaquetadores convergen en Regression
-  **1.12.3 (41)** y SQLite **v17**. **v1.12.3 (41)** es la release estable actual y
+  **1.12.4 (42)** y SQLite **v17**. **v1.12.4 (42)** es la release estable actual y
   **v1.11.0 (37)** el baseline histórico; sus verificadores `public-1.11` se conservan como
   gates de transición, no como versión vigente. Toda release futura debe verificar el asset
   exacto y completar su matriz antes de publicarse.
