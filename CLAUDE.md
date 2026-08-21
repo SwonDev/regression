@@ -377,6 +377,10 @@ exacto que recibirá GitHub.** Actualizar también la nota de contrato en `READM
   no se presenta como compatible. La línea de trabajo es Proton sobre ARM en Mac (FEXCore nativo
   arm64) para los títulos con anticheat; vive en `tools/research/` y `work/` como **rama de
   investigación aparte**, no forma parte del producto y solo se integraría si diera resultados.
+- **D3D12 se enruta por evidencia, no por lista**: `D3D12MetalRouteDetector` propone ruta a
+  D3DMetal para los títulos que acreditan el Agility SDK en la estructura canónica de Unreal.
+  Las rutas compiladas mandan (DragonSword sigue en GPTK 3.0) y un Unity que solo empaqueta el
+  SDK en la raíz no se toca — el caso de Core Keeper, que funciona. `regressionctl d3d12-metal-routes`.
 - **Matriz de regresión permanente**: Steam/CEF, Palworld, Moonlighter 2 (control Unity) y la ruta D3D9.
 - ⚠️ **El lanzador instalado está por delante del contrato publicado.** `Contents/MacOS/regression-engine`
   incluye la ruta de Cloudheim y su hash ya no coincide con los PIN de 1.12.4 (fijados en ocho
