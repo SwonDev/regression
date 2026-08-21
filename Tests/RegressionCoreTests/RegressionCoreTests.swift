@@ -673,9 +673,16 @@ final class RegressionCoreTests: XCTestCase {
             launcherContents.components(separatedBy: "$component/3.0/wine").count - 1,
             4
         )
+        // Tres rutas compiladas a 4.0b2 más la que emite el detector por evidencia.
         XCTAssertEqual(
             launcherContents.components(separatedBy: "$component/4.0b2/wine").count - 1,
-            3
+            4
+        )
+        // El detector solo puede añadir juegos nuevos: nunca reasigna una ruta compilada,
+        // que es lo que mantiene a DragonSword en GPTK 3.0 y a los certificados intactos.
+        XCTAssertTrue(launcherContents.contains("d3d12-metal-routes"))
+        XCTAssertTrue(
+            launcherContents.contains("[[ \"$routed_basenames\" != *\"|$basename_candidate|\"* ]] || continue")
         )
         XCTAssertTrue(launcherContents.contains("prepare_external_apple_gptk_routes"))
         XCTAssertTrue(launcherContents.contains("REGRESSION_EXTERNAL_D3DMETAL_ROUTE_COUNT=\"$count\""))

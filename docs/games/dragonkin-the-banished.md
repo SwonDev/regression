@@ -85,6 +85,33 @@ Mientras el runtime instalado no incorpore la pieza 3, Dragonkin **funciona** pe
 fail-closed: si GPTK dejara de verificar, volvería a renderizar de menos en vez de negarse a
 arrancar.
 
+## Corrección general: detección por evidencia
+
+Dragonkin dejó de ser un caso particular. `D3D12MetalRouteDetector` recorre la biblioteca y
+propone ruta a D3DMetal para los títulos que **acreditan** Direct3D 12 con evidencia del propio
+juego: el **Agility SDK** (`D3D12Core.dll`) dentro de la estructura canónica de Unreal
+`<juego>/<proyecto>/Binaries/Win64/D3D12/`, junto a un **único** Shipping. El lanzador valida cada
+basename y lo publica solo si GPTK 4.0b2 verifica.
+
+Tres reglas lo mantienen seguro, y las tres tienen test:
+
+1. **Las rutas compiladas mandan.** Un juego ya fijado a una generación no se reasigna, así que
+   DragonSword conserva GPTK 3.0 y ningún certificado cambia de camino gráfico.
+2. **Traer el SDK no basta.** Un Unity que empaqueta `D3D12Core.dll` en la raíz —sin
+   `Binaries/Win64`— arranca en D3D11 y **no** se enruta. Es el caso real de **Core Keeper**, que
+   funciona y no puede tocarse: `testDetectorIgnoresUnityLayoutThatMerelyShipsTheAgilitySDK`.
+3. **Basename ambiguo, sin ruta.** Dos juegos con el mismo Shipping no reciben decisión gráfica,
+   igual que en el detector de bootstraps Unreal.
+
+Ejecutado contra la biblioteca real selecciona cuatro títulos: Dragonkin y DragonSword —ambos ya
+con ruta compilada— y Dune Awakening y FANTASY LIFE i, bloqueados por anticheat. Es decir, **hoy no
+cambia nada**: su valor es que el próximo Unreal con D3D12 se enrute solo en vez de renderizar de
+menos en silencio hasta que alguien lo note.
+
+```bash
+regressionctl d3d12-metal-routes   # basename<TAB>ruta del Shipping acreditado
+```
+
 ## Regla de no regresión
 
 Todo título D3D12 nuevo necesita **las tres piezas**. Añadir solo la ruta del lanzador deja el

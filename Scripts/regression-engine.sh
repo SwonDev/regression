@@ -136,6 +136,37 @@ prepare_external_apple_gptk_routes()
         export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_WINE_ROOT=$component/4.0b2/wine"
         count=$((count + 1))
     fi
+    # Rutas detectadas por evidencia del propio juego. Un título D3D12 sin ruta no
+    # falla: cae al d3d12 de Wine sobre MoltenVK y renderiza de menos, en silencio.
+    # Hasta aquí cada juego había que añadirlo a mano; el detector cierra ese hueco
+    # para los que lleguen. Las rutas compiladas de arriba mandan: un juego ya fijado
+    # a una generación concreta no se reasigna, así que nada validado cambia de camino.
+    if (( count > 0 )) && "$installer" --component 4.0b2 --verify-only >/dev/null 2>&1; then
+        local controller="$ROOT/Contents/SharedSupport/bin/regressionctl"
+        local detected basename_candidate route_path index
+
+        # macOS trae bash 3.2, sin namerefs: los basenames ya enrutados se acumulan
+        # en una cadena delimitada para poder comprobar la pertenencia sin `local -n`.
+        local routed_basenames="|"
+        for (( index = 0; index < count; index++ )); do
+            eval "routed_basenames=\"\${routed_basenames}\${REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${index}_EXECUTABLE-}|\""
+        done
+
+        if [[ -x "$controller" ]] && detected="$("$controller" d3d12-metal-routes 2>/dev/null)"; then
+            while IFS=$'\t' read -r basename_candidate route_path; do
+                [[ "$basename_candidate" =~ ^[A-Za-z0-9_-]+-Win64-Shipping\.exe$ ]] || continue
+                [[ "$route_path" == "$WINEPREFIX/drive_c/Program Files (x86)/Steam/steamapps/common/"* ]] || continue
+                [[ -f "$route_path" && ! -L "$route_path" ]] || continue
+                [[ "$routed_basenames" != *"|$basename_candidate|"* ]] || continue
+                (( count < 16 )) || break
+                export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_EXECUTABLE=$basename_candidate"
+                export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_WINE_ROOT=$component/4.0b2/wine"
+                routed_basenames="${routed_basenames}${basename_candidate}|"
+                count=$((count + 1))
+            done <<< "$detected"
+        fi
+    fi
+
     if (( count > 0 )); then
         export REGRESSION_EXTERNAL_D3DMETAL_ROUTE_COUNT="$count"
     fi

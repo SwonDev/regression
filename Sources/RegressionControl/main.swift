@@ -85,6 +85,14 @@ enum RegressionControl {
                 print("\(route.bootstrapExecutable)\t\(route.shippingURL.path)")
             }
 
+        case "d3d12-metal-routes":
+            let routes = try D3D12MetalRouteDetector.routes(
+                in: installations.regression.steamRootURL
+            )
+            for route in routes {
+                print("\(route.shippingExecutable)\t\(route.shippingURL.path)")
+            }
+
         case "windows-media-repair-plan":
             guard arguments.count == 4,
                   let appID = SteamAppID.normalized(arguments[1]),
