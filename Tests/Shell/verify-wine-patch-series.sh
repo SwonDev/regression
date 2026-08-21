@@ -2,7 +2,12 @@
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-ARCHIVE="${1:-/Users/adrianpereradelgado/Library/Caches/Regression/FOSS/crossover-sources-26.3.0.tar.gz}"
+# El tar oficial puede estar en la caché del operador o en la raíz del checkout.
+# Se acepta cualquiera de los dos: su SHA-256 se verifica igual justo debajo, así
+# que la procedencia queda acreditada sea cual sea la ruta.
+DEFAULT_ARCHIVE="$HOME/Library/Caches/Regression/FOSS/crossover-sources-26.3.0.tar.gz"
+[[ -f "$DEFAULT_ARCHIVE" ]] || DEFAULT_ARCHIVE="$ROOT/crossover-sources-26.3.0.tar.gz"
+ARCHIVE="${1:-$DEFAULT_ARCHIVE}"
 EXPECTED_SHA="ac99c8ca4b3848f3e81784135f023df266b61c2345726ea55a50b3e030dd6872"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/regression-wine-patch-series.XXXXXX")"
 

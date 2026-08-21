@@ -226,7 +226,7 @@ verify_release_1_12_development_runtime_authority()
         "df8f8a90bd48389fb7e5e0a32ea365e9d8d7e9ad49ad93e91cd7908d703f35ff:tools/wine/wine:bin/wine"
         "49cd7061cef48c1da9d3ddd030c15e20d7f8e9dc5657df3c1519c961efdc769a:server/wineserver:bin/wineserver"
         "9ca585914934ec3924f7a4f007e78fde9e249d98be3119b4dde73bfad3f5fe44:loader/wine:lib/wine/x86_64-unix/wine"
-        "b0a4958629c2661036b77d400b86a5a1d38e0ef8ac2477fe25984040a64315be:dlls/ntdll/ntdll.so:lib/wine/x86_64-unix/ntdll.so"
+        "3554fecc6b835c67f24445e508c86ff661bb0a8a739bc46e92797840a919c404:dlls/ntdll/ntdll.so:lib/wine/x86_64-unix/ntdll.so"
     )
 
     # El árbol de compilación pesa gigabytes y nunca se versiona, así que acaba
@@ -313,7 +313,7 @@ if $RELEASE_1_12_DEVELOPMENT_CANDIDATE || $CANDIDATE_1_12_2_BEFORE_RUNTIME_CONTR
     if $CANDIDATE_1_12_2_BEFORE_RUNTIME_CONTROL_FIX; then
         expected_engine_hash="38be0b5fd0bed42e5467f9a61c5c972733898523eeac3e34e83eb5317efb3edf"
     else
-        expected_engine_hash="8e8aad9628e9eb4f85848aba0538d10bd3c4fa242e7d96f6a826b93830329eff"
+        expected_engine_hash="c2a55bb07200d68a08fc7a1478826abd4d99460333543302ba00a552d7ca6ee6"
     fi
     verify_hash "$expected_engine_hash" \
         "Contents/MacOS/regression-engine"
@@ -370,7 +370,7 @@ elif $BEFORE_THREE_GAMES_PROMOTION || $BEFORE_DD2_PROMOTION || \
     verify_hash 5d99cae95a60c84b8bc9759736ed9e9bec1dafe9b9af8a8190f26c232781ec60 \
         "Contents/MacOS/regression-engine"
 else
-    verify_hash 8e8aad9628e9eb4f85848aba0538d10bd3c4fa242e7d96f6a826b93830329eff \
+    verify_hash c2a55bb07200d68a08fc7a1478826abd4d99460333543302ba00a552d7ca6ee6 \
         "Contents/MacOS/regression-engine"
 fi
 if $RELEASE_1_11_DEVELOPMENT_CANDIDATE; then

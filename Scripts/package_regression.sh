@@ -7,8 +7,8 @@ MACOS_DIR="$APP/Contents/MacOS"
 PLIST="$APP/Contents/Info.plist"
 RESOURCES_DIR="$APP/Contents/Resources"
 STATE_ICON_DIR="$ROOT/assets/menubar/states"
-VERSION="1.12.4"
-BUILD_NUMBER="42"
+VERSION="1.12.5"
+BUILD_NUMBER="43"
 BACKUP_ROOT="$ROOT/backups/native-packaging"
 COMPATIBILITY_ROOT="${REGRESSION_COMPATIBILITY_ROOT:-$HOME/Library/Application Support/Regression/Compatibility}"
 COMPATIBILITY_DB="$COMPATIBILITY_ROOT/compatibility.sqlite"
@@ -64,7 +64,7 @@ verify_prepackage_state()
     source_hash="$(shasum -a 256 "$source_engine" | awk '{print $1}')"
     installed_ntdll_hash="$(shasum -a 256 "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so" | awk '{print $1}')"
 
-    if [[ "$installed_hash" == "8e8aad9628e9eb4f85848aba0538d10bd3c4fa242e7d96f6a826b93830329eff" &&
+    if [[ "$installed_hash" == "c2a55bb07200d68a08fc7a1478826abd4d99460333543302ba00a552d7ca6ee6" &&
           "$source_hash" == "$installed_hash" ]]; then
         # La línea 1.12 sustituye el conjunto entero de arranque Wine después
         # del backup. El bundle previo no se puede acreditar aún con ese builder,
@@ -82,7 +82,7 @@ verify_prepackage_state()
         }
         codesign --verify --deep --strict "$APP"
     elif [[ "$installed_hash" == "38be0b5fd0bed42e5467f9a61c5c972733898523eeac3e34e83eb5317efb3edf" &&
-          "$source_hash" == "8e8aad9628e9eb4f85848aba0538d10bd3c4fa242e7d96f6a826b93830329eff" ]]; then
+          "$source_hash" == "c2a55bb07200d68a08fc7a1478826abd4d99460333543302ba00a552d7ca6ee6" ]]; then
         verify_protected_state candidate-1.12.2-before-runtime-control-fix
     elif [[ "$installed_hash" == "767c2c54bfd395ad957f394038c5a930abc46296bb471d4696e186b9a68166f4" &&
           "$source_hash" == "38be0b5fd0bed42e5467f9a61c5c972733898523eeac3e34e83eb5317efb3edf" ]]; then

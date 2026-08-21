@@ -93,7 +93,7 @@ fi
     || fail "build público no soportado"
 
 if [[ "$MODE" == "--release-1.12.2" || "$MODE" == "--release-1.12.3" || "$MODE" == "--release-1.12.4" ]]; then
-    verify_hash 8e8aad9628e9eb4f85848aba0538d10bd3c4fa242e7d96f6a826b93830329eff \
+    verify_hash c2a55bb07200d68a08fc7a1478826abd4d99460333543302ba00a552d7ca6ee6 \
         "$APP/Contents/MacOS/regression-engine"
     verify_hash 3f8de8c0045104d3fea31a8bb4c3bd6f1c3eead55c9f847e2b5dfac0498ec77c \
         "$APP/Contents/SharedSupport/wine-root/bin/wine"
@@ -102,7 +102,7 @@ if [[ "$MODE" == "--release-1.12.2" || "$MODE" == "--release-1.12.3" || "$MODE" 
     verify_hash 30593a00cbb40cb3f0a47a30964d52f35beed8c864e38d985d97eb07b7e62800 \
         "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/wine"
     if [[ "$MODE" == "--release-1.12.3" || "$MODE" == "--release-1.12.4" ]]; then
-        verify_hash 00b29dbede3ae10a61d5c211831aca4d375d250426b0ed1eb5eb386f794891ce \
+        verify_hash e6fc02dc04aace40eac4bd2700c6beaf5a235f2ab6bd40ecf60ba6b9a0b52f01 \
             "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
     else
         verify_hash f17cebf085a0a746224e61b4fc49341f7a0cec48741c5f12d1cc84a4dcd0ba5d \

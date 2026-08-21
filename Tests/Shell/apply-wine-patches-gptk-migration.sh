@@ -3,7 +3,11 @@ set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CONTRACT="$ROOT/build/crossover-foss-26.3.0.contract"
-ARCHIVE="${1:-${REGRESSION_CROSSOVER_FOSS_ARCHIVE:-$HOME/Library/Caches/Regression/FOSS/crossover-sources-26.3.0.tar.gz}}"
+# El tar oficial vale desde la caché del operador o desde la raíz del checkout:
+# su SHA-256 se acredita contra el contrato, así que la ruta no es la autoridad.
+DEFAULT_ARCHIVE="$HOME/Library/Caches/Regression/FOSS/crossover-sources-26.3.0.tar.gz"
+[[ -f "$DEFAULT_ARCHIVE" ]] || DEFAULT_ARCHIVE="$ROOT/crossover-sources-26.3.0.tar.gz"
+ARCHIVE="${1:-${REGRESSION_CROSSOVER_FOSS_ARCHIVE:-$DEFAULT_ARCHIVE}}"
 REAL_WINE_SOURCE="${REGRESSION_WINE_SOURCE:-$ROOT/sources-26.3.0/wine}"
 TMP_ROOT="$(/usr/bin/mktemp -d /tmp/regression-wine-patch-gptk.XXXXXX)"
 trap '/usr/bin/find "$TMP_ROOT" -depth -delete' EXIT
