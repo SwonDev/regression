@@ -49,9 +49,15 @@ anteriores. Tras un run realmente clasificado como `crashed`, `TelemetryCoordina
 
 La activación tipada no contiene rutas, variables, DLL arbitrarias, URLs ni comandos. Wine acepta
 solo un basename PE validado, una receta enumerada en código y la acción cerrada
-`EOSOVH-Win64-Shipping=disabled`. Así, un futuro Unreal con la misma colisión demostrada puede
-autorrepararse en el siguiente arranque sin convertir SQLite ni un log controlado por el juego en
+`EOSOVH-Win64-Shipping=disabled`. Nada de esto convierte SQLite ni un log controlado por el juego en
 una vía de ejecución.
+
+> **Corrección (2026-08-21).** Este expediente afirmaba que «un futuro Unreal con la misma colisión
+> demostrada puede autorrepararse en el siguiente arranque». **Con el código actual no ocurre.**
+> `CompiledCrashRepairLearner.learn()` detecta y devuelve `nil` sin mutar la botella, porque la ruta
+> v1 del loader solo conoce basename+receta y no puede aislar dos App ID con el mismo ejecutable
+> (regla 24 de `AGENTS.md`). Cloudheim lo demostró: misma colisión, clasificador acertando, y aun
+> así hubo que blindarlo a mano. Ver [`cloudheim.md`](cloudheim.md).
 
 Dragonwilds conserva además una ruta compilada inicial por ejecutable exacto para que una
 instalación nueva reciba la corrección desde el primer lanzamiento. Tanto el botón de Regression

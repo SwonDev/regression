@@ -40,7 +40,7 @@ public enum AppleGPTKVersion: String, Equatable, Sendable {
 }
 
 public enum GameRuntimeProfileCatalog {
-    public static let revision = "2026-08-14.1"
+    public static let revision = "2026-08-21.1"
 
     public static let all: [CompiledGameRuntimeProfile] = [
         CompiledGameRuntimeProfile(
@@ -214,6 +214,26 @@ public enum GameRuntimeProfileCatalog {
             identifier: "unreal-d3d11-dual-overlay-isolation",
             revision: 1,
             executable: "rsdragonwilds-win64-shipping.exe",
+            requiresActiveSteamClient: true,
+            configurationValues: [
+                "profile.scope": "exact-process",
+                "profile.engine.family": "unreal",
+                "profile.graphics.api": "d3d11",
+                "profile.repair.id": CompiledRepairRecipe.unrealD3D11DualOverlayIsolation.rawValue,
+                "profile.repair.detector": "strict-crash-stack-v1",
+                "profile.repair.learning": "typed-executable-recipe-activation-v1",
+                "profile.repair.rollback": "private-activation-snapshot",
+                "profile.dll.disabled": "eosovh-win64-shipping",
+                "profile.dll.policy": "disabled-only-in-matched-process",
+                "profile.launcher.entrypoints": "regression,steam",
+                "profile.router.contract": "compiled-process-scoped-dll-isolation-v1"
+            ]
+        ),
+        CompiledGameRuntimeProfile(
+            appID: "2070270",
+            identifier: "cloudheim.unreal-d3d11-dual-overlay-isolation",
+            revision: 1,
+            executable: "cloudheimsteam-win64-shipping.exe",
             requiresActiveSteamClient: true,
             configurationValues: [
                 "profile.scope": "exact-process",

@@ -24,6 +24,7 @@ corresponda a tu objetivo y consulta `AGENTS.md` antes de cambiar runtime, perfi
 | Auditar la aplicación Swift/macOS | [Auditoría nativa](native-app-audit.md) |
 | Entender el canal de autoactualización | [Actualizaciones automáticas](automatic-updates.md) |
 | Mantener una única app instalada | [Instalación canónica](canonical-installation.md) |
+| Aprovechar el motor publicado de GameHub for Mac | [Expediente gamesir-labs](research/gamehub-gamesir-labs.md) |
 | Aplicar las reglas operativas | [AGENTS.md](../AGENTS.md) |
 | Consultar el contrato visual | [DESIGN.md](../DESIGN.md) |
 
@@ -87,6 +88,15 @@ compilado con el run exacto que la respalda.
 | Granblue Fantasy: Relink | 881020 |
 | Temtem: Swarm | 2510960 |
 
+### Reparados, pendientes de certificación
+
+El arranque está corregido y confirmado por el usuario, pero falta la matriz funcional completa con
+el run cerrado. **No** tienen entrada en `VerifiedGameCatalog` hasta entonces.
+
+| Juego | Corrección | Documento |
+|---|---|---|
+| Cloudheim | Overlay de Epic aislado en el proceso Shipping | [`cloudheim.md`](games/cloudheim.md) |
+
 ### Validados con incidencia
 
 | Juego | Incidencia conservada | Documento |
@@ -99,6 +109,16 @@ compilado con el run exacto que la respalda.
 | Juego | Estado | Documento |
 |---|---|---|
 | FANTASY LIFE i | Bloqueo oficial de EAC en VM; sin certificación | [`fantasy-life-i.md`](games/fantasy-life-i.md) |
+
+## Investigación de terceros
+
+Estudio de código publicado por otros proyectos que resuelven el mismo problema. Es material de
+lectura y planificación: **no entra en el producto sin pasar la matriz de validación** de
+`AGENTS.md`, con su procedencia y su licencia registradas.
+
+| Fuente | Qué aporta | Documento |
+|---|---|---|
+| GameHub for Mac (gamesir-labs) | Overlays de Wine por proceso, D3D12/D3D9 en DXMT, catálogo de parches por juego | [`gamehub-gamesir-labs.md`](research/gamehub-gamesir-labs.md) |
 
 ## Ciclo de una corrección
 

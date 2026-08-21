@@ -12,6 +12,9 @@ assets/icon/vectorized_*.svg
 dxdiag_out.txt
 *.log
 
+# Laboratorio de investigacion: clones de terceros y evidencia de campo, fuera del repo
+work/
+
 # Artefactos pesados y material de terceros NO redistribuible (ver NOTICE.md)
 Regression.app/
 backups/

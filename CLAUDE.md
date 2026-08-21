@@ -357,6 +357,16 @@ exacto que recibirá GitHub.** Actualizar también la nota de contrato en `READM
   baseline general desde el primer lanzamiento, sin perfil ni receta, así que no hay investigación
   que contar—: Sephiria, Dwarven Realms, Monsuta, Luma Island, Crashlands 2, Tainted Grail,
   IRON NEST, Granblue Fantasy: Relink y Temtem: Swarm.
+- **Reparados y pendientes de certificar**: **Cloudheim** (2070270). El overlay de Epic
+  (`EOSOVH`) y el de Steam encadenaban hooks sobre el `d3d11` de DXMT y saltaban a un puntero
+  corrupto. Se aísla `EOSOVH-Win64-Shipping` **solo** dentro de `CloudheimSteam-Win64-Shipping.exe`
+  (perfil compilado + ruta en el lanzador). Confirmado por el usuario; falta la matriz funcional
+  con el run cerrado. Ver `docs/games/cloudheim.md`.
+- **Bloqueado por anticheat**: **Dune: Awakening** (1172710) lleva **BattlEye**. Misma categoría
+  que FANTASY LIFE i: no se elude ni se presenta como compatible.
+- **Pendientes de investigar**: TMNT: Shredder's Revenge (1361510, motor **FNA**, lleva EOSSDK:
+  probable misma colisión) y Dragonkin: The Banished (1863430, arranca y se juega; texturas y
+  escenas que no cargan — problema de render, distinto).
 - **Validados con incidencia**: Dragon's Dogma 2 (letterbox 16:9), Rotwood (superficie 1512×870).
 - **Investigación abierta y separada**: FANTASY LIFE i, bloqueado por la política oficial de EAC en
   entornos virtualizados (`208 Cannot run under Virtual Machine`). No se elude, no se oculta la VM,
@@ -364,5 +374,9 @@ exacto que recibirá GitHub.** Actualizar también la nota de contrato en `READM
   arm64) para los títulos con anticheat; vive en `tools/research/` y `work/` como **rama de
   investigación aparte**, no forma parte del producto y solo se integraría si diera resultados.
 - **Matriz de regresión permanente**: Steam/CEF, Palworld, Moonlighter 2 (control Unity) y la ruta D3D9.
+- ⚠️ **El lanzador instalado está por delante del contrato publicado.** `Contents/MacOS/regression-engine`
+  incluye la ruta de Cloudheim y su hash ya no coincide con los PIN de 1.12.4 (fijados en ocho
+  archivos). Es deliberado: se resuelve al publicar la próxima versión, **nunca** reescribiendo los
+  PIN de una release ya publicada. Backup en `backups/launcher-pre-cloudheim-20260821-195727/`.
 - La botella vive en `~/Library/Application Support/Regression/Bottles/Steam/` (datos del usuario,
   fuera del repo).

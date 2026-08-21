@@ -1,0 +1,11 @@
+# Fuentes de terceros vigiladas (ver docs/research/gamehub-gamesir-labs.md).
+# Formato: repo<TAB>rama<TAB>commit_fijado<TAB>nota
+# El PIN es el estado REVISADO. Que upstream avance no autoriza nada: solo abre
+# una revision que debe pasar la matriz de validacion de AGENTS.md.
+gamesir-labs/dxmt	main	98bc4899e0fff63c5956062c62b752581199be7a	D3D12 sobre Metal 4 (macOS 26+)
+gamesir-labs/dxmt	dev-main	dd99192a1c2537c1c964e7e525336985668854f2	D3D9 nativo sobre Metal
+gamesir-labs/dxmt	test-dev-12	11b0ffed5751afe91b3b4c473a592ed91f1c0911	Suite de conformidad D3D12
+gamesir-labs/wine	main	316bf39a51ebf599bc755709a441e17539238874	Proton macOS: overlays por proceso y parches por juego
+gamesir-labs/apitrace	main	92e064a2bd65b56dfded1bdf434c14d9a8cb2c54	Trazado D3D dentro de Wine (solo diagnostico)
+Lifeisawful/rosettax87_jit	main	a34993d909c563012f7f92482832f6e3130ab1df	Rosetta x87 + JIT (exige entitlement de depurador)
+3Shain/dxmt	main	UPSTREAM	DXMT original, referencia de version
