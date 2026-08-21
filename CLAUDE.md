@@ -364,9 +364,13 @@ exacto que recibirá GitHub.** Actualizar también la nota de contrato en `READM
   con el run cerrado. Ver `docs/games/cloudheim.md`.
 - **Bloqueado por anticheat**: **Dune: Awakening** (1172710) lleva **BattlEye**. Misma categoría
   que FANTASY LIFE i: no se elude ni se presenta como compatible.
-- **Pendientes de investigar**: TMNT: Shredder's Revenge (1361510, motor **FNA**, lleva EOSSDK:
-  probable misma colisión) y Dragonkin: The Banished (1863430, arranca y se juega; texturas y
-  escenas que no cargan — problema de render, distinto).
+- **Reparados y pendientes de certificar**: **Dragonkin: The Banished** (1863430). Es UE5 con
+  **D3D12** y no tenía ruta a D3DMetal, así que caía al `d3d12` de Wine sobre vkd3d/MoltenVK y
+  perdía toda la geometría estática (edificios, props, decoración) mientras terreno, personajes y
+  HUD sí pintaban. Se le asigna **Apple GPTK 4.0b2** por proceso exacto. Confirmado por el
+  usuario. Ver `docs/games/dragonkin-the-banished.md`.
+- **Pendiente de investigar**: TMNT: Shredder's Revenge (1361510, motor **FNA**, lleva EOSSDK:
+  probable misma colisión de overlay que Cloudheim).
 - **Validados con incidencia**: Dragon's Dogma 2 (letterbox 16:9), Rotwood (superficie 1512×870).
 - **Investigación abierta y separada**: FANTASY LIFE i, bloqueado por la política oficial de EAC en
   entornos virtualizados (`208 Cannot run under Virtual Machine`). No se elude, no se oculta la VM,

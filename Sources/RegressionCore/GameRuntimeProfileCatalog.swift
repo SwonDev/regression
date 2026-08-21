@@ -188,6 +188,27 @@ public enum GameRuntimeProfileCatalog {
             ]
         ),
         CompiledGameRuntimeProfile(
+            appID: "1863430",
+            identifier: "dragonkin-the-banished.apple-gptk-4.0b2-shipping",
+            revision: 1,
+            executable: "dragonkinthebanished-win64-shipping.exe",
+            requiresActiveSteamClient: true,
+            configurationValues: [
+                "profile.scope": "exact-app-process",
+                "profile.engine.family": "unreal",
+                "profile.graphics.api": "d3d12",
+                "profile.graphics.backend": "d3dmetal",
+                "profile.graphics.route": "complete",
+                "profile.runtime-root": "components/apple-gptk/4.0b2",
+                "profile.component": "apple-gptk",
+                "profile.component.version": "4.0b2",
+                "profile.component.repair": "manifest-verified",
+                "profile.component.distribution": "external-apple-authorized",
+                "profile.launcher.entrypoints": "regression,steam",
+                "profile.router.contract": "compiled-exact-process-d3dmetal-v1"
+            ]
+        ),
+        CompiledGameRuntimeProfile(
             appID: "1154030",
             identifier: "titan-quest-2.apple-gptk-4.0b2-steam-shipping",
             revision: 9,

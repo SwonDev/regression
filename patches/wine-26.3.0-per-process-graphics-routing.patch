@@ -84,7 +84,8 @@
 +           regression_executable_is( "dd2.exe" ) ||
 +           regression_executable_is( "fft_enhanced.exe" ) ||
 +           regression_executable_is( "tq2-win64-shipping.exe" ) ||
-+           regression_executable_is( "borderlands4.exe" );
++           regression_executable_is( "borderlands4.exe" ) ||
++           regression_executable_is( "dragonkinthebanished-win64-shipping.exe" );
 +}
 +
 +static const char *regression_external_d3dmetal_root(void)

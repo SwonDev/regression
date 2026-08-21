@@ -635,6 +635,7 @@ final class RegressionCoreTests: XCTestCase {
             "fft_enhanced.exe",
             "tq2-win64-shipping.exe",
             "borderlands4.exe",
+            "dragonkinthebanished-win64-shipping.exe",
         ]
 
         let patchURL = repositoryRoot
@@ -674,7 +675,7 @@ final class RegressionCoreTests: XCTestCase {
         )
         XCTAssertEqual(
             launcherContents.components(separatedBy: "$component/4.0b2/wine").count - 1,
-            2
+            3
         )
         XCTAssertTrue(launcherContents.contains("prepare_external_apple_gptk_routes"))
         XCTAssertTrue(launcherContents.contains("REGRESSION_EXTERNAL_D3DMETAL_ROUTE_COUNT=\"$count\""))

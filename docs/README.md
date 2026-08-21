@@ -96,6 +96,7 @@ el run cerrado. **No** tienen entrada en `VerifiedGameCatalog` hasta entonces.
 | Juego | Corrección | Documento |
 |---|---|---|
 | Cloudheim | Overlay de Epic aislado en el proceso Shipping | [`cloudheim.md`](games/cloudheim.md) |
+| Dragonkin: The Banished | D3D12 enrutado a D3DMetal (GPTK 4.0b2) por proceso exacto | [`dragonkin-the-banished.md`](games/dragonkin-the-banished.md) |
 
 ### Validados con incidencia
 
