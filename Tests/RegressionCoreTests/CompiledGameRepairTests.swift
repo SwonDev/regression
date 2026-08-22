@@ -786,19 +786,68 @@ final class CompiledGameRepairTests: XCTestCase {
         XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: outside.path).isEmpty)
     }
 
-    func testCompiledActivationIsFailClosedUntilTheLoaderSupportsAppIDIsolation() throws {
+    func testCompiledActivationWritesAnIsolatedV2Record() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("regression-activation-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
 
-        XCTAssertThrowsError(try CompiledRepairActivationStore.activate(
+        let report = try XCTUnwrap(CompiledRepairActivationStore.activate(
             appID: "424242",
             executable: #"C:\Games\Future\Future-Win64-Shipping.exe"#,
             recipe: .unrealD3D11DualOverlayIsolation,
             in: root
         ))
+        XCTAssertEqual(report.activation.appID, "424242")
+        XCTAssertEqual(report.activation.executable, "future-win64-shipping.exe")
+        XCTAssertNotEqual(report.beforeFingerprint, report.afterFingerprint)
+
+        // El registro nombra App ID, basename y receta: nada más puede viajar hasta Wine.
+        let written = try String(
+            contentsOf: CompiledRepairActivationStore.activationURL(in: root),
+            encoding: .utf8
+        )
+        XCTAssertEqual(
+            written,
+            "REGRESSION-COMPILED-REPAIRS\t2\n424242\tfuture-win64-shipping.exe\tunreal-d3d11-dual-overlay-isolation-v1\n"
+        )
+
+        let attributes = try FileManager.default.attributesOfItem(
+            atPath: CompiledRepairActivationStore.activationURL(in: root).path
+        )
+        XCTAssertEqual(attributes[.posixPermissions] as? NSNumber, 0o600)
+
+        // Repetir el aprendizaje no reescribe la botella ni duplica registros.
+        XCTAssertNil(try CompiledRepairActivationStore.activate(
+            appID: "424242",
+            executable: "Future-Win64-Shipping.exe",
+            recipe: .unrealD3D11DualOverlayIsolation,
+            in: root
+        ))
+        XCTAssertEqual(try CompiledRepairActivationStore.activations(in: root).count, 1)
+    }
+
+    /// El formato v1 no identifica el App ID, así que no puede ampliarse ni convivir: mientras
+    /// exista un fichero heredado vivo, ninguna activación nueva entra en la botella.
+    func testCompiledActivationRefusesLegacyFormats() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-activation-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent(".regression", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+
         XCTAssertThrowsError(try CompiledRepairActivationStore.activate(
+            executable: "Future-Win64-Shipping.exe",
+            recipe: .unrealD3D11DualOverlayIsolation,
+            in: root
+        ))
+
+        try Data("REGRESSION-COMPILED-REPAIRS\t1\nfuture-win64-shipping.exe\tunreal-d3d11-dual-overlay-isolation-v1\n".utf8)
+            .write(to: CompiledRepairActivationStore.legacyActivationURL(in: root))
+        XCTAssertThrowsError(try CompiledRepairActivationStore.activate(
+            appID: "424242",
             executable: "Future-Win64-Shipping.exe",
             recipe: .unrealD3D11DualOverlayIsolation,
             in: root
@@ -806,8 +855,22 @@ final class CompiledGameRepairTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(
             atPath: CompiledRepairActivationStore.activationURL(in: root).path
         ))
+    }
+
+    func testCompiledActivationRejectsAnInvalidAppID() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-activation-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        XCTAssertThrowsError(try CompiledRepairActivationStore.activate(
+            appID: "no-es-un-app-id",
+            executable: "Future-Win64-Shipping.exe",
+            recipe: .unrealD3D11DualOverlayIsolation,
+            in: root
+        ))
         XCTAssertFalse(FileManager.default.fileExists(
-            atPath: CompiledRepairActivationStore.legacyActivationURL(in: root).path
+            atPath: CompiledRepairActivationStore.activationURL(in: root).path
         ))
     }
 
@@ -903,7 +966,7 @@ final class CompiledGameRepairTests: XCTestCase {
         ))
     }
 
-    func testCrashLearnerCompatibilityAPIDoesNotMutateWithoutAnIsolatedLoader() throws {
+    func testCrashLearnerActivatesTheRecognisedRecipe() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("regression-crash-learning-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -928,6 +991,22 @@ final class CompiledGameRepairTests: XCTestCase {
             ofItemAtPath: crashURL.path
         )
 
+        let report = try XCTUnwrap(CompiledCrashRepairLearner.learn(
+            appID: "424242",
+            executable: #"C:\Games\Future\Future-Win64-Shipping.exe"#,
+            bottleURL: root,
+            startedAt: now.addingTimeInterval(-10),
+            endedAt: now.addingTimeInterval(1)
+        ))
+        XCTAssertEqual(report.recipe, .unrealD3D11DualOverlayIsolation)
+        XCTAssertEqual(report.appID, "424242")
+        XCTAssertEqual(report.activation.activation.executable, "future-win64-shipping.exe")
+
+        let activations = try CompiledRepairActivationStore.activations(in: root)
+        XCTAssertEqual(activations.count, 1)
+        XCTAssertEqual(activations[0].appID, "424242")
+
+        // Volver a aprender el mismo fallo no vuelve a mutar la botella.
         XCTAssertNil(try CompiledCrashRepairLearner.learn(
             appID: "424242",
             executable: #"C:\Games\Future\Future-Win64-Shipping.exe"#,
@@ -935,12 +1014,7 @@ final class CompiledGameRepairTests: XCTestCase {
             startedAt: now.addingTimeInterval(-10),
             endedAt: now.addingTimeInterval(1)
         ))
-        XCTAssertFalse(FileManager.default.fileExists(
-            atPath: CompiledRepairActivationStore.activationURL(in: root).path
-        ))
-        XCTAssertFalse(FileManager.default.fileExists(
-            atPath: CompiledRepairActivationStore.legacyActivationURL(in: root).path
-        ))
+        XCTAssertEqual(try CompiledRepairActivationStore.activations(in: root).count, 1)
     }
 
     func testCrashLearnerRejectsAConcurrentCrashFromAnotherExecutable() throws {

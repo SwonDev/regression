@@ -283,7 +283,7 @@ for required in \
     REGRESSION_BOOTSTRAP_REDIRECT_COUNT \
     REGRESSION_WINDOWS_MEDIA_PROFILE \
     REGRESSION_PROCESS_DLL_ISOLATION_ROUTE_COUNT \
-    compiled-repair-activations-v1.tsv
+    compiled-repair-activations-v2.tsv
 do
     strings -a "$WINE_ROOT/lib/wine/x86_64-unix/ntdll.so" \
         | grep -F "$required" >/dev/null \

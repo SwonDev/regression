@@ -692,7 +692,7 @@ verify_staged_release() {
         REGRESSION_EXTERNAL_D3DMETAL_ROUTE_COUNT \
         REGRESSION_WINDOWS_MEDIA_PROFILE \
         REGRESSION_PROCESS_DLL_ISOLATION_ROUTE_COUNT \
-        compiled-repair-activations-v1.tsv
+        compiled-repair-activations-v2.tsv
     do
         /usr/bin/strings -a "$ntdll" | /usr/bin/grep -F "$required" >/dev/null || {
             fail "El runtime descargado no contiene el contrato requerido: $required"

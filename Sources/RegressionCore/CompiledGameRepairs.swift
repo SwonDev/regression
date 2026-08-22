@@ -231,6 +231,16 @@ public enum CompiledRepairActivationStore {
         }
     }
 
+    /// Escribe una activación v2 en la botella para que el loader la aplique en el siguiente
+    /// arranque del proceso exacto.
+    ///
+    /// El registro solo puede nombrar un App ID, un basename PE y una receta enumerada en
+    /// código: nunca una ruta, una DLL arbitraria, un argumento ni un comando. Wine acredita
+    /// además que el proceso pertenece de verdad a ese App ID leyendo el `appmanifest` que
+    /// Steam mantiene, así que dos juegos con el mismo ejecutable no pueden confundirse.
+    ///
+    /// Devuelve `nil` cuando la activación ya estaba presente: repetir un aprendizaje no
+    /// reescribe la botella ni multiplica registros.
     @discardableResult
     public static func activate(
         appID: String,
@@ -238,13 +248,110 @@ public enum CompiledRepairActivationStore {
         recipe: CompiledRepairRecipe,
         in bottleURL: URL
     ) throws -> CompiledRepairActivationReport? {
-        _ = appID
-        _ = executable
-        _ = recipe
-        _ = bottleURL
-        throw RegressionCoreError.invalidEvidence(
-            "la activación automática está bloqueada hasta que Wine aísle App ID y basename"
+        guard let normalizedAppID = SteamAppID.normalized(appID) else {
+            throw RegressionCoreError.invalidEvidence("la activación exige un App ID válido")
+        }
+        let basename = try executableBasename(executable)
+
+        // Una activación heredada viva bloquea el arranque; no se amplía sobre ella.
+        try validateLaunchSafety(in: bottleURL)
+
+        let existing = try activations(in: bottleURL)
+        let activation = CompiledRepairActivation(
+            appID: normalizedAppID,
+            executable: basename,
+            recipe: recipe
         )
+        if existing.contains(activation) { return nil }
+        guard existing.count + 1 <= maximumActivations else {
+            throw RegressionCoreError.invalidEvidence(
+                "el catálogo de activaciones alcanzó su límite"
+            )
+        }
+
+        let before = try anchoredRead(fileName: fileName, in: bottleURL) ?? Data()
+        let after = encode(existing + [activation])
+        guard after.count <= maximumBytes else {
+            throw RegressionCoreError.invalidEvidence("el catálogo excedería su límite de bytes")
+        }
+        try anchoredWrite(after, fileName: fileName, in: bottleURL)
+
+        return CompiledRepairActivationReport(
+            activation: activation,
+            activationURL: activationURL(in: bottleURL),
+            rollbackURL: activationURL(in: bottleURL),
+            beforeFingerprint: fingerprint(before),
+            afterFingerprint: fingerprint(after)
+        )
+    }
+
+    private static func encode(_ activations: [CompiledRepairActivation]) -> Data {
+        var text = header
+        for activation in activations {
+            text += "\(activation.appID ?? "")\t\(activation.executable)\t\(activation.recipe.rawValue)\n"
+        }
+        return Data(text.utf8)
+    }
+
+    /// Escritura anclada y simétrica a `anchoredRead`: nunca sigue enlaces, crea el directorio
+    /// privado con 0700, escribe con 0600 y publica el resultado con un rename atómico para que
+    /// Wine no pueda leer jamás un catálogo a medias.
+    private static func anchoredWrite(_ data: Data, fileName: String, in bottleURL: URL) throws {
+        let rootFD = Darwin.open(bottleURL.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard rootFD >= 0 else {
+            throw RegressionCoreError.invalidEvidence("la raíz de la botella no es segura")
+        }
+        defer { Darwin.close(rootFD) }
+
+        if Darwin.mkdirat(rootFD, ".regression", 0o700) != 0, errno != EEXIST {
+            throw RegressionCoreError.invalidEvidence("no se pudo crear el directorio privado")
+        }
+        let directoryFD = Darwin.openat(
+            rootFD,
+            ".regression",
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        guard directoryFD >= 0 else {
+            throw RegressionCoreError.invalidEvidence("el directorio de activaciones no es seguro")
+        }
+        defer { Darwin.close(directoryFD) }
+
+        let temporaryName = "\(fileName).partial"
+        _ = Darwin.unlinkat(directoryFD, temporaryName, 0)
+        let fileFD = Darwin.openat(
+            directoryFD,
+            temporaryName,
+            O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+            0o600
+        )
+        guard fileFD >= 0 else {
+            throw RegressionCoreError.invalidEvidence("no se pudo crear el catálogo anclado")
+        }
+        var written = 0
+        let bytes = [UInt8](data)
+        while written < bytes.count {
+            let count = bytes[written...].withUnsafeBufferPointer {
+                Darwin.write(fileFD, $0.baseAddress, $0.count)
+            }
+            guard count > 0 else {
+                if errno == EINTR { continue }
+                Darwin.close(fileFD)
+                _ = Darwin.unlinkat(directoryFD, temporaryName, 0)
+                throw RegressionCoreError.invalidEvidence("no se pudo escribir el catálogo anclado")
+            }
+            written += count
+        }
+        guard Darwin.fsync(fileFD) == 0 else {
+            Darwin.close(fileFD)
+            _ = Darwin.unlinkat(directoryFD, temporaryName, 0)
+            throw RegressionCoreError.invalidEvidence("no se pudo sincronizar el catálogo anclado")
+        }
+        Darwin.close(fileFD)
+
+        guard Darwin.renameat(directoryFD, temporaryName, directoryFD, fileName) == 0 else {
+            _ = Darwin.unlinkat(directoryFD, temporaryName, 0)
+            throw RegressionCoreError.invalidEvidence("no se pudo publicar el catálogo anclado")
+        }
     }
 
     /// Overload temporal para consumidores que aún producen activaciones v1 sin App ID.
@@ -442,6 +549,7 @@ public enum CompiledRepairActivationStore {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
+    private static let fileName = "compiled-repair-activations-v2.tsv"
     private static let legacyFileName = "compiled-repair-activations-v1.tsv"
     private static let legacyQuarantineFileName =
         "compiled-repair-activations-v1.quarantined.tsv"
@@ -503,16 +611,31 @@ public enum CompiledCrashRepairLearner {
         startedAt: Date,
         endedAt: Date
     ) throws -> CompiledCrashRepairLearningReport? {
-        _ = try detect(
+        guard let detection = try detect(
             appID: appID,
             executable: executable,
             bottleURL: bottleURL,
             startedAt: startedAt,
             endedAt: endedAt
+        ) else { return nil }
+
+        // El loader acredita por su cuenta que el proceso pertenece al App ID declarado, así
+        // que la activación puede escribirse: identifica un basename exacto, un App ID exacto
+        // y una receta enumerada en código. Si ya estaba activa no se reescribe nada.
+        guard let activation = try CompiledRepairActivationStore.activate(
+            appID: detection.appID,
+            executable: detection.executable,
+            recipe: detection.recipe,
+            in: bottleURL
+        ) else { return nil }
+
+        return CompiledCrashRepairLearningReport(
+            appID: detection.appID,
+            executable: detection.executable,
+            recipe: detection.recipe,
+            crashLogURL: detection.crashLogURL,
+            activation: activation
         )
-        // Compatibilidad binaria para el consumidor actual. La detección queda disponible por
-        // `detect`, pero no se muta la botella hasta que el loader pueda aislar App ID+basename.
-        return nil
     }
 
     /// Detecta una receta conocida sin escribir en la botella ni en SQLite.

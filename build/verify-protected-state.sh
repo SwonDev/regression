@@ -290,7 +290,7 @@ verify_release_1_12_development_runtime_authority()
         'REGRESSION_EXTERNAL_D3DMETAL_ROUTE_COUNT' \
         'REGRESSION_WINDOWS_MEDIA_PROFILE' \
         'REGRESSION_PROCESS_DLL_ISOLATION_ROUTE_COUNT' \
-        'compiled-repair-activations-v1.tsv'
+        'compiled-repair-activations-v2.tsv'
     do
         strings -a "$WINE_ROOT/lib/wine/x86_64-unix/ntdll.so" | grep -F "$required" >/dev/null || {
             echo "ERROR: ntdll.so no conserva el contrato 1.12: $required" >&2

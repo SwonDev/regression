@@ -1,12 +1,11 @@
+diff --git a/dlls/ntdll/unix/env.c b/dlls/ntdll/unix/env.c
+index 0f46cc66..72202c7b 100644
 --- a/dlls/ntdll/unix/env.c
 +++ b/dlls/ntdll/unix/env.c
-@@ -2090,9 +2090,120 @@
-         }
-     }
-     return has_steam_common;
-+}
-+
-+
+@@ -2093,6 +2093,199 @@ static int regression_bootstrap_source_matches( const WCHAR *image, UINT image_l
+ }
+ 
+ 
 +static int regression_valid_activation_basename( const char *name )
 +{
 +    const unsigned char *cursor = (const unsigned char *)name;
@@ -23,7 +22,7 @@
 +                 *cursor != '-' && *cursor != '_' && *cursor != ' ') return 0;
 +    }
 +    return has_dot;
- }
++}
 +
 +
 +static int regression_known_compiled_repair( const char *recipe )
@@ -35,23 +34,100 @@
 +}
 +
 +
++/* Prove that the image really belongs to the Steam application named by the record.
++ * The App ID is checked against the install directory Steam recorded for it, derived
++ * from the image path itself. Nothing is inherited from the environment, so one game
++ * cannot borrow the identity of another started in the same Steam session. */
++static int regression_image_belongs_to_steam_app( const WCHAR *image, UINT image_len,
++                                                  const char *app_id )
++{
++    static const char library_marker[] = "\\steamapps\\common\\";
++    static const char manifest_key[] = "\"installdir\"";
++    const char *prefix = getenv( "WINEPREFIX" );
++    char image_path[PATH_MAX], install_dir[128], manifest[PATH_MAX], line[512];
++    char *marker, *cursor, *value, *end;
++    size_t i, library_length, install_length = 0;
++    struct stat st;
++    FILE *file;
++    int fd, matched = 0, written;
++
++    if (!app_id || !app_id[0] || !prefix || !prefix[0] || !image || !image_len) return 0;
++    for (i = 0; app_id[i]; i++)
++        if (app_id[i] < '0' || app_id[i] > '9' || i >= 10) return 0;
++
++    if (image_len + 1 >= sizeof(image_path)) return 0;
++    for (i = 0; i < image_len; i++)
++    {
++        if (image[i] > 0x7f) return 0;
++        image_path[i] = (char)image[i];
++    }
++    image_path[image_len] = 0;
++    if (image_len < 3 || (image_path[0] != 'C' && image_path[0] != 'c') ||
++        image_path[1] != ':' || image_path[2] != '\\') return 0;
++
++    if (!(marker = strcasestr( image_path, library_marker ))) return 0;
++    library_length = (size_t)(marker - image_path) + strlen( "\\steamapps" );
++
++    cursor = marker + strlen( library_marker );
++    while (*cursor && *cursor != '\\')
++    {
++        if (install_length + 1 >= sizeof(install_dir)) return 0;
++        install_dir[install_length++] = *cursor++;
++    }
++    if (!install_length || *cursor != '\\') return 0;
++    install_dir[install_length] = 0;
++
++    written = snprintf( manifest, sizeof(manifest), "%s/drive_c/", prefix );
++    if (written < 0 || (size_t)written >= sizeof(manifest)) return 0;
++    for (i = 3; i < library_length; i++)
++    {
++        if ((size_t)written + 1 >= sizeof(manifest)) return 0;
++        manifest[written++] = image_path[i] == '\\' ? '/' : image_path[i];
++    }
++    manifest[written] = 0;
++    if ((size_t)snprintf( manifest + written, sizeof(manifest) - written,
++                          "/appmanifest_%s.acf", app_id ) >= sizeof(manifest) - written)
++        return 0;
++
++    if (lstat( manifest, &st ) || !S_ISREG( st.st_mode ) || st.st_uid != geteuid() ||
++        st.st_size <= 0 || st.st_size > 4 * 1024 * 1024) return 0;
++    if ((fd = open( manifest, O_RDONLY | O_CLOEXEC | O_NOFOLLOW )) == -1) return 0;
++    if (!(file = fdopen( fd, "r" )))
++    {
++        close( fd );
++        return 0;
++    }
++    while (fgets( line, sizeof(line), file ))
++    {
++        if (!(cursor = strstr( line, manifest_key ))) continue;
++        if (!(value = strchr( cursor + strlen( manifest_key ), '"' ))) break;
++        value++;
++        if (!(end = strchr( value, '"' ))) break;
++        *end = 0;
++        matched = !strcasecmp( value, install_dir );
++        break;
++    }
++    fclose( file );
++    return matched;
++}
++
 +/* Read the closed activation format written by Regression.  Records can only
 + * select a recipe compiled above for one exact PE basename; they cannot add a
 + * command, argument, path or arbitrary action. */
 +static int regression_activation_matches( const WCHAR *image, UINT image_len,
 +                                          const char *wanted_recipe )
 +{
-+    static const char header[] = "REGRESSION-COMPILED-REPAIRS\t1\n";
++    static const char header[] = "REGRESSION-COMPILED-REPAIRS\t2\n";
 +    const char *prefix = getenv( "WINEPREFIX" );
-+    char path[PATH_MAX], line[320], *separator, *newline;
++    char path[PATH_MAX], line[320], *app_id, *executable, *recipe, *newline;
 +    struct stat st;
 +    FILE *file;
 +    int fd, matched = 0, path_length;
 +    unsigned int count = 0;
- 
++
 +    if (!prefix || !prefix[0] || !regression_known_compiled_repair( wanted_recipe ) ||
 +        (path_length = snprintf( path, sizeof(path),
-+                                 "%s/.regression/compiled-repair-activations-v1.tsv",
++                                 "%s/.regression/compiled-repair-activations-v2.tsv",
 +                                 prefix )) < 0 ||
 +        (size_t)path_length >= sizeof(path) || lstat( path, &st ) ||
 +        !S_ISREG( st.st_mode ) || st.st_uid != geteuid() ||
@@ -63,17 +139,22 @@
 +        return 0;
 +    }
 +    if (!fgets( line, sizeof(line), file ) || strcmp( line, header )) goto invalid;
- 
++
 +    while (fgets( line, sizeof(line), file ))
 +    {
 +        if (++count > 128 || !(newline = strchr( line, '\n' )) || newline[1]) goto invalid;
 +        *newline = 0;
-+        if (!(separator = strchr( line, '\t' )) || strchr( separator + 1, '\t' )) goto invalid;
-+        *separator++ = 0;
-+        if (!regression_valid_activation_basename( line ) ||
-+            !regression_known_compiled_repair( separator )) goto invalid;
-+        if (!strcmp( separator, wanted_recipe ) &&
-+            regression_bootstrap_source_matches( image, image_len, line )) matched = 1;
++        /* v2 record: App ID, exact PE basename and one recipe compiled above. */
++        app_id = line;
++        if (!(executable = strchr( line, '\t' ))) goto invalid;
++        *executable++ = 0;
++        if (!(recipe = strchr( executable, '\t' )) || strchr( recipe + 1, '\t' )) goto invalid;
++        *recipe++ = 0;
++        if (!regression_valid_activation_basename( executable ) ||
++            !regression_known_compiled_repair( recipe )) goto invalid;
++        if (!strcmp( recipe, wanted_recipe ) &&
++            regression_bootstrap_source_matches( image, image_len, executable ) &&
++            regression_image_belongs_to_steam_app( image, image_len, app_id )) matched = 1;
 +    }
 +    if (ferror( file )) goto invalid;
 +    fclose( file );
@@ -121,7 +202,7 @@
  static int regression_unix_target_is_safe( const char *target, const char *resolved_prefix )
  {
      static const char shared_root[] =
-@@ -2187,10 +2298,14 @@
+@@ -2187,10 +2380,14 @@ static WCHAR *regression_shipping_image( const WCHAR *image, UINT image_len,
   */
  void init_startup_info(void)
  {
@@ -136,7 +217,7 @@
      SIZE_T size, info_size, env_size, env_pos;
      RTL_USER_PROCESS_PARAMETERS *params = NULL;
      struct startup_info_data *info;
-@@ -2219,6 +2334,12 @@
+@@ -2219,6 +2416,12 @@ void init_startup_info(void)
  
      src = (WCHAR *)(info + 1);
      src = (WCHAR *)((char *)src + info->curdir_len + info->dllpath_len);
@@ -149,7 +230,7 @@
      redirected_image = regression_shipping_image( src, info->imagepath_len,
                                                     &redirected_image_len );
  
-@@ -2233,7 +2354,7 @@
+@@ -2233,7 +2436,7 @@ void init_startup_info(void)
              + MAX_PATH * sizeof(WCHAR)  /* curdir */
              + info->dllpath_len + sizeof(WCHAR)
              + (redirected_image ? redirected_image_len : info->imagepath_len) + sizeof(WCHAR)
@@ -158,7 +239,7 @@
              + info->title_len + sizeof(WCHAR)
              + info->desktop_len + sizeof(WCHAR)
              + info->shellinfo_len + sizeof(WCHAR)
-@@ -2286,7 +2407,19 @@
+@@ -2286,7 +2489,19 @@ void init_startup_info(void)
      else
          copy_dos_path_string( &src, &dst, &params->ImagePathName, &nt_name,
                                info->imagepath_len );
