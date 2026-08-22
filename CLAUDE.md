@@ -350,12 +350,27 @@ es la puerta que lo verifica:
 `Sources/RegressionCore/ComponentHealth.swift` (`supportedApplicationVersion`) · `Info.plist` del bundle.
 
 ```bash
-swift test && for t in Tests/Shell/*.sh; do bash "$t" || echo "FALLA: $t"; done
-bash build/verify-protected-state.sh --include-bottle
+bash build/release.sh              # prepara, sella los PIN y verifica el asset
+bash build/release.sh --publish    # además crea la release en GitHub
+```
+
+`build/release.sh` es la vía normal y hace el flujo entero: reconstruye los insumos que no se
+versionan (staging desde la app canónica, componentes sellados, builder público), **deriva** los
+tres juegos de PIN de los artefactos reales y los escribe en su sitio, pasa la suite y los
+contratos, empaqueta y verifica el asset exacto. No relaja nada: todos los verificadores siguen
+ejecutándose y comparando contra un PIN; lo que cambia es que el PIN se calcula en vez de teclearse.
+
+**Por qué hacía falta.** Los mismos cuatro binarios de arranque se fijan en tres formas distintas
+—crudo del builder, instalado y firmado en el bundle, y saneado con `strip` para el asset— repartidas
+en siete archivos. Reconciliar eso a mano costaba horas y fallaba en silencio: refrescar un juego
+desincronizaba otro y el error aparecía tres pasos más tarde sin decir dónde estaba.
+
+Los pasos sueltos siguen existiendo para depurar un fallo concreto:
+
+```bash
 bash Scripts/package_regression.sh          # staging firmado
-bash Scripts/package_release.sh             # asset público portable (sin botella, GPTK ni rutas locales)
-bash build/verify-release-asset.sh ASSET CHECKSUM VERSION BUILD   # sobre el MISMO asset que se sube
-gh release create vX.Y.Z ...                # solo si el verificador pasa
+bash Scripts/package_release.sh             # asset público portable
+bash build/verify-release-asset.sh ASSET CHECKSUM VERSION BUILD
 bash build/verify-public-installed-state.sh --release-X.Y.Z
 bash build/verify-canonical-installation.sh
 ```

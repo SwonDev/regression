@@ -472,6 +472,19 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
     fallo con el estado anterior sí. Regression **no borra** nada bajo `drive_c/users`: ningún
     componente referencia `LocalLow` y `GameSessionArtifactCleaner` solo inspecciona procesos.
 
+60. **Una release se corta con `build/release.sh`, no a mano.** Los mismos cuatro binarios de
+    arranque se fijan en tres formas —crudo del builder, firmado en el bundle y saneado para el
+    asset— repartidas en siete archivos; reconciliarlas a mano costaba horas y fallaba en silencio.
+    El orquestador las deriva de los artefactos y las escribe en su sitio, sin saltarse ni un
+    verificador. Los pasos sueltos quedan para depurar un fallo concreto.
+
+61. **El PIN de una release ya publicada no se reescribe jamás, ni siquiera por accidente.**
+    `refresh-release-pins.sh` hacía un reemplazo global y, como normalmente tienes instalada una
+    release publicada, su digest coincidía con el que fijan sus ramas y se las reescribía en
+    silencio. `build/verify-public-installed-state.sh` queda fuera de ese barrido: los modos de
+    una versión nueva se **añaden** al cortarla. `build/release.sh` toma un testigo del archivo
+    antes de sellar y aborta si cambió.
+
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 
 Este proyecto es un sistema de muchas piezas acopladas (wine + DXMT + DXVK + D3DMetal + CEF +

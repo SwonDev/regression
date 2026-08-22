@@ -68,6 +68,12 @@ case "$MODE" in
         [[ -d "$APP" && ! -L "$APP" ]] \
             || fail "la release pública debe ser un bundle físico"
         ;;
+    --release-1.12.5)
+        EXPECTED_VERSION="1.12.5"
+        EXPECTED_BUILD="43"
+        [[ -d "$APP" && ! -L "$APP" ]] \
+            || fail "la release pública debe ser un bundle físico"
+        ;;
     --candidate-1.12.1-before-runtime-join-fix)
         EXPECTED_VERSION="1.12.1"
         EXPECTED_BUILD="39"
@@ -75,7 +81,7 @@ case "$MODE" in
             || fail "el candidato público debe ser un bundle físico"
         ;;
     *)
-        fail "uso: $0 --baseline-1.10.0 | --release-1.10.1 | --release-1.11.0 | --release-1.12.0 | --release-1.12.1 | --release-1.12.2 | --release-1.12.3 | --release-1.12.4 | --candidate-1.12.1-before-runtime-join-fix"
+        fail "uso: $0 --baseline-1.10.0 | --release-1.10.1 | --release-1.11.0 | --release-1.12.0 | --release-1.12.1 | --release-1.12.2 | --release-1.12.3 | --release-1.12.4 | --release-1.12.5 | --candidate-1.12.1-before-runtime-join-fix"
         ;;
 esac
 codesign --verify --deep --strict "$APP"
@@ -92,7 +98,20 @@ fi
 [[ "$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")" == "$EXPECTED_BUILD" ]] \
     || fail "build público no soportado"
 
-if [[ "$MODE" == "--release-1.12.2" || "$MODE" == "--release-1.12.3" || "$MODE" == "--release-1.12.4" ]]; then
+if [[ "$MODE" == "--release-1.12.5" ]]; then
+    # 1.12.5 recompila el arranque público: su `ntdll` acredita el App ID contra
+    # el `appmanifest` de Steam antes de aplicar una reparación compilada.
+    verify_hash 3c1c789244ae8e7f8e3c97f5b905ca521dedcfff444efeec7e5fdf32bc1b31b8 \
+        "$APP/Contents/MacOS/regression-engine"
+    verify_hash 735a1ef0f5c681ea0a8a89f4be2bd1fb079e915af1b3faabfce1f555bc944a8f \
+        "$APP/Contents/SharedSupport/wine-root/bin/wine"
+    verify_hash bf709571a2c040aebe2d721da0c3b2d4cecc1d11a941812bfd9f352579fe094b \
+        "$APP/Contents/SharedSupport/wine-root/bin/wineserver"
+    verify_hash 56db2f4832b29507dc42286f297a7df8508e372d5f73957e661cd1f84cfbc298 \
+        "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/wine"
+    verify_hash 15d3479d4ee348c4a7cb7e77507fa5664ef919eadefc2845dbdfd2ddced68009 \
+        "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+elif [[ "$MODE" == "--release-1.12.2" || "$MODE" == "--release-1.12.3" || "$MODE" == "--release-1.12.4" ]]; then
     verify_hash c2a55bb07200d68a08fc7a1478826abd4d99460333543302ba00a552d7ca6ee6 \
         "$APP/Contents/MacOS/regression-engine"
     verify_hash 3f8de8c0045104d3fea31a8bb4c3bd6f1c3eead55c9f847e2b5dfac0498ec77c \
@@ -102,7 +121,7 @@ if [[ "$MODE" == "--release-1.12.2" || "$MODE" == "--release-1.12.3" || "$MODE" 
     verify_hash 30593a00cbb40cb3f0a47a30964d52f35beed8c864e38d985d97eb07b7e62800 \
         "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/wine"
     if [[ "$MODE" == "--release-1.12.3" || "$MODE" == "--release-1.12.4" ]]; then
-        verify_hash 734e39cdc88232ecd2df0753793e8be1d5b9adaf3b1a7d337a44efcf82954d9c \
+        verify_hash e6fc02dc04aace40eac4bd2700c6beaf5a235f2ab6bd40ecf60ba6b9a0b52f01 \
             "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
     else
         verify_hash f17cebf085a0a746224e61b4fc49341f7a0cec48741c5f12d1cc84a4dcd0ba5d \
@@ -159,7 +178,7 @@ if [[ "$MODE" == "--release-1.12.3" || "$MODE" == "--release-1.12.4" ]]; then
         || fail "winemac no conserva el shell explorer.exe como auxiliar sin Dock"
 fi
 
-if [[ "$MODE" == "--release-1.12.2" || "$MODE" == "--release-1.12.3" || "$MODE" == "--release-1.12.4" ]]; then
+if [[ "$MODE" == "--release-1.12.2" || "$MODE" == "--release-1.12.3" || "$MODE" == "--release-1.12.4" || "$MODE" == "--release-1.12.5" ]]; then
     baseline="$APP/Contents/SharedSupport/components/steam-bottle-baseline/1"
     verify_hash 884912891b7a3f5440a46b30b9241aa604e248fbbe578498058658e2293b00f4 \
         "$baseline/manifest.sha256"

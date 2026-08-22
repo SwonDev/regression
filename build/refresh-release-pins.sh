@@ -132,12 +132,19 @@ text, count = pattern.subn(lambda m: m.group(1) + digest + m.group(3), text)
 if count:
     io.open(source, "w", encoding="utf-8").write(text)
 PY
-        # Los verificadores repiten el mismo digest en su rama activa y en los
-        # helpers por versión. El valor anterior identifica sin ambigüedad ese
-        # estado, así que sustituirlo no toca las ramas históricas, que fijan
-        # digests distintos de releases anteriores.
+        # Los verificadores repiten el mismo digest en su rama activa, así que
+        # sustituir el valor anterior los sincroniza de una vez.
+        #
+        # `verify-public-installed-state.sh` queda FUERA del barrido, y no es un
+        # detalle: ese archivo fija lo que publicaron releases anteriores. Como
+        # normalmente tienes instalada una de ellas, el digest instalado COINCIDE
+        # con el que fijan sus ramas, y el reemplazo global les reescribía el
+        # contrato en silencio —reescribir el PIN de una release ya publicada
+        # está prohibido—. Los modos de una versión nueva se añaden al cortarla,
+        # nunca barriendo los que ya existen.
         for verifier in "$ROOT"/build/verify-*.sh; do
             [[ -f "$verifier" ]] || continue
+            [[ "$(basename "$verifier")" == "verify-public-installed-state.sh" ]] && continue
             python3 - "$verifier" "$current" "$actual" <<'PY'
 import io, sys
 source, old, new = sys.argv[1], sys.argv[2], sys.argv[3]
