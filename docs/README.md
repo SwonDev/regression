@@ -98,7 +98,7 @@ el run cerrado. **No** tienen entrada en `VerifiedGameCatalog` hasta entonces.
 | Cloudheim | Overlay de Epic aislado en el proceso Shipping | [`cloudheim.md`](games/cloudheim.md) |
 | Dragonkin: The Banished | D3D12 enrutado a D3DMetal (GPTK 4.0b2) por proceso exacto | [`dragonkin-the-banished.md`](games/dragonkin-the-banished.md) |
 | TMNT: Shredder's Revenge | Overlay de Epic aislado en `TMNT.exe`; la colisión es del EOS SDK, no de Unreal | [`tmnt-shredders-revenge.md`](games/tmnt-shredders-revenge.md) |
-| Core Keeper | Falla por sincronización de guardado en la nube, no por el motor | [`core-keeper.md`](games/core-keeper.md) |
+| Core Keeper | Caché de Steam Cloud desincronizada del disco; se diagnostica con `regressionctl cloud-status` | [`core-keeper.md`](games/core-keeper.md) |
 
 ### Validados con incidencia
 

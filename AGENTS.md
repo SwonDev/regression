@@ -455,6 +455,23 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
     matar Steam. La espera termina en cuanto hay evidencia, así que un arranque normal se resuelve
     igual de rápido.
 
+58. **«Arranca y se cierra solo» sin ventana y sin crash: mira Steam Cloud antes que el motor.**
+    Si `userdata/<id>/<appid>/remotecache.vdf` declara archivos como sincronizados en local y esos
+    archivos **no existen** en la carpeta de guardado del juego, Steam responde «nada que
+    descargar» y el juego abandona el arranque por falta de datos. Ningún cambio en Wine, DXMT,
+    perfiles o rutas lo arregla. Las partidas siguen en `userdata/<id>/<appid>/remote/`: se copian
+    a la carpeta local del juego con `cp -p` para conservar las fechas y no provocar una subida.
+    Contrastar la caché contra el disco cuesta segundos y evita horas de diagnóstico en el sitio
+    equivocado: `regressionctl cloud-status APP_ID` lo hace por ti, de solo lectura y sin tocar un
+    byte de los datos del usuario. Ver `docs/games/core-keeper.md`.
+
+59. **Ante «me lo has roto», el A/B de una variable manda sobre cualquier razonamiento.** Los
+    backups de `build/install-runtime-canonical.sh` contienen el runtime anterior **y** sus PIN,
+    `ComponentHealth` y verificadores: restaurarlos entero es un experimento limpio de tres
+    minutos. Argumentar por qué un cambio «no puede» ser la causa no es evidencia; reproducir el
+    fallo con el estado anterior sí. Regression **no borra** nada bajo `drive_c/users`: ningún
+    componente referencia `LocalLow` y `GameSessionArtifactCleaner` solo inspecciona procesos.
+
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 
 Este proyecto es un sistema de muchas piezas acopladas (wine + DXMT + DXVK + D3DMetal + CEF +

@@ -6,9 +6,76 @@
 - **Ejecutable:** `Core Keeper/CoreKeeper.exe`
 - **Tecnología:** Unity 6 (`6000.0.59f2`), D3D11 sobre DXMT
 - **Perfil compilado:** **ninguno, y es deliberado** (ver más abajo)
-- **Estado:** **falla al arrancar por sincronización de guardado en la nube.** No es una
-  regresión del motor: la base de aprendizaje **no registra ningún run bueno** de este juego, así
-  que nunca hubo un estado anterior que romper.
+- **Estado:** **funcionando.** Se cerraba solo al arrancar por un desajuste entre la caché de
+  Steam Cloud y el disco. Resuelto el 2026-08-22 restaurando los archivos de nube en la carpeta
+  local del juego. Confirmado por el usuario.
+
+## Síntoma
+
+El proceso vivía entre 12 y 18 segundos y **nunca creaba ventana**: parecía que iba a arrancar y se
+cerraba solo. Steam registraba `App Running` y, unos segundos después, `Game process removed`. No
+había crash: el log terminaba en la ruta ordenada de cierre (`Manager:QuitHandler()` →
+`Application:Internal_ApplicationQuit()`).
+
+## Causa raíz
+
+`Steam/userdata/121123806/1621690/remotecache.vdf` declaraba los **ocho** archivos de nube como ya
+sincronizados en local (`syncstate 1`, `localtime` de 2024), pero la carpeta donde el juego los
+busca —`AppData/LocalLow/Pugstorm/Core Keeper/Steam/121123806/`— estaba **vacía**. Con esa caché,
+Steam concluye «ya sincronizado, nada que descargar» y no vuelve a bajarlos:
+
+```text
+[AppID 1621690] Currently already synced to global change number '44', should be nothing to download
+[AppID 1621690] AutoCloud done. Watching 0 files
+```
+
+El juego entra entonces en `CloudSyncDown`, ve que **nada** existe en local, intenta materializar
+cada archivo, falla en todos y abandona el arranque:
+
+```text
+CloudSyncDown
+localExists=False localTimestamp=1/1/0001 12:00:00 AM cloudTimestamp=8/27/2024 10:22:12 PM   (x8)
+Write failed: Success : '…\Steam\121123806\Admins.json.pugbackup' (-2147024896)              (x8)
+FileNotFoundException: Could not find file "…\Steam\121123806\saves\0.json"
+```
+
+Las partidas **nunca estuvieron en peligro**: el espejo local de Steam Cloud,
+`userdata/121123806/1621690/remote/`, conservaba los ocho archivos íntegros y con el tamaño exacto
+que declara la caché. El fallo era de ubicación, no de pérdida.
+
+## Corrección
+
+Copiar los ocho archivos de `userdata/121123806/1621690/remote/` a
+`AppData/LocalLow/Pugstorm/Core Keeper/Steam/121123806/`, conservando sus fechas originales
+(`cp -p`) para que el juego no interprete la copia local como más reciente que la nube y suba nada.
+
+```bash
+S="$HOME/Library/Application Support/Regression/Bottles/Steam/drive_c/Program Files (x86)/Steam"
+R="$S/userdata/121123806/1621690/remote"
+D="$HOME/Library/Application Support/Regression/Bottles/Steam/drive_c/users/crossover/AppData/LocalLow/Pugstorm/Core Keeper/Steam/121123806"
+cd "$R" && find . -type f | while read f; do mkdir -p "$D/$(dirname "$f")"; cp -p "$f" "$D/$f"; done
+```
+
+No hay perfil compilado, ni receta, ni ruta en el lanzador: el motor no interviene en este fallo y
+no debe hacerlo. Regression **no borra** nada bajo `drive_c/users`; se verificó que ningún
+componente referencia `LocalLow` ni elimina archivos de guardado, y `GameSessionArtifactCleaner`
+solo inspecciona procesos.
+
+## Qué se descartó, y cómo
+
+- **El runtime nuevo, descartado con A/B de una sola variable.** Se restauró el `ntdll.so` anterior
+  (`e6fc02dc`) con sus PIN y el juego **falló exactamente igual**: proceso a los 30 s, muerto a los
+  42 s, sin ventana. El loader v2 tampoco podía intervenir: la botella no contiene ningún fichero
+  de activación compilada.
+- **No es gráfico.** D3D11 inicializa contra `Apple M5 Pro` y el juego carga sus 7996 data blocks y
+  el atlas de sprites antes de morir. `GpuFence::Create(): Failed to create ID3D11Fence, error
+  0x80004005` aparece, pero no impide continuar.
+- **No es permisos ni espacio.** El árbol de guardado pertenece al usuario, sin flags de
+  inmutabilidad ni ACL, y el propio juego escribe `Player.log`, `sentry-unity.lock` y `mods/` en
+  esa misma jerarquía durante el arranque fallido.
+- **No son las dos opciones de inicio.** El diálogo «Core Keeper» / «Core Keeper (sin mods)»
+  bloqueaba los reintentos mientras estaba abierto, pero el fallo se reproduce igual una vez
+  elegida una opción.
 
 ## Por qué NO se le asigna ruta a D3DMetal
 
@@ -18,49 +85,9 @@ estructura precisamente para no tocarlo: el juego renderiza por D3D11 y una ruta
 una intervención sin evidencia. El caso está fijado en
 `testDetectorIgnoresUnityLayoutThatMerelyShipsTheAgilitySDK`.
 
-## Síntoma
+## Señal a recordar
 
-El proceso vive entre 12 y 18 segundos y **nunca crea ventana**. Steam registra
-`App Running` y, unos segundos después, `Game process removed`. No hay crash: el log termina en la
-ruta ordenada de cierre (`Manager:QuitHandler()` → `Application:Internal_ApplicationQuit()`).
-
-## Evidencia
-
-En `AppData/LocalLow/Pugstorm/Core Keeper/Player.log` el arranque es sano —D3D11 inicializa contra
-`Apple M5 Pro`, cargan 7996 data blocks y el atlas de sprites— y todo se tuerce en `CloudSyncDown`:
-
-```text
-CloudSyncDown
-localExists=False localTimestamp=1/1/0001 12:00:00 AM cloudTimestamp=8/27/2024 10:22:12 PM
-… (una línea por archivo, todas con localExists=False)
-Write failed: Success : '…\Steam\121123806\Admins.json.pugbackup' (-2147024896)
-… (una por cada archivo que intenta materializar)
-FileNotFoundException: Could not find file "…\Steam\121123806\saves\0.json"
-```
-
-El árbol local (`saves/`, `worlds/`, `worldinfos/`…) existe, pertenece al usuario y está vacío:
-**se creó hoy, en el primer arranque**. La nube sí tiene partidas (de 2023 y 2024). El juego
-intenta respaldar cada archivo local antes de sobrescribirlo, el respaldo de algo que no existe
-falla, y termina abandonando el arranque.
-
-`logs/cloud_log.txt` de Steam muestra su propio AutoCloud completando sin incidencias
-(`Successfully synced to ChangeNumber 0`), así que el problema está en la capa
-`ISteamRemoteStorage` del juego, no en el cliente.
-
-## Qué se descartó
-
-- **No es el runtime nuevo.** La botella no contiene **ningún** fichero de activación compilada
-  (`.regression/` solo tiene `repair-transactions`), así que el código v2 del loader —el que
-  acredita el App ID contra el `appmanifest`— ni siquiera se ejecuta para este proceso.
-- **No es gráfico.** D3D11 inicializa y el juego llega a cargar todos sus recursos. La única queja
-  gráfica es `GpuFence::Create(): Failed to create ID3D11Fence, error 0x80004005`, que no impide
-  continuar.
-- **No son las dos opciones de inicio.** El diálogo «Core Keeper» / «Core Keeper (sin mods)»
-  bloqueaba los reintentos mientras estaba abierto, pero el fallo se reproduce igual una vez
-  elegida una opción.
-
-## Siguiente paso
-
-Comprobar si el arranque se completa con Steam Cloud desactivado para este App ID. Si es así, la
-causa queda acotada al sync-down del juego con partidas remotas y sin copia local, y la decisión
-sobre qué hace Regression al respecto —si es que debe hacer algo— se toma con esa evidencia.
+Un juego que «hace como que arranca y se cierra solo», sin ventana y sin crash, con Steam diciendo
+que no hay nada que descargar: contrasta `remotecache.vdf` contra el disco antes de mirar el motor.
+Si la caché declara archivos que no existen, el juego se queda sin sus datos y ningún cambio en
+Wine, DXMT o los perfiles lo va a arreglar.

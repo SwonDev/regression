@@ -93,6 +93,38 @@ enum RegressionControl {
                 print("\(route.shippingExecutable)\t\(route.shippingURL.path)")
             }
 
+        case "cloud-status":
+            guard let rawAppID = arguments.dropFirst().first,
+                  let appID = SteamAppID.normalized(rawAppID),
+                  appID == rawAppID else {
+                fputs("ERROR: uso: regressionctl cloud-status APP_ID\n", stderr)
+                exit(64)
+            }
+            let reports = try SteamCloudMirrorInspector.reports(
+                appID: appID,
+                in: installations.regression.steamRootURL
+            )
+            if reports.isEmpty {
+                print("Sin caché de Steam Cloud para el App ID", appID)
+            }
+            for report in reports {
+                print("Cuenta \(report.accountID) · App ID \(report.appID)")
+                for file in report.files {
+                    let actual = file.actualSize.map(String.init) ?? "ausente"
+                    let mark = file.state == .coherent ? "ok" : file.state.rawValue
+                    print("  [\(mark)] \(file.path)\tdeclarado=\(file.declaredSize)\ten disco=\(actual)")
+                }
+                if report.isCoherent {
+                    print("  El espejo local coincide con lo que Steam declara sincronizado.")
+                } else {
+                    print("""
+                      \(report.incoherentFiles.count) archivo(s) que Steam da por sincronizados no \
+                    están en el espejo local. Steam no volverá a descargarlos y un juego que dependa \
+                    de ellos puede cerrarse solo al arrancar.
+                    """)
+                }
+            }
+
         case "windows-media-repair-plan":
             guard arguments.count == 4,
                   let appID = SteamAppID.normalized(arguments[1]),
@@ -1258,7 +1290,7 @@ enum RegressionControl {
             print("Exportación guardada en", PrivacySanitizer.normalizedPath(path))
 
         default:
-            print("Uso: regressionctl [status | library-status | migrate-library --confirm-single-library --confirm-crossover-games-removed | validate-library APP_ID --run RUN_ID | rollback-library --confirm-rollback | unreal-bootstrap-routes | preflight [APP_ID] [--backend regression] | launch APP_ID [--backend regression] | switch regression | runs | processes [RUN_ID] | profiles | engines | certifications | technologies | candidates | optimization | requirements | repair-receipts | research | research-protocol | research-open | research-hypothesis | research-stage | research-attach-run | research-gate | research-artifact | research-finish | research-pause | research-complete | database | verify RUN_ID perfect|playable|failed [--note TEXTO] | observe APP_ID perfect|playable|failed --backend regression --name NOMBRE [--note TEXTO] | observations | export RUTA]")
+            print("Uso: regressionctl [status | library-status | migrate-library --confirm-single-library --confirm-crossover-games-removed | validate-library APP_ID --run RUN_ID | rollback-library --confirm-rollback | unreal-bootstrap-routes | cloud-status APP_ID | preflight [APP_ID] [--backend regression] | launch APP_ID [--backend regression] | switch regression | runs | processes [RUN_ID] | profiles | engines | certifications | technologies | candidates | optimization | requirements | repair-receipts | research | research-protocol | research-open | research-hypothesis | research-stage | research-attach-run | research-gate | research-artifact | research-finish | research-pause | research-complete | database | verify RUN_ID perfect|playable|failed [--note TEXTO] | observe APP_ID perfect|playable|failed --backend regression --name NOMBRE [--note TEXTO] | observations | export RUTA]")
             exit(64)
         }
     }

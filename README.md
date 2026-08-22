@@ -202,8 +202,6 @@ es a la vez un juego certificado y el control Unity obligatorio para cambios com
 
 - [Dragon's Dogma 2](docs/games/dragons-dogma-2.md): letterbox 16:9 compartido por la referencia.
 - [Rotwood](docs/games/rotwood.md): superficie 1512×870 dentro de la pantalla disponible.
-- [Core Keeper](docs/games/core-keeper.md): no arranca por la sincronización de guardado en la nube
-  del propio juego; el motor no interviene.
 
 **Investigación abierta**
 

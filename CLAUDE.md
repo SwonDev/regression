@@ -174,6 +174,7 @@ regressionctl verify RUN_ID perfect|playable|failed [--note TEXTO]
 regressionctl observe APP_ID perfect|playable|failed --backend regression --name NOMBRE
 regressionctl research-protocol | research-open | research-hypothesis | research-stage \
               research-attach-run | research-gate | research-artifact | research-finish
+regressionctl cloud-status APP_ID                      # ¿la caché de Steam Cloud cuadra con el disco?
 regressionctl library-status | validate-library APP_ID --run RUN_ID
 regressionctl database | export RUTA
 ```
@@ -276,6 +277,14 @@ screencapture -x -l <CGWindowID> /tmp/check.png   # capturar y MIRAR la imagen
     pedirlo dentro del arranque de Steam se bloqueaba a sí mismo con la intención ya registrada.
 32. **La ventana de observabilidad del lanzamiento cubre un arranque en frío de Steam.** Con dos
     segundos, la intención se quedaba en disco y la biblioteca bloqueada hasta matar Steam.
+33. **«Arranca y se cierra solo» sin ventana ni crash → mira Steam Cloud antes que el motor.** Si
+    `remotecache.vdf` declara archivos sincronizados que no existen en la carpeta de guardado,
+    Steam no los rebaja y el juego abandona. Se copian desde `userdata/<id>/<appid>/remote/` con
+    `cp -p`. Ver `docs/games/core-keeper.md`.
+34. **Ante «me lo has roto», A/B de una variable antes que argumentar.** Los backups de
+    `install-runtime-canonical.sh` traen runtime, PIN, `ComponentHealth` y verificadores: revertir
+    entero y reproducir es un experimento limpio. Razonar por qué algo «no puede» ser la causa no
+    es evidencia.
 
 ---
 
@@ -386,11 +395,13 @@ exacto que recibirá GitHub.** Actualizar también la nota de contrato en `READM
   `0x5320747375725420` —que es texto ASCII, no una dirección—: lo único que comparten es el EOS
   SDK. Se aísla `EOSOVH-Win64-Shipping` **solo** dentro de `TMNT.exe`. Arranque confirmado por el
   usuario (pantalla de título, versión 1.0.0.349). Ver `docs/games/tmnt-shredders-revenge.md`.
-- **Falla y no es regresión**: **Core Keeper** (1621690). Muere a los ~15 s sin abrir ventana
-  porque su `CloudSyncDown` no sabe materializar partidas de nube cuando no hay copia local:
-  falla el respaldo de cada archivo inexistente y abandona el arranque. La base no registra
-  **ningún** run bueno anterior, y la botella no tiene activaciones compiladas, así que el runtime
-  nuevo queda descartado como causa. Ver `docs/games/core-keeper.md`.
+- **Resuelto sin tocar el motor**: **Core Keeper** (1621690). Se cerraba solo a los ~15 s, sin
+  ventana y sin crash, porque el `remotecache.vdf` de Steam declaraba los ocho archivos de nube
+  como sincronizados en local mientras la carpeta de guardado del juego estaba vacía: Steam no los
+  volvía a bajar y el juego abandonaba el arranque. Las partidas seguían íntegras en
+  `userdata/.../remote/`; bastó copiarlas a la carpeta local conservando fechas. Descartado el
+  runtime nuevo con un **A/B de una sola variable** (con el `ntdll.so` anterior fallaba igual).
+  Confirmado por el usuario. Ver `docs/games/core-keeper.md`.
 - **Validados con incidencia**: Dragon's Dogma 2 (letterbox 16:9), Rotwood (superficie 1512×870).
 - **Investigación abierta y separada**: FANTASY LIFE i, bloqueado por la política oficial de EAC en
   entornos virtualizados (`208 Cannot run under Virtual Machine`). No se elude, no se oculta la VM,
