@@ -337,7 +337,7 @@ final class TelemetryCoordinatorTests: XCTestCase {
         XCTAssertEqual(profile.perfectRuns, 0)
     }
 
-    func testCrashedRunPersistsDetectionWithoutApplyingCompiledRecipe() async throws {
+    func testCrashedRunActivatesTheRecognisedRecipeForTheExactProcess() async throws {
         let fixture = try TelemetryFixture()
         defer { fixture.remove() }
         let processLogURL = fixture.root.appendingPathComponent("learned-gameprocess_log.txt")
@@ -388,8 +388,17 @@ final class TelemetryCoordinatorTests: XCTestCase {
         )
 
         XCTAssertTrue(outcome.changed)
-        XCTAssertTrue(outcome.issues.isEmpty)
-        XCTAssertTrue(try CompiledRepairActivationStore.activations(in: fixture.bottleURL).isEmpty)
+        XCTAssertTrue(
+            outcome.issues.isEmpty,
+            "incidencias inesperadas: \(outcome.issues.map(\.message))"
+        )
+        // El loader acredita el App ID contra el appmanifest de Steam, así que la
+        // activación puede escribirse y se aplicará en el siguiente arranque.
+        let activations = try CompiledRepairActivationStore.activations(in: fixture.bottleURL)
+        XCTAssertEqual(activations.count, 1)
+        XCTAssertEqual(activations[0].appID, "219990")
+        XCTAssertEqual(activations[0].executable, "future-win64-shipping.exe")
+        XCTAssertEqual(activations[0].recipe, .unrealD3D11DualOverlayIsolation)
         let receipts = try await fixture.repository.repairReceipts(appID: "219990")
         XCTAssertTrue(receipts.isEmpty)
         let attempts = try await fixture.repository.repairAttempts(appID: "219990")
@@ -398,7 +407,8 @@ final class TelemetryCoordinatorTests: XCTestCase {
         XCTAssertEqual(attempt.sourceRunID, sourceRunID)
         XCTAssertEqual(attempt.executable, "future-win64-shipping.exe")
         XCTAssertEqual(attempt.recipe, .unrealD3D11DualOverlayIsolation)
-        XCTAssertEqual(attempt.state, .detected)
+        XCTAssertEqual(attempt.state, .appliedAwaitingRelaunch)
+        XCTAssertEqual(attempt.recipeVersion, 2)
         XCTAssertEqual(attempt.launchOrigin, .regression)
     }
 

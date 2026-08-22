@@ -432,16 +432,61 @@ public actor TelemetryCoordinator {
                             startedAt: run.startedAt,
                             endedAt: termination.endedAt
                         ) {
-                            try await repository.recordRepairAttempt(RepairAttempt(
+                            // El loader ya aísla App ID y basename: acredita contra el
+                            // `appmanifest` de Steam que el proceso pertenece de verdad al
+                            // App ID del registro. La activación puede escribirse, y surte
+                            // efecto en el siguiente arranque de ese ejecutable exacto.
+                            let origin = PrivacySanitizer.normalizedPath(
+                                detection.crashLogURL.path
+                            )
+                            // La máquina de estados manda: primero se deja constancia de lo
+                            // observado, después del plan y solo entonces se toca la botella.
+                            // El repositorio no promueve a aplicado sin huellas antes/después
+                            // ni manifiesto de rollback, así que nada queda sin poder deshacerse.
+                            let attempt = RepairAttempt(
                                 sourceRunID: run.id,
                                 appID: detection.appID,
                                 executable: detection.executable,
                                 launchOrigin: run.launchOrigin,
                                 recipe: detection.recipe,
-                                recipeVersion: 1,
+                                recipeVersion: 2,
                                 state: .detected,
-                                notes: "Firma de crash estricta detectada en \(PrivacySanitizer.normalizedPath(detection.crashLogURL.path)). Pendiente de autorización y aislamiento App ID+ejecutable."
-                            ))
+                                notes: "Firma de crash estricta detectada en \(origin)."
+                            )
+                            try await repository.recordRepairAttempt(attempt)
+                            try await repository.transitionRepairAttempt(
+                                id: attempt.id,
+                                to: .planned,
+                                notes: "Receta compilada \(detection.recipe.rawValue) para el App ID y el ejecutable exactos.",
+                                at: termination.endedAt
+                            )
+                            let activation = try CompiledRepairActivationStore.activate(
+                                appID: detection.appID,
+                                executable: detection.executable,
+                                recipe: detection.recipe,
+                                in: run.bottleURL
+                            )
+                            if let activation {
+                                try await repository.transitionRepairAttempt(
+                                    id: attempt.id,
+                                    to: .appliedAwaitingRelaunch,
+                                    beforeFingerprint: activation.beforeFingerprint,
+                                    afterFingerprint: activation.afterFingerprint,
+                                    rollbackReference: activation.rollbackURL.standardizedFileURL.path,
+                                    rollbackManifest: activation.rollbackManifest(),
+                                    notes: "Activación v2 escrita; surte efecto en el siguiente arranque de ese ejecutable exacto.",
+                                    at: termination.endedAt
+                                )
+                            } else {
+                                // Reincidir con la receta ya activa significa que no era la causa:
+                                // se cierra como fallida en vez de reescribir la botella en bucle.
+                                try await repository.transitionRepairAttempt(
+                                    id: attempt.id,
+                                    to: .failed,
+                                    notes: "La activación ya estaba presente, así que la receta no resolvió este fallo.",
+                                    at: termination.endedAt
+                                )
+                            }
                         }
                     } catch {
                         outcome.issues.append(Self.issue(

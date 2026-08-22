@@ -137,6 +137,8 @@ public enum CompiledRepairActivationStore {
     private static let legacyRelativePath = ".regression/compiled-repair-activations-v1.tsv"
     private static let legacyQuarantineRelativePath =
         ".regression/compiled-repair-activations-v1.quarantined.tsv"
+    private static let backupsDirectoryName = "Backups"
+    private static let backupsRelativePath = ".regression/Backups"
     private static let maximumBytes = 64 * 1024
     private static let maximumActivations = 128
 
@@ -274,15 +276,57 @@ public enum CompiledRepairActivationStore {
         guard after.count <= maximumBytes else {
             throw RegressionCoreError.invalidEvidence("el catálogo excedería su límite de bytes")
         }
+
+        // El respaldo se publica ANTES de tocar el catálogo vivo: si la escritura siguiente
+        // fallara a medias, el estado anterior ya es recuperable. El nombre es el contenido,
+        // así que repetir la misma activación reutiliza el respaldo en lugar de acumularlos.
+        let beforeFingerprint = fingerprint(before)
+        let backupName = backupFileName(for: beforeFingerprint)
+        if let existingBackup = try anchoredRead(
+            fileName: backupName,
+            subdirectory: backupsDirectoryName,
+            in: bottleURL
+        ) {
+            guard fingerprint(existingBackup) == beforeFingerprint else {
+                throw RegressionCoreError.invalidEvidence("el respaldo de activaciones presenta drift")
+            }
+        } else {
+            try anchoredWrite(
+                before,
+                fileName: backupName,
+                subdirectory: backupsDirectoryName,
+                in: bottleURL
+            )
+        }
+
         try anchoredWrite(after, fileName: fileName, in: bottleURL)
+
+        // La segunda entrada del manifiesto acredita que la activación NO tocó el formato v1:
+        // su huella es idéntica antes y después, y su respaldo es la cuarentena donde vive.
+        let legacyQuarantined = try anchoredRead(fileName: legacyQuarantineFileName, in: bottleURL)
+        let legacyFingerprint = fingerprint(legacyQuarantined ?? Data())
 
         return CompiledRepairActivationReport(
             activation: activation,
             activationURL: activationURL(in: bottleURL),
-            rollbackURL: activationURL(in: bottleURL),
-            beforeFingerprint: fingerprint(before),
-            afterFingerprint: fingerprint(after)
+            rollbackURL: backupURL(in: bottleURL, fingerprint: beforeFingerprint),
+            beforeFingerprint: beforeFingerprint,
+            afterFingerprint: fingerprint(after),
+            legacyActivationURL: legacyActivationURL(in: bottleURL),
+            legacyRollbackURL: legacyQuarantineURL(in: bottleURL),
+            legacyBeforeFingerprint: legacyFingerprint,
+            legacyAfterFingerprint: legacyFingerprint
         )
+    }
+
+    private static func backupFileName(for fingerprint: String) -> String {
+        "compiled-repair-activations-v2.\(fingerprint).tsv"
+    }
+
+    public static func backupURL(in bottleURL: URL, fingerprint: String) -> URL {
+        bottleURL
+            .appendingPathComponent(backupsRelativePath)
+            .appendingPathComponent(backupFileName(for: fingerprint))
     }
 
     private static func encode(_ activations: [CompiledRepairActivation]) -> Data {
@@ -296,7 +340,12 @@ public enum CompiledRepairActivationStore {
     /// Escritura anclada y simétrica a `anchoredRead`: nunca sigue enlaces, crea el directorio
     /// privado con 0700, escribe con 0600 y publica el resultado con un rename atómico para que
     /// Wine no pueda leer jamás un catálogo a medias.
-    private static func anchoredWrite(_ data: Data, fileName: String, in bottleURL: URL) throws {
+    private static func anchoredWrite(
+        _ data: Data,
+        fileName: String,
+        subdirectory: String? = nil,
+        in bottleURL: URL
+    ) throws {
         let rootFD = Darwin.open(bottleURL.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard rootFD >= 0 else {
             throw RegressionCoreError.invalidEvidence("la raíz de la botella no es segura")
@@ -306,13 +355,34 @@ public enum CompiledRepairActivationStore {
         if Darwin.mkdirat(rootFD, ".regression", 0o700) != 0, errno != EEXIST {
             throw RegressionCoreError.invalidEvidence("no se pudo crear el directorio privado")
         }
-        let directoryFD = Darwin.openat(
+        let privateFD = Darwin.openat(
             rootFD,
             ".regression",
             O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
         )
-        guard directoryFD >= 0 else {
+        guard privateFD >= 0 else {
             throw RegressionCoreError.invalidEvidence("el directorio de activaciones no es seguro")
+        }
+        defer { Darwin.close(privateFD) }
+
+        let directoryFD: Int32
+        if let subdirectory {
+            if Darwin.mkdirat(privateFD, subdirectory, 0o700) != 0, errno != EEXIST {
+                throw RegressionCoreError.invalidEvidence("no se pudo crear el directorio de respaldo")
+            }
+            directoryFD = Darwin.openat(
+                privateFD,
+                subdirectory,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+            )
+            guard directoryFD >= 0 else {
+                throw RegressionCoreError.invalidEvidence("el directorio de respaldo no es seguro")
+            }
+        } else {
+            directoryFD = Darwin.dup(privateFD)
+            guard directoryFD >= 0 else {
+                throw RegressionCoreError.invalidEvidence("el directorio de activaciones no es seguro")
+            }
         }
         defer { Darwin.close(directoryFD) }
 
@@ -381,20 +451,70 @@ public enum CompiledRepairActivationStore {
         bottleURL.appendingPathComponent(legacyQuarantineRelativePath)
     }
 
+    /// Contrasta el catálogo vivo con el recibo: `applied` si sigue siendo el estado que la
+    /// activación publicó, `rolledBack` si alguien lo devolvió al anterior y `drifted` para
+    /// cualquier otro contenido. Es de solo lectura y nunca corrige por su cuenta.
     public static func reconcile(
-        _ report: CompiledRepairActivationReport
+        _ report: CompiledRepairActivationReport,
+        in bottleURL: URL
     ) throws -> CompiledRepairActivationReconciliation {
-        _ = report
-        throw RegressionCoreError.invalidEvidence(
-            "no se reconcilian activaciones mientras el loader aislado permanece deshabilitado"
-        )
+        let live = fingerprint(try anchoredRead(fileName: fileName, in: bottleURL) ?? Data())
+        if live == report.afterFingerprint { return .applied }
+        if live == report.beforeFingerprint { return .rolledBack }
+        return .drifted
     }
 
-    public static func restore(_ report: CompiledRepairActivationReport) throws {
-        _ = report
-        throw RegressionCoreError.invalidEvidence(
-            "no se restaura una activación sin journal aislado y manifiesto durable"
+    /// Deshace una activación devolviendo el catálogo al contenido exacto que su recibo respaldó.
+    ///
+    /// Solo actúa cuando el estado vivo coincide con la huella posterior del recibo: si la botella
+    /// cambió entre medias, la restauración se niega en lugar de pisar evidencia ajena.
+    @discardableResult
+    public static func restore(
+        _ report: CompiledRepairActivationReport,
+        in bottleURL: URL
+    ) throws -> [CompiledRepairActivation] {
+        let live = try anchoredRead(fileName: fileName, in: bottleURL) ?? Data()
+        guard fingerprint(live) == report.afterFingerprint else {
+            throw RegressionCoreError.invalidEvidence(
+                "el catálogo cambió después de la activación y no se restaura a ciegas"
+            )
+        }
+        guard let backup = try anchoredRead(
+            fileName: backupFileName(for: report.beforeFingerprint),
+            subdirectory: backupsDirectoryName,
+            in: bottleURL
+        ), fingerprint(backup) == report.beforeFingerprint else {
+            throw RegressionCoreError.invalidEvidence("el respaldo de la activación no es recuperable")
+        }
+        guard !backup.isEmpty else {
+            try anchoredRemove(fileName: fileName, in: bottleURL)
+            return []
+        }
+        try anchoredWrite(backup, fileName: fileName, in: bottleURL)
+        return try decode(backup)
+    }
+
+    /// Borrado anclado: el catálogo desaparece por completo cuando el estado previo era su
+    /// ausencia, en vez de dejar un archivo vacío que Wine tendría que interpretar.
+    private static func anchoredRemove(fileName: String, in bottleURL: URL) throws {
+        let rootFD = Darwin.open(bottleURL.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard rootFD >= 0 else {
+            throw RegressionCoreError.invalidEvidence("la raíz de la botella no es segura")
+        }
+        defer { Darwin.close(rootFD) }
+        let directoryFD = Darwin.openat(
+            rootFD,
+            ".regression",
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
         )
+        guard directoryFD >= 0 else {
+            if errno == ENOENT { return }
+            throw RegressionCoreError.invalidEvidence("el directorio de activaciones no es seguro")
+        }
+        defer { Darwin.close(directoryFD) }
+        guard Darwin.unlinkat(directoryFD, fileName, 0) == 0 || errno == ENOENT else {
+            throw RegressionCoreError.invalidEvidence("no se pudo retirar el catálogo anclado")
+        }
     }
 
     private static func executableBasename(_ executable: String) throws -> String {
@@ -491,7 +611,11 @@ public enum CompiledRepairActivationStore {
     /// Lectura anclada a descriptores. Cada componente se abre con `O_NOFOLLOW`, el fichero debe
     /// ser regular, privado y con un único enlace físico. Así un swap entre comprobación y lectura
     /// no puede redirigir el inventario fuera de la botella.
-    private static func anchoredRead(fileName: String, in bottleURL: URL) throws -> Data? {
+    private static func anchoredRead(
+        fileName: String,
+        subdirectory: String? = nil,
+        in bottleURL: URL
+    ) throws -> Data? {
         let rootFD = Darwin.open(bottleURL.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard rootFD >= 0 else {
             if errno == ENOENT { return nil }
@@ -499,14 +623,33 @@ public enum CompiledRepairActivationStore {
         }
         defer { Darwin.close(rootFD) }
 
-        let directoryFD = Darwin.openat(
+        let privateFD = Darwin.openat(
             rootFD,
             ".regression",
             O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
         )
-        guard directoryFD >= 0 else {
+        guard privateFD >= 0 else {
             if errno == ENOENT { return nil }
             throw RegressionCoreError.invalidEvidence("el directorio de activaciones no es seguro")
+        }
+        defer { Darwin.close(privateFD) }
+
+        let directoryFD: Int32
+        if let subdirectory {
+            directoryFD = Darwin.openat(
+                privateFD,
+                subdirectory,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+            )
+            guard directoryFD >= 0 else {
+                if errno == ENOENT { return nil }
+                throw RegressionCoreError.invalidEvidence("el directorio de respaldo no es seguro")
+            }
+        } else {
+            directoryFD = Darwin.dup(privateFD)
+            guard directoryFD >= 0 else {
+                throw RegressionCoreError.invalidEvidence("el directorio de activaciones no es seguro")
+            }
         }
         defer { Darwin.close(directoryFD) }
 
@@ -553,6 +696,35 @@ public enum CompiledRepairActivationStore {
     private static let legacyFileName = "compiled-repair-activations-v1.tsv"
     private static let legacyQuarantineFileName =
         "compiled-repair-activations-v1.quarantined.tsv"
+}
+
+extension CompiledRepairActivationReport {
+    /// Traduce el recibo al manifiesto durable que exige el repositorio: una entrada por cada
+    /// archivo que el subsistema de reparaciones gobierna —el catálogo v2 que sí cambió y el
+    /// formato v1 en cuarentena, cuya huella idéntica antes y después acredita que no se tocó—.
+    public func rollbackManifest(createdAt: Date = Date()) -> RepairRollbackManifest? {
+        guard let legacyActivationURL,
+              let legacyRollbackURL,
+              let legacyBeforeFingerprint,
+              let legacyAfterFingerprint else { return nil }
+        return RepairRollbackManifest(
+            entries: [
+                RepairRollbackEntry(
+                    targetPath: activationURL.standardizedFileURL.path,
+                    backupPath: rollbackURL.standardizedFileURL.path,
+                    beforeFingerprint: beforeFingerprint,
+                    afterFingerprint: afterFingerprint
+                ),
+                RepairRollbackEntry(
+                    targetPath: legacyActivationURL.standardizedFileURL.path,
+                    backupPath: legacyRollbackURL.standardizedFileURL.path,
+                    beforeFingerprint: legacyBeforeFingerprint,
+                    afterFingerprint: legacyAfterFingerprint
+                )
+            ],
+            createdAt: createdAt
+        )
+    }
 }
 
 public struct CompiledCrashRepairLearningReport: Equatable, Sendable {

@@ -827,6 +827,88 @@ final class CompiledGameRepairTests: XCTestCase {
         XCTAssertEqual(try CompiledRepairActivationStore.activations(in: root).count, 1)
     }
 
+    /// Una reparación sin vuelta atrás no puede aplicarse sola. El recibo tiene que traer el
+    /// respaldo real del estado anterior y las dos entradas del manifiesto durable —el catálogo
+    /// que cambió y el formato v1, cuya huella idéntica acredita que no se tocó—.
+    func testCompiledActivationLeavesARecoverableBackupAndManifest() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-activation-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        let first = try XCTUnwrap(CompiledRepairActivationStore.activate(
+            appID: "424242",
+            executable: "Future-Win64-Shipping.exe",
+            recipe: .unrealD3D11DualOverlayIsolation,
+            in: root
+        ))
+
+        // El respaldo existe de verdad, está acotado a 0600 y guarda el estado ANTERIOR.
+        let backup = CompiledRepairActivationStore.backupURL(
+            in: root,
+            fingerprint: first.beforeFingerprint
+        )
+        XCTAssertEqual(first.rollbackURL.standardizedFileURL, backup.standardizedFileURL)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: backup.path))
+        XCTAssertEqual(try Data(contentsOf: backup), Data())
+        XCTAssertEqual(
+            try FileManager.default.attributesOfItem(atPath: backup.path)[.posixPermissions] as? NSNumber,
+            0o600
+        )
+
+        let manifest = try XCTUnwrap(first.rollbackManifest())
+        XCTAssertEqual(manifest.entries.count, 2)
+        XCTAssertTrue(manifest.entries.allSatisfy { $0.targetPath.hasPrefix("/") })
+        XCTAssertTrue(manifest.entries.allSatisfy { $0.backupPath.hasPrefix("/") })
+        // La segunda entrada declara que el formato v1 quedó exactamente igual.
+        XCTAssertEqual(manifest.entries[1].beforeFingerprint, manifest.entries[1].afterFingerprint)
+
+        // Una segunda activación respalda el catálogo que la primera dejó vivo.
+        let second = try XCTUnwrap(CompiledRepairActivationStore.activate(
+            appID: "500500",
+            executable: "Other-Win64-Shipping.exe",
+            recipe: .unityExclusiveFullscreenBorderless,
+            in: root
+        ))
+        XCTAssertEqual(second.beforeFingerprint, first.afterFingerprint)
+        XCTAssertEqual(try CompiledRepairActivationStore.activations(in: root).count, 2)
+
+        // Deshacer devuelve exactamente el catálogo anterior, sin perder la primera activación.
+        XCTAssertEqual(try CompiledRepairActivationStore.reconcile(second, in: root), .applied)
+        let restored = try CompiledRepairActivationStore.restore(second, in: root)
+        XCTAssertEqual(restored.count, 1)
+        XCTAssertEqual(restored.first?.appID, "424242")
+        XCTAssertEqual(try CompiledRepairActivationStore.reconcile(second, in: root), .rolledBack)
+
+        // Deshacer la primera devuelve la botella a no tener catálogo en absoluto.
+        XCTAssertTrue(try CompiledRepairActivationStore.restore(first, in: root).isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: CompiledRepairActivationStore.activationURL(in: root).path
+        ))
+    }
+
+    /// Si alguien tocó el catálogo después de la activación, deshacer a ciegas destruiría esa
+    /// evidencia: la restauración se niega y la reconciliación lo declara `drifted`.
+    func testCompiledActivationRefusesToRestoreOverForeignChanges() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-activation-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        let report = try XCTUnwrap(CompiledRepairActivationStore.activate(
+            appID: "424242",
+            executable: "Future-Win64-Shipping.exe",
+            recipe: .unrealD3D11DualOverlayIsolation,
+            in: root
+        ))
+        try Data("REGRESSION-COMPILED-REPAIRS\t2\n700700\tthird-win64-shipping.exe\tunreal-d3d11-dual-overlay-isolation-v1\n".utf8)
+            .write(to: CompiledRepairActivationStore.activationURL(in: root))
+
+        XCTAssertEqual(try CompiledRepairActivationStore.reconcile(report, in: root), .drifted)
+        XCTAssertThrowsError(try CompiledRepairActivationStore.restore(report, in: root))
+        XCTAssertEqual(try CompiledRepairActivationStore.activations(in: root).first?.appID, "700700")
+    }
+
     /// El formato v1 no identifica el App ID, así que no puede ampliarse ni convivir: mientras
     /// exista un fichero heredado vivo, ninguna activación nueva entra en la botella.
     func testCompiledActivationRefusesLegacyFormats() throws {
