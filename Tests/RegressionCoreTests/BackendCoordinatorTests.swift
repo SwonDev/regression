@@ -207,6 +207,28 @@ final class BackendCoordinatorTests: XCTestCase {
         XCTAssertEqual(commands.first?.backend, .regression)
     }
 
+    /// Un arranque en frío real tarda mucho más que unos milisegundos en dejar ver `Steam.exe`.
+    /// Si la espera se rinde antes, la intención de custodia se queda en disco y la biblioteca
+    /// permanece bloqueada hasta matar Steam. La ventana debe cubrir ese arranque tardío.
+    func testColdSteamStartStillResolvesTheCustodyIntentWhenItBecomesObservableLate() async throws {
+        let resolutions = ResolvedIntentCounter()
+        // 24 muestras vacías: bastante más que la ventana corta que provocaba el atasco.
+        var states = Array(repeating: RunningBackendState(), count: 24)
+        states.append(RunningBackendState(regressionPIDs: [4242]))
+        let coordinator = coordinator(
+            inspector: StubProcessInspector(states: states),
+            launcher: StubProcessLauncher(),
+            custodyInterlock: RecordingCustodyInterlock(counter: resolutions)
+        )
+
+        _ = try await coordinator.launchSteamGeneral(
+            backend: .regression,
+            installations: installations()
+        )
+
+        XCTAssertEqual(resolutions.value, 1, "la intención tiene que quedar resuelta")
+    }
+
     func testLaunchPermitIsHeldUntilDelayedBackendClassificationBecomesObservable() async throws {
         let tracker = PermitObservationTracker()
         let inspector = StubProcessInspector(states: [
@@ -557,6 +579,58 @@ final class BackendCoordinatorTests: XCTestCase {
         XCTAssertEqual(commands[1].arguments, ["-applaunch", "1154030"])
     }
 
+    /// El permiso de custodia se toma una sola vez y se conserva durante todo el lanzamiento.
+    /// Volver a pedirlo dentro del arranque de Steam se bloqueaba a sí mismo: la intención ya
+    /// registrada hace que el interlock rechace cualquier permiso nuevo, así que un juego que
+    /// exige cliente activo no arrancaba nunca con Steam cerrado.
+    func testSteamBootstrapNeverRequestsASecondCustodyPermit() async throws {
+        let temporaryRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-single-permit-\(UUID().uuidString)")
+        let connectionLog = temporaryRoot
+            .appendingPathComponent("drive_c/Program Files (x86)/Steam/logs/connection_log.txt")
+        try FileManager.default.createDirectory(
+            at: connectionLog.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("previous session\n".utf8).write(to: connectionLog)
+        defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+
+        let permits = SinglePermitCustodyInterlock()
+        let launcher = StubProcessLauncher()
+        let coordinator = coordinator(
+            inspector: StubProcessInspector(states: [
+                RunningBackendState(),
+                RunningBackendState(regressionPIDs: [20]),
+            ]),
+            launcher: launcher,
+            custodyInterlock: permits
+        )
+        let snapshot = installations(regressionBottleURL: temporaryRoot)
+        let launchTask = Task {
+            try await coordinator.launchGame(
+                backend: .regression,
+                installations: snapshot,
+                spawnAuthority: .testing(appID: "1154030")
+            )
+        }
+
+        // La disponibilidad de Steam se acredita por lo que el cliente escribe DESPUÉS del
+        // arranque, así que la línea se añade con el lanzamiento ya en marcha.
+        try await Task.sleep(for: .milliseconds(100))
+        let handle = try FileHandle(forWritingTo: connectionLog)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(
+            "[Logged On] RecvMsgClientLogOnResponse() : processing complete\n".utf8
+        ))
+        try handle.close()
+        _ = try await launchTask.value
+
+        XCTAssertEqual(permits.grants, 1, "el lanzamiento solo puede pedir un permiso")
+        let commands = await launcher.commands()
+        XCTAssertEqual(commands.count, 2)
+        XCTAssertEqual(commands[1].arguments, ["-applaunch", "1154030"])
+    }
+
     func testUnrelatedGameDoesNotInheritTitanQuest2SteamPrelaunch() async throws {
         let inspector = StubProcessInspector(states: [RunningBackendState()])
         let launcher = StubProcessLauncher()
@@ -644,7 +718,10 @@ final class BackendCoordinatorTests: XCTestCase {
             logDirectoryURL: FileManager.default.temporaryDirectory,
             custodyInterlock: custodyInterlock,
             regressionComponentHealthProvider: componentHealthProvider,
-            rendererLaunchValidator: rendererLaunchValidator
+            rendererLaunchValidator: rendererLaunchValidator,
+            // La ventana real cubre un arranque en frío de Steam; en los stubs no hay nada que
+            // esperar, así que se comprime para no pagar 20 s por el camino no observable.
+            launchObservabilityInterval: .milliseconds(1)
         )
     }
 
@@ -773,6 +850,105 @@ private struct StubCustodyInterlock: PhysicalLibraryCustodyInterlocking {
             )
         }
         return PhysicalLibraryCustodyMutationPermit(descriptor: -1)
+    }
+
+    func registerPhysicalLibraryLaunchIntent(backend _: BackendKind) async throws
+        -> PhysicalLibraryCustodyLaunchIntent { .init() }
+    func attachPhysicalLibraryLaunch(
+        _: BackendLaunch,
+        to _: PhysicalLibraryCustodyLaunchIntent
+    ) async throws {}
+    func resolvePhysicalLibraryLaunchIntent(
+        _: PhysicalLibraryCustodyLaunchIntent
+    ) async throws {}
+}
+
+private final class ResolvedIntentCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func record() {
+        lock.lock()
+        defer { lock.unlock() }
+        count += 1
+    }
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
+}
+
+private struct RecordingCustodyInterlock: PhysicalLibraryCustodyInterlocking {
+    let counter: ResolvedIntentCounter
+
+    func currentPhysicalLibraryCustodyInterlock() async -> PhysicalLibraryCustodyInterlockSnapshot {
+        .init(status: .independent, mutationPolicy: .unrestricted)
+    }
+
+    func authorizePhysicalLibraryCustodyMutation(
+        backend _: BackendKind,
+        validationLease _: PhysicalLibraryCustodyValidationLease?
+    ) async -> Bool { true }
+
+    func acquirePhysicalLibraryCustodyMutationPermit(
+        backend _: BackendKind,
+        validationLease _: PhysicalLibraryCustodyValidationLease?
+    ) async throws -> PhysicalLibraryCustodyMutationPermit {
+        PhysicalLibraryCustodyMutationPermit(descriptor: -1)
+    }
+
+    func registerPhysicalLibraryLaunchIntent(backend _: BackendKind) async throws
+        -> PhysicalLibraryCustodyLaunchIntent { .init() }
+    func attachPhysicalLibraryLaunch(
+        _: BackendLaunch,
+        to _: PhysicalLibraryCustodyLaunchIntent
+    ) async throws {}
+    func resolvePhysicalLibraryLaunchIntent(
+        _: PhysicalLibraryCustodyLaunchIntent
+    ) async throws { counter.record() }
+}
+
+/// Reproduce el interlock real: en cuanto hay una intención registrada, cualquier permiso
+/// posterior se rechaza. Solo el primero se concede.
+private final class SinglePermitCustodyInterlock: PhysicalLibraryCustodyInterlocking, @unchecked Sendable {
+    private let lock = NSLock()
+    private var granted = 0
+
+    var grants: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return granted
+    }
+
+    func currentPhysicalLibraryCustodyInterlock() async -> PhysicalLibraryCustodyInterlockSnapshot {
+        .init(status: .independent, mutationPolicy: .unrestricted)
+    }
+
+    func authorizePhysicalLibraryCustodyMutation(
+        backend _: BackendKind,
+        validationLease _: PhysicalLibraryCustodyValidationLease?
+    ) async -> Bool { grants == 0 }
+
+    func acquirePhysicalLibraryCustodyMutationPermit(
+        backend _: BackendKind,
+        validationLease _: PhysicalLibraryCustodyValidationLease?
+    ) async throws -> PhysicalLibraryCustodyMutationPermit {
+        guard grantOnce() else {
+            throw RegressionCoreError.unsafeLibraryState(
+                "La custodia de la biblioteca bloquea esta operación de Steam"
+            )
+        }
+        return PhysicalLibraryCustodyMutationPermit(descriptor: -1)
+    }
+
+    private func grantOnce() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard granted == 0 else { return false }
+        granted += 1
+        return true
     }
 
     func registerPhysicalLibraryLaunchIntent(backend _: BackendKind) async throws

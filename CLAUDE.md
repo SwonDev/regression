@@ -264,6 +264,18 @@ screencapture -x -l <CGWindowID> /tmp/check.png   # capturar y MIRAR la imagen
 28. **La versión del bundle se sube al publicar, nunca antes**, y `supportedApplicationVersion` y
     `supportedBuildIdentifier` van siempre juntos: subir una sin release deja la app bloqueada por
     downgrade y en `unsupportedVariant`.
+29. **La colisión de overlays es del EOS SDK, no de Unreal.** Dragonwilds, Cloudheim y TMNT
+    (este último **FNA**) revientan con el mismo puntero corrupto `0x5320747375725420`, que es
+    texto ASCII, no una dirección. Lo único común es `EOSSDK-Win64-Shipping.dll`. Se corrige
+    deshabilitando `EOSOVH-Win64-Shipping` **solo dentro de ese proceso**, jamás en global.
+30. **Una activación compilada exige respaldo y manifiesto de rollback.** El intento recorre
+    `detected → planned → appliedAwaitingRelaunch`; el repositorio no lo promueve sin huellas
+    antes/después ni manifiesto de dos entradas. Reincidir con la receta ya activa cierra el
+    intento como `failed` en vez de reescribir la botella en bucle.
+31. **El permiso de custodia se toma una vez por lanzamiento** y vive todo el ámbito. Volver a
+    pedirlo dentro del arranque de Steam se bloqueaba a sí mismo con la intención ya registrada.
+32. **La ventana de observabilidad del lanzamiento cubre un arranque en frío de Steam.** Con dos
+    segundos, la intención se quedaba en disco y la biblioteca bloqueada hasta matar Steam.
 
 ---
 
@@ -345,7 +357,7 @@ exacto que recibirá GitHub.** Actualizar también la nota de contrato en `READM
 
 ---
 
-## 7. Estado actual (2026-08-14)
+## 7. Estado actual (2026-08-22)
 
 - **Release estable**: v1.12.5 (43), instalada en `/Applications/Regression.app`. Baseline
   histórico: v1.11.0 (37).
@@ -369,8 +381,16 @@ exacto que recibirá GitHub.** Actualizar también la nota de contrato en `READM
   perdía toda la geometría estática (edificios, props, decoración) mientras terreno, personajes y
   HUD sí pintaban. Se le asigna **Apple GPTK 4.0b2** por proceso exacto. Confirmado por el
   usuario. Ver `docs/games/dragonkin-the-banished.md`.
-- **Pendiente de investigar**: TMNT: Shredder's Revenge (1361510, motor **FNA**, lleva EOSSDK:
-  probable misma colisión de overlay que Cloudheim).
+- **Reparados y pendientes de certificar**: **TMNT: Shredder's Revenge** (1361510). Es **FNA**,
+  no Unreal, y aun así reprodujo el crash de Cloudheim con el **mismo** puntero corrupto
+  `0x5320747375725420` —que es texto ASCII, no una dirección—: lo único que comparten es el EOS
+  SDK. Se aísla `EOSOVH-Win64-Shipping` **solo** dentro de `TMNT.exe`. Arranque confirmado por el
+  usuario (pantalla de título, versión 1.0.0.349). Ver `docs/games/tmnt-shredders-revenge.md`.
+- **Falla y no es regresión**: **Core Keeper** (1621690). Muere a los ~15 s sin abrir ventana
+  porque su `CloudSyncDown` no sabe materializar partidas de nube cuando no hay copia local:
+  falla el respaldo de cada archivo inexistente y abandona el arranque. La base no registra
+  **ningún** run bueno anterior, y la botella no tiene activaciones compiladas, así que el runtime
+  nuevo queda descartado como causa. Ver `docs/games/core-keeper.md`.
 - **Validados con incidencia**: Dragon's Dogma 2 (letterbox 16:9), Rotwood (superficie 1512×870).
 - **Investigación abierta y separada**: FANTASY LIFE i, bloqueado por la política oficial de EAC en
   entornos virtualizados (`208 Cannot run under Virtual Machine`). No se elude, no se oculta la VM,
@@ -381,10 +401,24 @@ exacto que recibirá GitHub.** Actualizar también la nota de contrato en `READM
   D3DMetal para los títulos que acreditan el Agility SDK en la estructura canónica de Unreal.
   Las rutas compiladas mandan (DragonSword sigue en GPTK 3.0) y un Unity que solo empaqueta el
   SDK en la raíz no se toca — el caso de Core Keeper, que funciona. `regressionctl d3d12-metal-routes`.
+- **La autorreparación ya está desbloqueada y blindada.** El loader v2 acredita el App ID contra
+  el `appmanifest` de Steam antes de aplicar nada, y la activación solo se promueve a aplicada si
+  trae respaldo real y manifiesto de rollback de dos entradas. `reconcile` y `restore` funcionan.
+  Sigue siendo un aprendizaje **acotado**: `CompiledCrashRepairLearner` solo lee `.log` bajo
+  `drive_c/users` que mencionen el ejecutable, así que un juego que solo deja traza en el log del
+  lanzador —TMNT— se blinda a mano.
 - **Matriz de regresión permanente**: Steam/CEF, Palworld, Moonlighter 2 (control Unity) y la ruta D3D9.
+  ⚠️ Palworld y Moonlighter 2 **ya no están instalados**; en su lugar se validó con Fields of
+  Mistria (Unity) y Dragonkin (UE5/D3D12 por GPTK), que cubren las mismas clases de motor.
 - ⚠️ **El lanzador instalado está por delante del contrato publicado.** `Contents/MacOS/regression-engine`
-  incluye la ruta de Cloudheim y su hash ya no coincide con los PIN de 1.12.4 (fijados en ocho
-  archivos). Es deliberado: se resuelve al publicar la próxima versión, **nunca** reescribiendo los
-  PIN de una release ya publicada. Backup en `backups/launcher-pre-cloudheim-20260821-195727/`.
+  incluye las rutas de Cloudheim y TMNT y el detector D3D12 por evidencia, y su hash ya no coincide
+  con los PIN de 1.12.4. El `ntdll.so` instalado es el **loader v2** (acredita el App ID), con
+  `ComponentHealth` y los verificadores del asset refrescados en consecuencia. Es deliberado: se
+  resuelve al publicar la próxima versión, **nunca** reescribiendo los PIN de una release ya
+  publicada. `build/verify-protected-state.sh` apunta al bundle de *staging* del checkout, así que
+  no sirve para auditar `/Applications`; `verify-public-installed-state.sh` todavía no tiene modo
+  `--release-1.12.5` y hay que añadirlo al publicar. Backups en
+  `backups/launcher-pre-cloudheim-20260821-195727/`, `backups/runtime-install-20260822-062125/` y
+  `backups/launcher-pre-tmnt-20260822-065735/`.
 - La botella vive en `~/Library/Application Support/Regression/Bottles/Steam/` (datos del usuario,
   fuera del repo).

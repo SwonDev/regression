@@ -258,7 +258,7 @@ prepare_process_dll_isolation_routes()
     # La acción disponible es deliberadamente limitada: deshabilitar una DLL
     # opcional dentro de un ejecutable exacto. Wine valida ambos basenames y no
     # acepta rutas, modos de carga ni comandos desde el aprendizaje local.
-    export REGRESSION_PROCESS_DLL_ISOLATION_ROUTE_COUNT=2
+    export REGRESSION_PROCESS_DLL_ISOLATION_ROUTE_COUNT=3
     export REGRESSION_PROCESS_DLL_ISOLATION_ROUTE_0_EXECUTABLE="RSDragonwilds-Win64-Shipping.exe"
     export REGRESSION_PROCESS_DLL_ISOLATION_ROUTE_0_DLL="EOSOVH-Win64-Shipping"
     # Cloudheim reprodujo la misma colisión: el overlay de Steam y el de EOS
@@ -266,6 +266,12 @@ prepare_process_dll_isolation_routes()
     # corrupto (EXCEPTION_ACCESS_VIOLATION, exit 3). Ver docs/games/cloudheim.md.
     export REGRESSION_PROCESS_DLL_ISOLATION_ROUTE_1_EXECUTABLE="CloudheimSteam-Win64-Shipping.exe"
     export REGRESSION_PROCESS_DLL_ISOLATION_ROUTE_1_DLL="EOSOVH-Win64-Shipping"
+    # TMNT: Shredder's Revenge no es Unreal —es FNA— pero embarca el mismo
+    # EOSSDK, así que reproduce la colisión idéntica: el RIP salta a texto ASCII
+    # justo después de que un overlay consulte una interfaz desconocida sobre el
+    # dispositivo D3D11. Ver docs/games/tmnt-shredders-revenge.md.
+    export REGRESSION_PROCESS_DLL_ISOLATION_ROUTE_2_EXECUTABLE="TMNT.exe"
+    export REGRESSION_PROCESS_DLL_ISOLATION_ROUTE_2_DLL="EOSOVH-Win64-Shipping"
 }
 
 # Steam hereda únicamente rutas detectadas por una receta compilada y acotada.

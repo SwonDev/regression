@@ -140,6 +140,7 @@ public actor BackendCoordinator {
         @Sendable (RegressionInstallation) -> ComponentHealthReport
     private let rendererLaunchValidator:
         @Sendable (RegressionInstallation, String?) throws -> Void
+    private let launchObservabilityInterval: Duration
 
     public init(
         processRunner: any ProcessRunning,
@@ -155,6 +156,7 @@ public actor BackendCoordinator {
         self.custodyInterlock = custodyInterlock
         self.regressionComponentHealthProvider = RegressionLaunchComponentGate.evaluate
         self.rendererLaunchValidator = RendererLaunchGate.validate
+        self.launchObservabilityInterval = Self.defaultLaunchObservabilityInterval
     }
 
     init(
@@ -169,7 +171,9 @@ public actor BackendCoordinator {
         rendererLaunchValidator: @escaping @Sendable (
             RegressionInstallation,
             String?
-        ) throws -> Void = RendererLaunchGate.validate
+        ) throws -> Void = RendererLaunchGate.validate,
+        launchObservabilityInterval: Duration = BackendCoordinator
+            .defaultLaunchObservabilityInterval
     ) {
         self.processRunner = processRunner
         self.processLauncher = processLauncher
@@ -178,6 +182,7 @@ public actor BackendCoordinator {
         self.custodyInterlock = custodyInterlock
         self.regressionComponentHealthProvider = regressionComponentHealthProvider
         self.rendererLaunchValidator = rendererLaunchValidator
+        self.launchObservabilityInterval = launchObservabilityInterval
     }
 
     public func runningState() async -> RunningBackendState {
@@ -298,7 +303,6 @@ public actor BackendCoordinator {
                 appID: normalized,
                 running: running,
                 installations: installations,
-                custodyValidationLease: custodyValidationLease,
                 launchIntent: launchIntent,
                 processLaunchAuthority: bootstrapProcessLaunchAuthority
             )
@@ -346,7 +350,6 @@ public actor BackendCoordinator {
         appID: String,
         running: RunningBackendState,
         installations: InstallationSnapshot,
-        custodyValidationLease: PhysicalLibraryCustodyValidationLease?,
         launchIntent: PhysicalLibraryCustodyLaunchIntent?,
         processLaunchAuthority: ProcessLaunchAuthority
     ) async throws {
@@ -370,10 +373,11 @@ public actor BackendCoordinator {
         guard FileManager.default.isExecutableFile(atPath: steamCommand.executableURL.path) else {
             throw RegressionCoreError.launcherMissing(steamCommand.executableURL)
         }
-        try await validateOperationalSelection(
-            backend,
-            custodyValidationLease: custodyValidationLease
-        )
+        // El permiso de custodia de este lanzamiento ya está tomado y se mantiene durante todo
+        // el ámbito, así que aquí NO se vuelve a pedir: pedirlo otra vez se bloqueaba a sí mismo.
+        // La intención de lanzamiento ya está registrada en este punto y el interlock bloquea
+        // mientras exista, de modo que un juego que exige cliente activo nunca llegaba a
+        // arrancar Steam con la biblioteca cerrada, y cada reintento renovaba la intención.
         try validateRegressionLaunchComponents(
             installations.regression,
             appID: appID
@@ -569,16 +573,28 @@ public actor BackendCoordinator {
         }
     }
 
+    /// Espera a poder demostrar que el lanzamiento existe de verdad antes de resolver la
+    /// intención de custodia.
+    ///
+    /// El muestreo tiene que cubrir un arranque en frío completo: el lanzador abre wine, wine
+    /// levanta el servicio y solo después aparece `Steam.exe`, que es lo que el inspector sabe
+    /// atribuir. Con una ventana de dos segundos ese arranque perdía siempre la carrera, la
+    /// intención se quedaba en disco y la custodia permanecía bloqueada hasta matar Steam —con
+    /// el agravante de que cada reintento renovaba la intención—. La ventana termina en cuanto
+    /// hay evidencia, así que un arranque normal sigue resolviéndose en cuanto se ve el proceso.
+    private static let launchObservabilitySamples = 40
+    static let defaultLaunchObservabilityInterval = Duration.milliseconds(500)
+
     private func waitUntilLaunchIsObservable(_ launch: BackendLaunch) async throws -> Bool {
-        for sample in 0..<5 {
+        for sample in 0..<Self.launchObservabilitySamples {
             let running = await inspector.runningBackends()
             if running.hasConflict {
                 throw RegressionCoreError.backendConflict
             }
             let pids = launch.backend == .regression ? running.regressionPIDs : running.crossOverPIDs
             if pids.contains(launch.processID) || !pids.isEmpty { return true }
-            guard sample < 4 else { break }
-            try await Task.sleep(for: .milliseconds(500))
+            guard sample < Self.launchObservabilitySamples - 1 else { break }
+            try await Task.sleep(for: launchObservabilityInterval)
         }
         return false
     }

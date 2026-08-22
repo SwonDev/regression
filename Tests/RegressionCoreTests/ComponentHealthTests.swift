@@ -778,7 +778,7 @@ final class ComponentHealthTests: XCTestCase {
         "lib/wine/x86_64-unix/wine":
           "30593a00cbb40cb3f0a47a30964d52f35beed8c864e38d985d97eb07b7e62800",
         "lib/wine/x86_64-unix/ntdll.so":
-          "e6fc02dc04aace40eac4bd2700c6beaf5a235f2ab6bd40ecf60ba6b9a0b52f01",
+          "734e39cdc88232ecd2df0753793e8be1d5b9adaf3b1a7d337a44efcf82954d9c",
         "share/wine/wine.inf":
           "0315a55b11a456590a9368f4cb8d0011d6735cc04c9093ea583570d1352e1ee1",
         "lib/wine/x86_64-windows/ntdll.dll":

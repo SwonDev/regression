@@ -397,6 +397,33 @@ final class RegressionCoreTests: XCTestCase {
         )
     }
 
+    /// TMNT es FNA, no Unreal, pero embarca el mismo EOSSDK: el aislamiento se activa por el
+    /// basename exacto del proceso y jamás de forma global, para que ningún otro juego con
+    /// EOSSDK pierda su overlay por arrastre.
+    func testTMNTCompiledProfileIsolatesTheOverlayOnlyInsideItsOwnProcess() throws {
+        let profile = try XCTUnwrap(
+            GameRuntimeProfileCatalog.profile(for: "1361510", backend: .regression)
+        )
+
+        XCTAssertEqual(profile.identifier, "tmnt-shredders-revenge.fna-d3d11-dual-overlay-isolation")
+        XCTAssertEqual(profile.executable, "tmnt.exe")
+        XCTAssertEqual(profile.configurationValues["profile.scope"], "exact-process")
+        XCTAssertEqual(profile.configurationValues["profile.engine.family"], "fna")
+        XCTAssertEqual(
+            profile.configurationValues["profile.dll.disabled"],
+            "eosovh-win64-shipping"
+        )
+        XCTAssertEqual(
+            profile.configurationValues["profile.dll.policy"],
+            "disabled-only-in-matched-process"
+        )
+        // La receta no puede colarse como global: nadie más comparte ese basename.
+        XCTAssertEqual(
+            GameRuntimeProfileCatalog.all.filter { $0.executable == "tmnt.exe" }.count,
+            1
+        )
+    }
+
     func testTitanQuest2CompiledProfileIsExactAndRegressionOnly() throws {
         let profile = try XCTUnwrap(
             GameRuntimeProfileCatalog.profile(for: "1154030", backend: .regression)

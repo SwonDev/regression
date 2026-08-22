@@ -102,7 +102,7 @@ if [[ "$MODE" == "--release-1.12.2" || "$MODE" == "--release-1.12.3" || "$MODE" 
     verify_hash 30593a00cbb40cb3f0a47a30964d52f35beed8c864e38d985d97eb07b7e62800 \
         "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/wine"
     if [[ "$MODE" == "--release-1.12.3" || "$MODE" == "--release-1.12.4" ]]; then
-        verify_hash e6fc02dc04aace40eac4bd2700c6beaf5a235f2ab6bd40ecf60ba6b9a0b52f01 \
+        verify_hash 734e39cdc88232ecd2df0753793e8be1d5b9adaf3b1a7d337a44efcf82954d9c \
             "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
     else
         verify_hash f17cebf085a0a746224e61b4fc49341f7a0cec48741c5f12d1cc84a4dcd0ba5d \

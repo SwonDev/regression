@@ -423,6 +423,38 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
     actualizando solo su digest en el conjunto sellado, que es como se valida un cambio en la
     instalación real antes de comprometer una versión nueva.
 
+54. **La colisión de overlays no es un problema de Unreal: es del EOS SDK.** Dragonwilds,
+    Cloudheim y TMNT: Shredder's Revenge —Unreal los dos primeros, **FNA** el tercero— revientan
+    con el mismo puntero corrupto, `0x5320747375725420`, que no es una dirección sino texto ASCII.
+    Lo único que comparten es `EOSSDK-Win64-Shipping.dll` y el overlay que instala en la botella.
+    Ante un crash sin ventana con RIP en texto legible, comprueba si el juego embarca el EOS SDK
+    antes que su motor. La corrección es siempre la misma y siempre por basename exacto:
+    deshabilitar `EOSOVH-Win64-Shipping` **solo dentro de ese proceso**. Convertirlo en override
+    global dejaría sin overlay a juegos que hoy funcionan.
+
+55. **Una activación compilada solo se aplica si trae respaldo y manifiesto de rollback.** El
+    repositorio no promueve un intento a `appliedAwaitingRelaunch` sin huellas antes/después y sin
+    un manifiesto de dos entradas —el catálogo v2 que cambió y el formato v1 en cuarentena, cuya
+    huella idéntica acredita que no se tocó—. El respaldo se publica **antes** de tocar el catálogo
+    vivo y se nombra por su propio contenido, así que repetir la misma activación lo reutiliza en
+    vez de acumular copias. El intento recorre siempre `detected → planned → appliedAwaitingRelaunch`;
+    reincidir con la receta ya activa lo cierra como `failed` en lugar de reescribir la botella en
+    bucle. `restore` solo deshace si el catálogo vivo sigue siendo el que publicó ese recibo.
+
+56. **El permiso de custodia se toma una sola vez por lanzamiento.** Pedirlo otra vez dentro del
+    arranque de Steam era un bloqueo circular: la intención de lanzamiento ya está registrada y el
+    interlock deniega cualquier permiso mientras exista, de modo que un juego con
+    `requiresActiveSteamClient` nunca arrancaba con Steam cerrado y cada reintento renovaba la
+    intención. El permiso se adquiere en `launchSteamGeneral` y vive todo el ámbito; ninguna etapa
+    interior vuelve a pedirlo.
+
+57. **La ventana para acreditar que un lanzamiento es observable cubre un arranque en frío.** El
+    lanzador abre wine, wine levanta el servicio y solo entonces aparece `Steam.exe`, que es lo
+    único que el inspector sabe atribuir. Con una ventana de dos segundos ese arranque perdía
+    siempre la carrera, la intención se quedaba en disco y la biblioteca se quedaba bloqueada hasta
+    matar Steam. La espera termina en cuanto hay evidencia, así que un arranque normal se resuelve
+    igual de rápido.
+
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 
 Este proyecto es un sistema de muchas piezas acopladas (wine + DXMT + DXVK + D3DMetal + CEF +

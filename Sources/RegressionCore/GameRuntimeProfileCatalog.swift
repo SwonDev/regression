@@ -40,7 +40,7 @@ public enum AppleGPTKVersion: String, Equatable, Sendable {
 }
 
 public enum GameRuntimeProfileCatalog {
-    public static let revision = "2026-08-21.1"
+    public static let revision = "2026-08-22.1"
 
     public static let all: [CompiledGameRuntimeProfile] = [
         CompiledGameRuntimeProfile(
@@ -264,6 +264,23 @@ public enum GameRuntimeProfileCatalog {
                 "profile.repair.detector": "strict-crash-stack-v1",
                 "profile.repair.learning": "typed-executable-recipe-activation-v1",
                 "profile.repair.rollback": "private-activation-snapshot",
+                "profile.dll.disabled": "eosovh-win64-shipping",
+                "profile.dll.policy": "disabled-only-in-matched-process",
+                "profile.launcher.entrypoints": "regression,steam",
+                "profile.router.contract": "compiled-process-scoped-dll-isolation-v1"
+            ]
+        ),
+        CompiledGameRuntimeProfile(
+            appID: "1361510",
+            identifier: "tmnt-shredders-revenge.fna-d3d11-dual-overlay-isolation",
+            revision: 1,
+            executable: "tmnt.exe",
+            requiresActiveSteamClient: true,
+            configurationValues: [
+                "profile.scope": "exact-process",
+                "profile.engine.family": "fna",
+                "profile.graphics.api": "d3d11",
+                "profile.repair.detector": "strict-crash-stack-v1",
                 "profile.dll.disabled": "eosovh-win64-shipping",
                 "profile.dll.policy": "disabled-only-in-matched-process",
                 "profile.launcher.entrypoints": "regression,steam",
