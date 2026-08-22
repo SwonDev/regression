@@ -64,7 +64,7 @@ verify_prepackage_state()
     source_hash="$(shasum -a 256 "$source_engine" | awk '{print $1}')"
     installed_ntdll_hash="$(shasum -a 256 "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so" | awk '{print $1}')"
 
-    if [[ "$installed_hash" == "c2a55bb07200d68a08fc7a1478826abd4d99460333543302ba00a552d7ca6ee6" &&
+    if [[ "$installed_hash" == "3c1c789244ae8e7f8e3c97f5b905ca521dedcfff444efeec7e5fdf32bc1b31b8" &&
           "$source_hash" == "$installed_hash" ]]; then
         # La línea 1.12 sustituye el conjunto entero de arranque Wine después
         # del backup. El bundle previo no se puede acreditar aún con ese builder,

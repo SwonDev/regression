@@ -147,19 +147,19 @@ public enum TrustedComponentCatalog {
   private static let steamRuntimePublicCoreFiles: [TrustedComponentFile] = [
     TrustedComponentFile(
       relativePath: "bin/wine",
-      expectedSHA256: "3f8de8c0045104d3fea31a8bb4c3bd6f1c3eead55c9f847e2b5dfac0498ec77c"
+      expectedSHA256: "735a1ef0f5c681ea0a8a89f4be2bd1fb079e915af1b3faabfce1f555bc944a8f"
     ),
     TrustedComponentFile(
       relativePath: "bin/wineserver",
-      expectedSHA256: "82602c3bd85171586d094050e4671035045f39767d82cc4eff3ca4cb8a3052e3"
+      expectedSHA256: "bf709571a2c040aebe2d721da0c3b2d4cecc1d11a941812bfd9f352579fe094b"
     ),
     TrustedComponentFile(
       relativePath: "lib/wine/x86_64-unix/wine",
-      expectedSHA256: "30593a00cbb40cb3f0a47a30964d52f35beed8c864e38d985d97eb07b7e62800"
+      expectedSHA256: "56db2f4832b29507dc42286f297a7df8508e372d5f73957e661cd1f84cfbc298"
     ),
     TrustedComponentFile(
       relativePath: "lib/wine/x86_64-unix/ntdll.so",
-      expectedSHA256: "734e39cdc88232ecd2df0753793e8be1d5b9adaf3b1a7d337a44efcf82954d9c"
+      expectedSHA256: "15d3479d4ee348c4a7cb7e77507fa5664ef919eadefc2845dbdfd2ddced68009"
     ),
     TrustedComponentFile(
       relativePath: "share/wine/wine.inf",

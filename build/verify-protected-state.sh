@@ -223,10 +223,10 @@ verify_release_1_12_development_runtime_authority()
     local runtime_build="${REGRESSION_1_12_DEVELOPMENT_RUNTIME_BUILD:-$ROOT/build/release-1.12.0/wine64-public}"
     local build_relative app_relative expected expected_normalized actual_normalized
     local -a runtime_entries=(
-        "df8f8a90bd48389fb7e5e0a32ea365e9d8d7e9ad49ad93e91cd7908d703f35ff:tools/wine/wine:bin/wine"
-        "49cd7061cef48c1da9d3ddd030c15e20d7f8e9dc5657df3c1519c961efdc769a:server/wineserver:bin/wineserver"
-        "9ca585914934ec3924f7a4f007e78fde9e249d98be3119b4dde73bfad3f5fe44:loader/wine:lib/wine/x86_64-unix/wine"
-        "2237f6ce9746af7b995a18d69247655e2e5b41316c304f9013a3258c42882e98:dlls/ntdll/ntdll.so:lib/wine/x86_64-unix/ntdll.so"
+        "73197bebbedcc39afc6e1e879f0af606a470cfed8367520479d84db69e4d59c0:tools/wine/wine:bin/wine"
+        "aca53f116064fdf601ff084287fcd3286bb7b7df378972f45d764e05321e718c:server/wineserver:bin/wineserver"
+        "90c5d1734b06d42bde47dff36adaa486d86b7411b050077f38cdfa09dfc988be:loader/wine:lib/wine/x86_64-unix/wine"
+        "664f466b5c26cf3558859d283b95b2795aaafdaf371089ca5715fb79f699d4e8:dlls/ntdll/ntdll.so:lib/wine/x86_64-unix/ntdll.so"
     )
 
     # El árbol de compilación pesa gigabytes y nunca se versiona, así que acaba
@@ -313,7 +313,7 @@ if $RELEASE_1_12_DEVELOPMENT_CANDIDATE || $CANDIDATE_1_12_2_BEFORE_RUNTIME_CONTR
     if $CANDIDATE_1_12_2_BEFORE_RUNTIME_CONTROL_FIX; then
         expected_engine_hash="38be0b5fd0bed42e5467f9a61c5c972733898523eeac3e34e83eb5317efb3edf"
     else
-        expected_engine_hash="c2a55bb07200d68a08fc7a1478826abd4d99460333543302ba00a552d7ca6ee6"
+        expected_engine_hash="3c1c789244ae8e7f8e3c97f5b905ca521dedcfff444efeec7e5fdf32bc1b31b8"
     fi
     verify_hash "$expected_engine_hash" \
         "Contents/MacOS/regression-engine"
@@ -370,7 +370,7 @@ elif $BEFORE_THREE_GAMES_PROMOTION || $BEFORE_DD2_PROMOTION || \
     verify_hash 5d99cae95a60c84b8bc9759736ed9e9bec1dafe9b9af8a8190f26c232781ec60 \
         "Contents/MacOS/regression-engine"
 else
-    verify_hash c2a55bb07200d68a08fc7a1478826abd4d99460333543302ba00a552d7ca6ee6 \
+    verify_hash 3c1c789244ae8e7f8e3c97f5b905ca521dedcfff444efeec7e5fdf32bc1b31b8 \
         "Contents/MacOS/regression-engine"
 fi
 if $RELEASE_1_11_DEVELOPMENT_CANDIDATE; then
