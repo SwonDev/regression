@@ -273,6 +273,12 @@ step "6/7 Verificación del asset exacto"
 bash "$ROOT/build/verify-release-asset.sh" "$ASSET" "$CHECKSUM" "$VERSION" "$BUILD_NUMBER" \
     | tail -1 | sed 's/^/   /'
 
+# El staging es reconstruible desde la app canónica y, mientras exista, Spotlight
+# lo indexa y `verify-canonical-installation.sh` falla por tener dos apps. Se
+# retira en cuanto el asset está verificado.
+rm -rf "$STAGING_APP"
+info "staging retirado"
+
 # ---------------------------------------------------------------------------
 step "7/7 Publicación"
 if ! $PUBLISH; then
