@@ -2,10 +2,13 @@
 # Audita el artefacto que recibirá un Mac limpio, no el bundle de desarrollo.
 set -Eeuo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ASSET="${1:-}"
 CHECKSUM="${2:-}"
 EXPECTED_VERSION="${3:-}"
 EXPECTED_BUILD="${4:-}"
+# El instalador publicado sale de este archivo; se audita junto al asset.
+INSTALLER_SOURCE="${REGRESSION_RELEASE_INSTALLER_SOURCE:-$ROOT/Scripts/install_regression.sh}"
 PUBLIC_WINE_PREFIX="/Applications/Regression.app/Contents/SharedSupport/wine-root"
 WORK_DIR=""
 
@@ -271,6 +274,12 @@ fi
 while IFS=' ' read -r expected relative; do
     [[ "$(shasum -a 256 "$WINE_ROOT/$relative" 2>/dev/null | awk '{print $1}')" == "$expected" ]] \
         || fail "el redistribuible sellado no coincide: $relative"
+    # El instalador viaja como asset y lleva su propia copia de esta tabla. Si se
+    # queda atrás, el release publicado NO se puede instalar aunque el asset sea
+    # impecable: el instalador rechaza su propio runtime. Pasó en 1.12.5 y por eso
+    # se comprueba aquí, contra el mismo valor que acaba de acreditarse.
+    grep -qF "$expected $relative" "$INSTALLER_SOURCE" \
+        || fail "el instalador no declara el redistribuible que viaja en el asset: $relative"
 done < <(release_runtime_authority_v2)
 
 [[ -f "$MEDIA_ROOT/gstreamer-1.0/libgstasf.dylib" \

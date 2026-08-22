@@ -171,6 +171,9 @@ PUBLIC_SITES=(
     "$ROOT/Tests/RegressionCoreTests/ComponentHealthTests.swift"
     "$ROOT/build/verify-public-runtime-transform-1.12.sh"
     "$ROOT/build/verify-release-asset.sh"
+    # El instalador viaja como asset y declara su propio ensemble: si se queda
+    # atrás, el release publicado no se puede instalar aunque el asset sea válido.
+    "$ROOT/Scripts/install_regression.sh"
 )
 
 # --- juego 1: crudo del builder --------------------------------------------
