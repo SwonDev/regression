@@ -31,6 +31,92 @@ final class D3D12MetalRouteDetectorTests: XCTestCase {
         return shippingURL
     }
 
+    /// Igual que `makeUnrealGame`, pero el ejecutable es un PE de verdad: así se puede fijar la
+    /// evidencia que de verdad usa el detector para los títulos sin Agility SDK.
+    @discardableResult
+    private func makeUnrealExecutable(
+        in steamRoot: URL,
+        game: String,
+        project: String,
+        executable: String,
+        delayLoads: [String]
+    ) throws -> URL {
+        let win64 = steamRoot.appendingPathComponent(
+            "steamapps/common/\(game)/\(project)/Binaries/Win64",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: win64, withIntermediateDirectories: true)
+        let url = win64.appendingPathComponent(executable)
+        try MinimalPortableExecutable
+            .data(linked: ["dxgi.dll", "d3d11.dll"], delayed: delayLoads)
+            .write(to: url)
+        return url
+    }
+
+    /// Wayfinder y Redfall: Unreal, sin Agility SDK y con el ejecutable nombrado como el juego.
+    /// Quedaban invisibles para el detector y mostraban «DX12 is not supported in your system».
+    func testDetectorRoutesUnrealGameThatOnlyDelayLoadsDirect3D12() throws {
+        let steamRoot = makeSteamRoot()
+        defer { try? FileManager.default.removeItem(at: steamRoot) }
+        let executable = try makeUnrealExecutable(
+            in: steamRoot,
+            game: "Wayfarer",
+            project: "Atlas",
+            executable: "Wayfarer.exe",
+            delayLoads: ["d3d12.dll"]
+        )
+
+        let routes = try D3D12MetalRouteDetector.routes(in: steamRoot)
+
+        XCTAssertEqual(routes.count, 1)
+        XCTAssertEqual(routes[0].shippingExecutable, "Wayfarer.exe")
+        XCTAssertEqual(
+            routes[0].shippingURL.resolvingSymlinksInPath(),
+            executable.resolvingSymlinksInPath()
+        )
+    }
+
+    /// El contrapunto imprescindible: un Unreal que solo usa D3D11 no puede recibir la pila de
+    /// Apple por estar en la misma estructura de carpetas.
+    func testDetectorLeavesDirect3D11OnlyUnrealGameAlone() throws {
+        let steamRoot = makeSteamRoot()
+        defer { try? FileManager.default.removeItem(at: steamRoot) }
+        try makeUnrealExecutable(
+            in: steamRoot,
+            game: "Calm Game",
+            project: "Calm",
+            executable: "CalmGame.exe",
+            delayLoads: ["d3dcompiler_43.dll"]
+        )
+
+        XCTAssertTrue(try D3D12MetalRouteDetector.routes(in: steamRoot).isEmpty)
+    }
+
+    /// `Engine/Binaries/Win64` viaja con herramientas auxiliares. Solo el que acredita D3D12
+    /// puede enrutarse, y un proyecto con dos candidatos queda fuera por ambiguo.
+    func testDetectorIgnoresAuxiliaryExecutablesWithoutDirect3D12() throws {
+        let steamRoot = makeSteamRoot()
+        defer { try? FileManager.default.removeItem(at: steamRoot) }
+        try makeUnrealExecutable(
+            in: steamRoot,
+            game: "Tooling Game",
+            project: "Engine",
+            executable: "CrashReportClient.exe",
+            delayLoads: []
+        )
+        try makeUnrealExecutable(
+            in: steamRoot,
+            game: "Tooling Game",
+            project: "Tooling",
+            executable: "ToolingGame.exe",
+            delayLoads: ["d3d12.dll"]
+        )
+
+        let routes = try D3D12MetalRouteDetector.routes(in: steamRoot)
+
+        XCTAssertEqual(routes.map(\.shippingExecutable), ["ToolingGame.exe"])
+    }
+
     func testDetectorFindsUnrealGameShippingTheAgilitySDK() throws {
         let steamRoot = makeSteamRoot()
         defer { try? FileManager.default.removeItem(at: steamRoot) }

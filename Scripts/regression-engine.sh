@@ -154,7 +154,10 @@ prepare_external_apple_gptk_routes()
 
         if [[ -x "$controller" ]] && detected="$("$controller" d3d12-metal-routes 2>/dev/null)"; then
             while IFS=$'\t' read -r basename_candidate route_path; do
-                [[ "$basename_candidate" =~ ^[A-Za-z0-9_-]+-Win64-Shipping\.exe$ ]] || continue
+                # El basename solo puede traer letras, dígitos, guion y guion bajo. Ya no se
+                # exige `-Win64-Shipping`: casi ningún juego Unreal con D3D12 lo usa, y exigirlo
+                # dejaba fuera a los que muestran «DX12 is not supported in your system».
+                [[ "$basename_candidate" =~ ^[A-Za-z0-9_-]+\.exe$ ]] || continue
                 [[ "$route_path" == "$WINEPREFIX/drive_c/Program Files (x86)/Steam/steamapps/common/"* ]] || continue
                 [[ -f "$route_path" && ! -L "$route_path" ]] || continue
                 [[ "$routed_basenames" != *"|$basename_candidate|"* ]] || continue

@@ -18,11 +18,23 @@ public struct D3D12MetalRoute: Equatable, Sendable {
 /// juego que "funciona" y nadie abre una incidencia. Ese fallo silencioso es la razón de este
 /// detector: hasta ahora cada título había que añadirlo a mano a una lista de ejecutables.
 ///
-/// La evidencia aceptada es una sola y es del propio juego: el **Agility SDK** de Direct3D 12
-/// (`D3D12Core.dll`) junto al Shipping de Unreal, en la estructura canónica
-/// `<juego>/<proyecto>/Binaries/Win64/D3D12/`. No se infiere por App ID, ni por nombre, ni por
-/// nada que el juego pueda declarar sin traer el runtime. Un ejecutable que no acredita esa
-/// estructura no obtiene ruta y conserva exactamente el comportamiento anterior.
+/// Se aceptan **dos formas de evidencia**, ambas del propio juego y ninguna inferida por App ID
+/// o por nombre:
+///
+/// 1. El **Agility SDK** de Direct3D 12 (`D3D12Core.dll`) junto al Shipping de Unreal, en la
+///    estructura canónica `<juego>/<proyecto>/Binaries/Win64/D3D12/`.
+/// 2. El ejecutable declara `d3d12.dll` como **delay-load** en su propio PE.
+///
+/// La segunda existe porque la primera dejaba fuera a la mayoría. Unreal no enlaza `d3d12.dll`
+/// de forma estática —el juego no arrancaría en máquinas sin D3D12—: lo declara como delay-load
+/// y decide en tiempo de ejecución. Un título así, sin Agility SDK y con un ejecutable que no se
+/// llama `*-Win64-Shipping.exe`, quedaba invisible para el detector y terminaba mostrando
+/// «DX12 is not supported in your system», que es el juego rindiéndose, no el motor fallando.
+///
+/// El criterio se validó contra la biblioteca entera: lo acreditan exactamente los títulos que
+/// necesitan D3D12 —incluido DragonSword, cuyo perfil compilado ya codificaba a mano esta misma
+/// evidencia— y **ninguno** de los que funcionan sobre DXMT. Un ejecutable que no acredita
+/// ninguna de las dos formas conserva exactamente el comportamiento anterior.
 ///
 /// El detector **solo propone basenames**. La generación de GPTK, la verificación del componente
 /// y la decisión final siguen siendo del lanzador, y las rutas compiladas tienen precedencia:
@@ -33,6 +45,8 @@ public enum D3D12MetalRouteDetector {
     private static let maximumGames = 1_024
     private static let maximumProjectDirectories = 64
     private static let maximumRoutes = 16
+    private static let maximumExecutablesPerProject = 64
+    private static let direct3D12Module = "d3d12.dll"
 
     public static func routes(in steamRootURL: URL) throws -> [D3D12MetalRoute] {
         let commonURL = steamRootURL
@@ -99,29 +113,43 @@ public enum D3D12MetalRouteDetector {
             let win64URL = projectURL
                 .appendingPathComponent("Binaries", isDirectory: true)
                 .appendingPathComponent("Win64", isDirectory: true)
+            guard try isRegularNonSymlink(win64URL, directory: true) else { continue }
+
             let agilityURL = win64URL
                 .appendingPathComponent("D3D12", isDirectory: true)
                 .appendingPathComponent(agilityCoreName)
-            guard try isRegularNonSymlink(win64URL, directory: true),
-                  try isRegularNonSymlink(agilityURL, directory: false) else { continue }
+            let hasAgilitySDK = try isRegularNonSymlink(agilityURL, directory: false)
 
-            let shippingCandidates = try FileManager.default.contentsOfDirectory(
+            let executables = try FileManager.default.contentsOfDirectory(
                 at: win64URL,
                 includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
                 options: [.skipsHiddenFiles]
             ).filter {
-                $0.lastPathComponent.hasSuffix(shippingSuffix)
+                $0.pathExtension.caseInsensitiveCompare("exe") == .orderedSame
             }.sorted { $0.path < $1.path }
+            guard executables.count <= maximumExecutablesPerProject else { continue }
 
-            // Un único Shipping por proyecto: varios harían ambigua la decisión.
-            guard shippingCandidates.count == 1,
-                  let discoveredShippingURL = shippingCandidates.first else { continue }
-            let shippingURL = win64URL.appendingPathComponent(
-                discoveredShippingURL.lastPathComponent
-            )
-            guard try isRegularNonSymlink(shippingURL, directory: false),
-                  isSafeShippingExecutable(shippingURL.lastPathComponent),
-                  isSafeRoutePath(shippingURL.path) else { continue }
+            var candidates: [URL] = []
+            for discovered in executables {
+                let executableURL = win64URL.appendingPathComponent(discovered.lastPathComponent)
+                guard try isRegularNonSymlink(executableURL, directory: false),
+                      isSafeRoutedExecutable(executableURL.lastPathComponent),
+                      isSafeRoutePath(executableURL.path) else { continue }
+
+                // Evidencia 1: el Shipping canónico de Unreal acompañado del Agility SDK.
+                if hasAgilitySDK, executableURL.lastPathComponent.hasSuffix(shippingSuffix) {
+                    candidates.append(executableURL)
+                    continue
+                }
+                // Evidencia 2: el propio PE declara `d3d12.dll` como delay-load.
+                if let imports = (try? PortableExecutableReader.imports(at: executableURL)) ?? nil,
+                   imports.delayLoads(direct3D12Module) {
+                    candidates.append(executableURL)
+                }
+            }
+
+            // Un único candidato por proyecto: varios harían ambigua la decisión gráfica.
+            guard candidates.count == 1, let shippingURL = candidates.first else { continue }
 
             result.append(D3D12MetalRoute(
                 shippingExecutable: shippingURL.lastPathComponent,
@@ -142,9 +170,13 @@ public enum D3D12MetalRouteDetector {
 
     /// El basename viaja a Wine por entorno, así que se acota a lo que el loader acepta:
     /// sin rutas, sin separadores y sin caracteres que puedan alterar la comparación.
-    private static func isSafeShippingExecutable(_ name: String) -> Bool {
-        guard name.hasSuffix(shippingSuffix), name.utf8.count < 128 else { return false }
-        let stem = String(name.dropLast(shippingSuffix.utf8.count))
+    /// Un basename enrutable solo puede contener letras, dígitos, guion y guion bajo antes de
+    /// `.exe`. No se exige ya el sufijo `-Win64-Shipping`: la mayoría de los juegos Unreal que
+    /// necesitan D3D12 nombran su ejecutable como el juego. La estrictez se conserva porque el
+    /// basename viaja hasta el loader de Wine dentro de una variable de entorno.
+    private static func isSafeRoutedExecutable(_ name: String) -> Bool {
+        guard name.lowercased().hasSuffix(".exe"), name.utf8.count < 128 else { return false }
+        let stem = String(name.dropLast(4))
         guard !stem.isEmpty else { return false }
         return stem.utf8.allSatisfy { byte in
             (0x30...0x39).contains(byte)
