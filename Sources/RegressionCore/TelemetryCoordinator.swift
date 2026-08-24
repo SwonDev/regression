@@ -403,7 +403,32 @@ public actor TelemetryCoordinator {
             let representativeExitCode = run.exitCodes[run.representativeProcessID]
                 ?? termination.exitCode
             // Un cierre limpio no demuestra render, entrada, opciones ni gameplay.
-            let result: RunResult = representativeExitCode == 0 ? .unknown : .crashed
+            var result: RunResult = representativeExitCode == 0 ? .unknown : .crashed
+
+            // Un motor con manejador de crash propio termina con **código 0** aunque haya
+            // reventado: Unity intercepta el fallo, escribe la traza y sale limpio. Si dejó una
+            // traza reconocible dentro de la ventana del run, el run **crasheó**, y así se
+            // registra: el código de salida no manda sobre la evidencia.
+            //
+            // Se reclasifica el run en vez de relajar la puerta durable, que sigue exigiendo que
+            // todo intento de reparación proceda de un run crasheado. El veredicto solo puede
+            // endurecerse —de `unknown` a `crashed`—, nunca al revés, así que esto no puede
+            // convertir un run malo en bueno.
+            let crashDetection: CompiledCrashRepairDetection?
+            if run.backend == .regression {
+                crashDetection = try? CompiledCrashRepairLearner.detect(
+                    appID: run.appID,
+                    executable: run.representativeExecutable,
+                    bottleURL: run.bottleURL,
+                    startedAt: run.startedAt,
+                    endedAt: termination.endedAt
+                )
+            } else {
+                crashDetection = nil
+            }
+            if result == .unknown, crashDetection != nil {
+                result = .crashed
+            }
             do {
                 try await repository.finishRun(
                     id: run.id,
@@ -423,15 +448,18 @@ public actor TelemetryCoordinator {
                 ).map {
                     TelemetryIssue(code: .artifactCleanup, message: $0)
                 })
+                // Un motor con manejador de crash propio termina con **código 0** aunque haya
+                // reventado: Unity intercepta el fallo, escribe la traza y sale limpio, así que
+                // el run queda como `.unknown`. Exigir `.crashed` dejaba fuera justo esos casos
+                // —Beyond Contact traía la firma completa de la colisión de overlays y la
+                // autorreparación ni la miraba—.
+                //
+                // La atribución no se relaja por ello: el clasificador sigue exigiendo la cadena
+                // causal completa, así que un cierre limpio de verdad no produce ninguna receta.
                 if result == .crashed, run.backend == .regression {
                     do {
-                        if let detection = try CompiledCrashRepairLearner.detect(
-                            appID: run.appID,
-                            executable: run.representativeExecutable,
-                            bottleURL: run.bottleURL,
-                            startedAt: run.startedAt,
-                            endedAt: termination.endedAt
-                        ) {
+                        // La detección ya se hizo arriba para poder clasificar el run.
+                        if let detection = crashDetection {
                             // El loader ya aísla App ID y basename: acredita contra el
                             // `appmanifest` de Steam que el proceso pertenece de verdad al
                             // App ID del registro. La activación puede escribirse, y surte

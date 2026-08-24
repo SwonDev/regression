@@ -15,19 +15,34 @@ public enum CompiledRepairRecipe: String, Codable, CaseIterable, Sendable {
 }
 
 public enum CompiledRepairClassifier {
+    /// Cada motor redacta su cabecera de crash a su manera. La causa no está en esa redacción,
+    /// así que se acepta cualquiera de las conocidas y la atribución la deciden los marcadores
+    /// causales, que siguen siendo obligatorios todos.
+    private static let crashHeaders = [
+        "unhandled exception: exception_access_violation",  // Unreal
+        "crash!!!",                                         // Unity
+        "end of stacktrace",                                // Unity
+        "unhandled page fault"                              // el depurador de Wine
+    ]
+
     /// Reconoce la colisión reproducida entre el overlay de Steam, el overlay de EOS y D3D11.
-    /// Todos los marcadores son obligatorios para evitar atribuir cualquier crash de Unreal a
-    /// esta receta.
+    ///
+    /// Los cuatro módulos son obligatorios: son la cadena causal —el overlay de Steam y el de
+    /// Epic encadenan hooks sobre el mismo dispositivo D3D11 y la llamada salta a un puntero
+    /// sobrescrito—. Exigir además la cabecera **de Unreal** era un error: la colisión se ha
+    /// reproducido en Unreal (Cloudheim, Dragonwilds), en FNA (TMNT) y en Unity (Beyond Contact),
+    /// y Unity escribe `Crash!!!` donde Unreal escribe `Unhandled exception`. Por esa palabra, la
+    /// autorreparación no reconocía un crash que traía la firma completa.
     public static func recipe(forCrashLog log: String) -> CompiledRepairRecipe? {
         let normalized = log.lowercased()
-        let markers = [
-            "unhandled exception: exception_access_violation",
+        let collisionMarkers = [
             "d3d11.dll",
             "gameoverlayrenderer64.dll",
             "eosovh-win64-shipping.dll",
             "eossdk-win64-shipping.dll"
         ]
-        if markers.allSatisfy(normalized.contains) {
+        if crashHeaders.contains(where: normalized.contains),
+           collisionMarkers.allSatisfy(normalized.contains) {
             return .unrealD3D11DualOverlayIsolation
         }
 
@@ -772,7 +787,12 @@ public struct CompiledCrashRepairDetection: Equatable, Sendable {
 /// fallar. El recorrido se limita a AppData/Local, no sigue symlinks y tiene límites de profundidad,
 /// cantidad y tamaño para que un juego no pueda convertir el diagnóstico en una exploración libre.
 public enum CompiledCrashRepairLearner {
-    private static let maximumFiles = 4_096
+    // El recorrido está acotado, pero 4096 entradas no alcanzaban ni para cruzar
+    // `AppData/Local` —que en una botella real ronda las 6300—, y como el recorrido iba en orden
+    // alfabético, `Local` se comía el presupuesto entero antes de llegar a `LocalLow`, que es
+    // justo donde **todos** los juegos Unity escriben su `Player.log`. Por eso la autorreparación
+    // no reconocía ni un solo crash de Unity: nunca llegaba a leer la traza.
+    private static let maximumFiles = 65_536
     private static let maximumDepth = 9
     private static let maximumLogBytes = 4 * 1024 * 1024
 
@@ -869,7 +889,25 @@ public enum CompiledCrashRepairLearner {
             ],
             options: [.skipsHiddenFiles]
         )
-        for entry in entries.sorted(by: { $0.path < $1.path }) where budget > 0 {
+        // Se busca evidencia **reciente**, así que se mira primero lo que se ha tocado hace poco.
+        // Con un recorrido alfabético, un presupuesto agotado deja fuera precisamente el árbol que
+        // el juego acaba de escribir; ordenando por fecha, lo primero que se visita es lo que
+        // cambió durante la ejecución. La ruta desempata para que el recorrido sea determinista.
+        var dated: [(url: URL, modifiedAt: Date)] = []
+        dated.reserveCapacity(entries.count)
+        for entry in entries {
+            let values = try? entry.resourceValues(forKeys: [.contentModificationDateKey])
+            dated.append((entry, values?.contentModificationDate ?? Date.distantPast))
+        }
+        dated.sort { left, right in
+            if left.modifiedAt == right.modifiedAt {
+                return left.url.path < right.url.path
+            }
+            return left.modifiedAt > right.modifiedAt
+        }
+        let ordered: [URL] = dated.map { $0.url }
+
+        for entry in ordered where budget > 0 {
             budget -= 1
             let values = try entry.resourceValues(forKeys: [
                 .isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey,

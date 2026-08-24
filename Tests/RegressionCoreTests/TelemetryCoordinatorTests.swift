@@ -337,6 +337,81 @@ final class TelemetryCoordinatorTests: XCTestCase {
         XCTAssertEqual(profile.perfectRuns, 0)
     }
 
+    /// Unity intercepta su propio crash, escribe la traza y **sale con código 0**, así que el run
+    /// queda como `.unknown`. Exigir `.crashed` dejaba fuera justo esos casos: Beyond Contact
+    /// traía la firma completa de la colisión de overlays y la autorreparación ni la miraba.
+    func testCleanExitWithACrashSignatureStillActivatesTheRecipe() async throws {
+        let fixture = try TelemetryFixture()
+        defer { fixture.remove() }
+        let processLogURL = fixture.root.appendingPathComponent("clean-exit-gameprocess_log.txt")
+        XCTAssertTrue(FileManager.default.createFile(atPath: processLogURL.path, contents: nil))
+        await fixture.telemetry.beginMonitoring(logURL: processLogURL)
+        let sourceStartedAt = try XCTUnwrap(Self.steamLogDate("2026-07-28 11:59:59"))
+        try await fixture.telemetry.registerLaunchIntent(
+            context: fixture.context(startedAt: sourceStartedAt),
+            bottleURL: fixture.bottleURL
+        )
+
+        // Traza con la redacción de Unity, no la de Unreal.
+        let crashDirectory = fixture.bottleURL.appendingPathComponent(
+            "drive_c/users/test/AppData/LocalLow/Playcorp/Beyond",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: crashDirectory, withIntermediateDirectories: true)
+        let crashURL = crashDirectory.appendingPathComponent("Player.log")
+        try Data("""
+        Crash!!!
+        gameoverlayrenderer64.dll
+        EOSSDK-Win64-Shipping.dll
+        EOSOVH-Win64-Shipping.dll
+        d3d11.dll
+        ========== END OF STACKTRACE ===========
+        Future-Win64-Shipping.exe
+        """.utf8).write(to: crashURL)
+        let timestamp = try XCTUnwrap(Self.steamLogDate("2026-07-28 12:00:02"))
+        try FileManager.default.setAttributes(
+            [.modificationDate: timestamp],
+            ofItemAtPath: crashURL.path
+        )
+
+        // Código de salida 0: el manejador del motor se tragó el fallo.
+        try Data(#"""
+        [2026-07-28 12:00:00] AppID 219990 adding PID 4242 as a tracked process "C:\Games\Future\Future-Win64-Shipping.exe"
+        [2026-07-28 12:00:02] AppID 219990 no longer tracking PID 4242, exit code 0
+
+        """#.utf8).write(to: processLogURL)
+
+        let outcome = await fixture.telemetry.poll(
+            backend: .regression,
+            logURL: processLogURL,
+            games: [fixture.game],
+            system: fixture.context().system,
+            steamRootURL: fixture.root.appendingPathComponent("Steam", isDirectory: true),
+            bottleURL: fixture.bottleURL,
+            bottleName: "Steam",
+            providerVersion: "1.9"
+        )
+
+        XCTAssertTrue(outcome.changed)
+        XCTAssertTrue(
+            outcome.issues.isEmpty,
+            "incidencias inesperadas: \(outcome.issues.map(\.message))"
+        )
+        // El run se reclasifica a `crashed` por la evidencia, aunque saliera con código 0.
+        let runs = try await fixture.repository.recentRuns()
+        let run = try XCTUnwrap(runs.first { $0.appID == "219990" })
+        XCTAssertEqual(run.result, .crashed, "una traza de crash pesa más que el código de salida")
+
+        let activations = try CompiledRepairActivationStore.activations(in: fixture.bottleURL)
+        let activation = try XCTUnwrap(
+            activations.first,
+            "un cierre limpio con firma de crash sí se repara; activaciones=\(activations.count)"
+        )
+        XCTAssertEqual(activations.count, 1)
+        XCTAssertEqual(activation.appID, "219990")
+        XCTAssertEqual(activation.recipe, .unrealD3D11DualOverlayIsolation)
+    }
+
     func testCrashedRunActivatesTheRecognisedRecipeForTheExactProcess() async throws {
         let fixture = try TelemetryFixture()
         defer { fixture.remove() }

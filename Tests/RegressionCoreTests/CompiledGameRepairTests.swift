@@ -176,6 +176,60 @@ final class CompiledGameRepairTests: XCTestCase {
         )
     }
 
+    /// Beyond Contact es **Unity** y trajo la firma completa de la colisión, pero la
+    /// autorreparación no la reconocía porque el clasificador exigía la cabecera de Unreal.
+    /// Unity escribe `Crash!!!` donde Unreal escribe `Unhandled exception`.
+    func testUnityCrashStackWithTheSameCollisionIsRecognised() {
+        let crash = """
+        Crash!!!
+        SymInit: Symbol-SearchPath: '.', symOptions: 534, UserName: 'crossover'
+        C:\\Program Files (x86)\\Steam\\gameoverlayrenderer64.dll:gameoverlayrenderer64.dll
+        C:\\...\\Beyond_Data\\Plugins\\x86_64\\EOSSDK-Win64-Shipping.dll:EOSSDK-Win64-Shipping.dll
+        C:\\...\\EOSOVH-Win64-Shipping.dll:EOSOVH-Win64-Shipping.dll
+        0x00006FFFE3C87A32 (d3d11.dll)
+        ========== END OF STACKTRACE ===========
+        Beyond.exe
+        """
+
+        XCTAssertEqual(
+            CompiledRepairClassifier.recipe(forCrashLog: crash),
+            .unrealD3D11DualOverlayIsolation
+        )
+    }
+
+    /// El depurador de Wine es la tercera redacción que se ha visto: TMNT solo dejaba traza ahí.
+    func testWineDebuggerCrashWithTheSameCollisionIsRecognised() {
+        let crash = """
+        wine: Unhandled page fault on execute access to 5320747375725420
+        d3d11.dll
+        gameoverlayrenderer64.dll
+        EOSOVH-Win64-Shipping.dll
+        EOSSDK-Win64-Shipping.dll
+        TMNT.exe
+        """
+
+        XCTAssertEqual(
+            CompiledRepairClassifier.recipe(forCrashLog: crash),
+            .unrealD3D11DualOverlayIsolation
+        )
+    }
+
+    /// La cabecera sola no basta: sin la cadena causal completa no se atribuye la receta, para
+    /// que cualquier crash de Unity no acabe recibiendo un aislamiento que no le toca.
+    func testCrashHeaderAloneNeverSelectsTheOverlayRecipe() {
+        XCTAssertNil(CompiledRepairClassifier.recipe(forCrashLog: "Crash!!!\nd3d11.dll"))
+        XCTAssertNil(CompiledRepairClassifier.recipe(
+            forCrashLog: "Crash!!!\nd3d11.dll\ngameoverlayrenderer64.dll"
+        ))
+        // Los cuatro módulos sin ninguna cabecera de crash tampoco: podría ser un log normal.
+        XCTAssertNil(CompiledRepairClassifier.recipe(forCrashLog: """
+        d3d11.dll
+        gameoverlayrenderer64.dll
+        EOSOVH-Win64-Shipping.dll
+        EOSSDK-Win64-Shipping.dll
+        """))
+    }
+
     func testDragonwildsRuntimeProfileIsProcessScopedAndRegressionOnly() throws {
         let profile = try XCTUnwrap(
             GameRuntimeProfileCatalog.profile(for: "1374490", backend: .regression)
@@ -1097,6 +1151,61 @@ final class CompiledGameRepairTests: XCTestCase {
             endedAt: now.addingTimeInterval(1)
         ))
         XCTAssertEqual(try CompiledRepairActivationStore.activations(in: root).count, 1)
+    }
+
+    /// El recorrido tiene presupuesto, y con orden alfabético un árbol grande y sin interés
+    /// —`AppData/Local`, con miles de entradas— se lo comía entero antes de llegar a `LocalLow`,
+    /// que es donde **todos** los juegos Unity escriben su traza. Buscando primero lo modificado
+    /// más recientemente, la evidencia fresca se encuentra aunque el presupuesto se agote después.
+    func testLearnerFindsARecentCrashBehindALargeIrrelevantDirectory() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-learner-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let appData = root.appendingPathComponent(
+            "drive_c/users/test/AppData", isDirectory: true
+        )
+
+        // Un árbol enorme e irrelevante cuyo nombre ordena ANTES que el que importa.
+        let noise = appData.appendingPathComponent("Local/Temp", isDirectory: true)
+        try FileManager.default.createDirectory(at: noise, withIntermediateDirectories: true)
+        let old = Date(timeIntervalSince1970: 1_000_000)
+        for index in 0..<600 {
+            let url = noise.appendingPathComponent("noise-\(index).tmp")
+            try Data("x".utf8).write(to: url)
+            try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: url.path)
+        }
+
+        let crashDirectory = appData.appendingPathComponent(
+            "LocalLow/Vendor/Game", isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: crashDirectory, withIntermediateDirectories: true)
+        let crashURL = crashDirectory.appendingPathComponent("Player.log")
+        try Data("""
+        Crash!!!
+        gameoverlayrenderer64.dll
+        EOSSDK-Win64-Shipping.dll
+        EOSOVH-Win64-Shipping.dll
+        d3d11.dll
+        ========== END OF STACKTRACE ===========
+        Game.exe
+        """.utf8).write(to: crashURL)
+
+        let startedAt = Date()
+        let endedAt = startedAt.addingTimeInterval(60)
+        try FileManager.default.setAttributes(
+            [.modificationDate: startedAt.addingTimeInterval(10)],
+            ofItemAtPath: crashURL.path
+        )
+
+        let detection = try XCTUnwrap(CompiledCrashRepairLearner.detect(
+            appID: "424242",
+            executable: #"C:\Games\Game\Game.exe"#,
+            bottleURL: root,
+            startedAt: startedAt,
+            endedAt: endedAt
+        ))
+        XCTAssertEqual(detection.executable, "game.exe")
+        XCTAssertEqual(detection.recipe, .unrealD3D11DualOverlayIsolation)
     }
 
     func testCrashLearnerRejectsAConcurrentCrashFromAnotherExecutable() throws {

@@ -276,6 +276,37 @@ final class RegressionCoreTests: XCTestCase {
         )
     }
 
+    /// Un reporter de crash arranca DESPUÉS del juego, así que ganaba como «último proceso» y se
+    /// convertía en el representativo: su código de salida 0 tapaba el 1 del juego, el run se
+    /// registraba como `unknown` y la autorreparación no buscaba receta. Le pasó a Beyond Contact.
+    func testCrashReportersAreNeverTreatedAsTheGameProcess() {
+        let reporters = [
+            #"C:\Program Files (x86)\Steam\steamapps\common\Beyond\UnityCrashHandler64.exe"#,
+            #"C:\Games\Future\Engine\Binaries\Win64\CrashReportClient.exe"#,
+            #"C:\Program Files (x86)\Steam\steamerrorreporter64.exe"#,
+            #"C:\Games\Some\chrome_crashpad_handler.exe"#,
+            #"C:\Games\Some\CrashSender1403.exe"#
+        ]
+        for reporter in reporters {
+            XCTAssertFalse(
+                SteamGameProcessLogParser.isPrimaryExecutable(reporter),
+                "un reporter de crash no puede ser el proceso del juego: \(reporter)"
+            )
+        }
+
+        // Y el juego sí lo es, aunque su nombre contenga la palabra «crash».
+        let games = [
+            #"C:\Program Files (x86)\Steam\steamapps\common\Beyond\Beyond.exe"#,
+            #"C:\Program Files (x86)\Steam\steamapps\common\Crashlands 2\Crashlands2.exe"#
+        ]
+        for game in games {
+            XCTAssertTrue(
+                SteamGameProcessLogParser.isPrimaryExecutable(game),
+                "el juego no puede confundirse con un reporter: \(game)"
+            )
+        }
+    }
+
     func testSteamGameProcessLogParsing() throws {
         let line = #"[2026-07-27 08:13:10] AppID 1128000 adding PID 2196 as a tracked process ""C:\Program Files (x86)\Steam\steamapps\common\Cube World\cubeworld.exe"""#
         guard case let .started(_, appID, pid, executable) = SteamGameProcessLogParser.parse(line: line) else {

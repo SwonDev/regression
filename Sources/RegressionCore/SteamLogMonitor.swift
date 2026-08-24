@@ -104,10 +104,25 @@ public enum SteamGameProcessLogParser {
         return nil
     }
 
+    /// Un reporter de crash **nunca** es el juego, y confundirlo con él rompe toda la cadena de
+    /// diagnóstico: el proceso representativo pasa a ser el reporter, su código de salida es 0, el
+    /// run se registra como `unknown` en vez de `crashed`, y la autorreparación ni siquiera busca
+    /// una receta porque el log del juego no menciona el nombre del reporter.
+    ///
+    /// Ocurrió con Beyond Contact: `Beyond.exe` salía con código 1 y `UnityCrashHandler64.exe`
+    /// —que arranca *después*, y por eso ganaba como «último proceso»— con 0. Se excluyen aquí los
+    /// reporters de los motores que se han visto, junto a los de Steam y Chromium que ya estaban.
+    private static let crashReporterMarkers = [
+        "crashpad",              // Chromium/CEF
+        "steamerrorreporter",    // Steam
+        "unitycrashhandler",     // Unity
+        "crashreportclient",     // Unreal
+        "crashsender"            // BugTrap y derivados
+    ]
+
     public static func isPrimaryExecutable(_ executable: String) -> Bool {
         let lowercased = executable.lowercased()
-        return !lowercased.contains("crashpad")
-            && !lowercased.contains("steamerrorreporter")
+        return !crashReporterMarkers.contains(where: lowercased.contains)
             && !lowercased.hasSuffix(".dll")
     }
 
