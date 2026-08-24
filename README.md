@@ -47,8 +47,8 @@ mantiene rollback hasta que Steam y un juego se validan de forma explícita.
 > termina correctamente no se marca como compatible por sí solo.
 
 > [!NOTE]
-> El contrato del código fuente de esta rama es **Regression 1.12.5 (43)** y SQLite **v17**.
-> **v1.12.5 (43)** aísla el overlay de Epic Online Services dentro del proceso exacto de Cloudheim, que moría con violación de acceso cuando ese overlay y el de Steam encadenaban hooks sobre el `d3d11` de DXMT, y enruta Dragonkin: The Banished a D3DMetal (Apple GPTK 4.0b2), que sin ruta caía al `d3d12` de Wine sobre MoltenVK y perdía toda la geometría estática del entorno. Conserva de **v1.12.4 (42)** el contexto OpenGL core forward-compatible para toda la familia SDL2/bgfx/HashLink y blinda Cursemark sin perfil por ejecutable; conserva las correcciones de instalación fresca, GPTK 3 y reinicio seguro de Steam, hace durable la custodia de la biblioteca frente a la renumeración de volúmenes tras reiniciar macOS y mantiene el shell `explorer.exe` de Wine como auxiliar sin icono en el Dock. **v1.11.0 (37)** permanece como baseline
+> El contrato del código fuente de esta rama es **Regression 1.12.6 (44)** y SQLite **v17**.
+> **v1.12.6 (44)** enruta a D3DMetal por la evidencia que de verdad usa Unreal —el ejecutable declara `d3d12.dll` como *delay-load*—, en vez de exigir el Agility SDK junto a un `*-Win64-Shipping.exe`. Eso resuelve el «DX12 is not supported in your system» que se repetía juego tras juego: Redfall pasa de no arrancar a su pantalla de título con la escena completa, y Wayfinder inicializa D3D12. Conserva de **v1.12.5 (43)** el aislamiento del overlay de Epic Online Services dentro del proceso exacto de Cloudheim dentro del proceso exacto de Cloudheim, que moría con violación de acceso cuando ese overlay y el de Steam encadenaban hooks sobre el `d3d11` de DXMT, y enruta Dragonkin: The Banished a D3DMetal (Apple GPTK 4.0b2), que sin ruta caía al `d3d12` de Wine sobre MoltenVK y perdía toda la geometría estática del entorno. Conserva de **v1.12.4 (42)** el contexto OpenGL core forward-compatible para toda la familia SDL2/bgfx/HashLink y blinda Cursemark sin perfil por ejecutable; conserva las correcciones de instalación fresca, GPTK 3 y reinicio seguro de Steam, hace durable la custodia de la biblioteca frente a la renumeración de volúmenes tras reiniciar macOS y mantiene el shell `explorer.exe` de Wine como auxiliar sin icono en el Dock. **v1.11.0 (37)** permanece como baseline
 > histórico verificable y como origen autorizado de la migración. La instalación de arriba
 > siempre descarga la última release publicada.
 
@@ -285,7 +285,7 @@ visual está en [`DESIGN.md`](DESIGN.md).
 
 ## Desarrollo
 
-Este checkout corresponde a la release **1.12.5 (43)**. Los helpers que nombran `public-1.11`
+Este checkout corresponde a la release **1.12.6 (44)**. Los helpers que nombran `public-1.11`
 son puertas históricas para comprobar la transición desde el asset anterior; no definen la
 versión estable actual.
 

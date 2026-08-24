@@ -38,8 +38,19 @@ latest_migration="$(/usr/bin/sed -nE \
 [[ "$latest_migration" == "$current_schema" ]] \
     || fail "currentSchemaVersion=$current_schema no coincide con la última migración=$latest_migration"
 
+# La versión del contrato se deriva del empaquetador nativo, igual que en
+# release-version-coherence.sh. Fijarla aquí convertía este test en otro sitio donde vivía la
+# versión: subirla obligaba a editarlo y el fallo salía como «la documentación no contiene el
+# contrato», que señala al sitio equivocado.
+contract_version="$(/usr/bin/sed -nE 's/^VERSION="([0-9.]+)"$/\1/p' \
+    "$ROOT/Scripts/package_regression.sh" | /usr/bin/head -n 1)"
+contract_build="$(/usr/bin/sed -nE 's/^BUILD_NUMBER="([0-9]+)"$/\1/p' \
+    "$ROOT/Scripts/package_regression.sh" | /usr/bin/head -n 1)"
+[[ "$contract_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$contract_build" =~ ^[0-9]+$ ]] \
+    || fail "no se pudo derivar el contrato de versión de Scripts/package_regression.sh"
+
 for file in README.md AGENTS.md CLAUDE.md docs/README.md; do
-    require_literal "$file" '1.12.5 (43)'
+    require_literal "$file" "${contract_version} (${contract_build})"
     require_literal "$file" 'v1.11.0 (37)'
 done
 
@@ -82,5 +93,6 @@ require_absent README.md 'puede reintentarse automáticamente una sola vez'
 require_absent docs/runtime-evolution.md 'antes del relanzamiento se revierte la reparación'
 require_absent docs/game-test-readiness.md 'Una interrupción conserva la fase para una futura decisión segura'
 
-printf 'PASS: documentación coherente con 1.12.5 (43), SQLite v%s y baseline v1.11.0.\n' \
+printf 'PASS: documentación coherente con %s (%s), SQLite v%s y baseline v1.11.0.\n' \
+    "$contract_version" "$contract_build" \
     "$current_schema"

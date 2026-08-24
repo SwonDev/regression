@@ -605,8 +605,8 @@ final class ComponentHealthTests: XCTestCase {
       applicationSupportURL: roots.applicationSupport
     )
     let current = TrustedComponentCatalog.windowsMediaDescriptor(
-      applicationVersion: "1.12.5",
-      buildIdentifier: "43",
+      applicationVersion: TrustedComponentCatalog.supportedApplicationVersion,
+      buildIdentifier: TrustedComponentCatalog.supportedBuildIdentifier,
       variant: .publicInstalled,
       applicationBundleURL: roots.bundle,
       applicationSupportURL: roots.applicationSupport
@@ -746,8 +746,8 @@ final class ComponentHealthTests: XCTestCase {
     )
 
     let descriptor = TrustedComponentCatalog.steamRuntimePrerequisitesDescriptor(
-      applicationVersion: "1.12.5",
-      buildIdentifier: "43",
+      applicationVersion: TrustedComponentCatalog.supportedApplicationVersion,
+      buildIdentifier: TrustedComponentCatalog.supportedBuildIdentifier,
       variant: .publicInstalled,
       wineRootURL: root
     )
@@ -755,13 +755,16 @@ final class ComponentHealthTests: XCTestCase {
     XCTAssertEqual(descriptor.identity.componentID, "steam-runtime-prerequisites")
     XCTAssertEqual(descriptor.identity.componentVersion, "3")
     XCTAssertEqual(descriptor.identity.variant, .publicInstalled)
-    XCTAssertEqual(descriptor.identity.buildIdentifier, "43")
+    XCTAssertEqual(
+      descriptor.identity.buildIdentifier,
+      TrustedComponentCatalog.supportedBuildIdentifier
+    )
     XCTAssertEqual(descriptor.payloadRootURL, root.standardizedFileURL)
     XCTAssertEqual(
       descriptor.identity,
       TrustedComponentCatalog.steamRuntimePrerequisitesDescriptor(
-        applicationVersion: "1.12.5",
-        buildIdentifier: "43",
+        applicationVersion: TrustedComponentCatalog.supportedApplicationVersion,
+        buildIdentifier: TrustedComponentCatalog.supportedBuildIdentifier,
         variant: .publicInstalled,
         wineRootURL: root
       ).identity
@@ -849,8 +852,8 @@ final class ComponentHealthTests: XCTestCase {
       isDirectory: true
     )
     let descriptor = TrustedComponentCatalog.steamRuntimePrerequisitesDescriptor(
-      applicationVersion: "1.12.5",
-      buildIdentifier: "43",
+      applicationVersion: TrustedComponentCatalog.supportedApplicationVersion,
+      buildIdentifier: TrustedComponentCatalog.supportedBuildIdentifier,
       variant: .development,
       wineRootURL: root
     )
@@ -861,7 +864,9 @@ final class ComponentHealthTests: XCTestCase {
     XCTAssertEqual(report.recovery, .installSupportedApplicationBuild)
     XCTAssertEqual(
       report.issue,
-      .unsupportedVariant("Regression 1.12.5 (43): runtime de desarrollo sin PIN reproducible")
+      .unsupportedVariant(
+        "Regression \(TrustedComponentCatalog.supportedApplicationVersion) (\(TrustedComponentCatalog.supportedBuildIdentifier)): runtime de desarrollo sin PIN reproducible"
+      )
     )
   }
 
