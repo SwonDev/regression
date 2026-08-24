@@ -408,10 +408,12 @@ exacto que recibirá GitHub.** Actualizar también la nota de contrato en `READM
   con el run cerrado. Ver `docs/games/cloudheim.md`.
 - **Bloqueado por anticheat**: **Dune: Awakening** (1172710) lleva **BattlEye**. Misma categoría
   que FANTASY LIFE i: no se elude ni se presenta como compatible.
-- **Incompatible por Vulkan**: **Enshrouded** (1203620) es Vulkan puro y exige
-  `VK_KHR_ray_tracing_pipeline` y `VK_KHR_acceleration_structure`. MoltenVK expone 111 extensiones
-  y ninguna de trazado de rayos, así que «No compatible graphics device found» es correcto. No se
-  enruta a D3DMetal porque el juego no llama a Direct3D. Ver `docs/games/enshrouded.md`.
+- **Incompatible por Vulkan**: **Enshrouded** (1203620) es Vulkan puro y exige la característica
+  1.2 `drawIndirectCount`. Su propio log lo dice —«skipping device because 'drawIndirectCount' is
+  not supported»— y MoltenVK la declara falsa porque sus `vkCmdDrawIndirectCount` son **stubs
+  vacíos**. Activar el flag haría que arrancara sin pintar nada. Upstream lleva el issue abierto
+  desde 2018. No se enruta a D3DMetal porque el juego no llama a Direct3D.
+  Ver `docs/games/enshrouded.md`.
 - **Reparado por la corrección general de D3D12**: **Redfall** (1294810) llega a su pantalla de
   título con la escena completa, y **Wayfinder** (1171690) inicializa D3D12 (`Feature Level 12_1`).
   A Wayfinder le queda que no llega a crear ventana; se investiga aparte.

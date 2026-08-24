@@ -100,7 +100,7 @@ el run cerrado. **No** tienen entrada en `VerifiedGameCatalog` hasta entonces.
 | TMNT: Shredder's Revenge | Overlay de Epic aislado en `TMNT.exe`; la colisión es del EOS SDK, no de Unreal | [`tmnt-shredders-revenge.md`](games/tmnt-shredders-revenge.md) |
 | Core Keeper | Caché de Steam Cloud desincronizada del disco; se diagnostica con `regressionctl cloud-status` | [`core-keeper.md`](games/core-keeper.md) |
 | D3D12 por delay-load | Corrección transversal: enruta a D3DMetal por la evidencia real de Unreal | [`d3d12-delay-load-routing.md`](games/d3d12-delay-load-routing.md) |
-| Enshrouded | Vulkan con trazado de rayos; MoltenVK no lo implementa | [`enshrouded.md`](games/enshrouded.md) |
+| Enshrouded | Exige `drawIndirectCount`; MoltenVK lo implementa como stub vacío | [`enshrouded.md`](games/enshrouded.md) |
 | Critadel | Renderiza bien; el teclado no llega hasta hacer clic (foco de ventana) | [`critadel.md`](games/critadel.md) |
 | Triaje 2026-08-24 | Nueve juegos reportados: qué se resolvió, qué es límite real y qué queda | [`triaje-2026-08-24.md`](games/triaje-2026-08-24.md) |
 

@@ -498,6 +498,19 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
     en una sola sesión. Si un juego «no tiene ventana», compruébalo con `--all` y mirando la capa
     antes de buscar la causa en el motor.
 
+64. **Las cadenas de un binario sugieren; el log del juego acredita.** Enshrouded nombra
+    `VK_KHR_ray_tracing_pipeline` en su ejecutable y eso llevó a un diagnóstico falso de
+    «incompatible por trazado de rayos». Su propio log decía otra cosa: `skipping device because
+    'drawIndirectCount' is not supported`. Antes de cerrar un expediente por lo que aparece en un
+    `strings`, busca el log que el juego deja: casi todos dejan uno junto al ejecutable o en
+    `drive_c/users`.
+
+65. **Una característica declarada falsa por MoltenVK no se activa a mano.** `drawIndirectCount`
+    está a `false` porque `vkCmdDrawIndirectCount` es un **stub vacío**. Forzar el flag haría que
+    el juego pasara su comprobación y no pintara la geometría indirecta —un fallo silencioso, que
+    es exactamente lo que este proyecto no produce—. Si una característica de MoltenVK falta, la
+    salida es implementarla de verdad o declarar el título incompatible.
+
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 
 Este proyecto es un sistema de muchas piezas acopladas (wine + DXMT + DXVK + D3DMetal + CEF +

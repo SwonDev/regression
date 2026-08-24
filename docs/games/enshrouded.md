@@ -4,49 +4,88 @@
 
 - **Steam App ID:** `1203620`
 - **Ejecutable:** `Enshrouded/enshrouded.exe`
-- **Tecnología:** **Vulkan puro** (no usa Direct3D en absoluto)
-- **Estado:** **no puede funcionar hoy.** Requiere extensiones Vulkan de trazado de rayos por
-  hardware que MoltenVK no implementa. No se elude ni se presenta como compatible.
+- **Tecnología:** **Vulkan puro** (no llama a Direct3D en ningún punto)
+- **Estado:** **no puede funcionar hoy.** Exige la característica Vulkan 1.2 `drawIndirectCount`,
+  que MoltenVK expone como stub vacío. No se falsea.
 
 ## Síntoma
 
-Al lanzarlo aparece un diálogo nativo de Wine:
+Diálogo nativo de Wine al lanzar:
 
 ```text
 Error
 No compatible graphics device found.
 ```
 
-El proceso queda vivo esperando el `OK`, sin ventana de juego.
+## Causa raíz — medida en el log del propio juego
 
-## Causa raíz
-
-`enshrouded.exe` no importa **ninguna** DLL de Direct3D, ni estática ni diferida: nombra
-`vulkan-1.dll` y resuelve todo por Vulkan. Entre las extensiones que declara están:
+El juego **sí** encuentra y enumera el dispositivo Vulkan sin problema:
 
 ```text
-VK_KHR_acceleration_structure
-VK_KHR_ray_tracing_pipeline
-VK_KHR_buffer_device_address
-VK_KHR_dynamic_rendering
+[graphics] Vulkan device 0 (Apple M5 Pro):
+[graphics] - api version   : 1.2.290
+[graphics] - device type   : integrated gpu
+[graphics] Finished device enumeration successfully
 ```
 
-MoltenVK 1.2.10 —la implementación de Vulkan sobre Metal que usa el runtime— expone **111
-extensiones** y **ninguna** de trazado de rayos. Se comprobó contra la lista que el propio
-runtime imprime al arrancar: cero coincidencias para `ray_tracing` o `acceleration_structure`.
+Y lo descarta después, por una sola razón:
 
-El mensaje del juego es, por tanto, **correcto**: en este sistema no existe un dispositivo Vulkan
-que cumpla lo que pide.
+```text
+[graphics] skipping device because 'drawIndirectCount' is not supported!
+[graphics] No usable Vulkan device found!
+[graphics] Could not create vulkan device! error=no compatible device found
+```
+
+`enshrouded.log`, en la carpeta del juego, líneas 529-531.
+
+## Por qué MoltenVK dice que no
+
+En `MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm` la característica está fijada a falso:
+
+```objc
+_vulkan12FeaturesNoExt.drawIndirectCount = false;
+```
+
+Y no es una omisión conservadora: los puntos de entrada existen, están registrados… y **están
+vacíos**. En `MoltenVK/MoltenVK/Vulkan/vulkan.mm`:
+
+```objc
+MVK_PUBLIC_VULKAN_SYMBOL void vkCmdDrawIndirectCount(...) {
+    MVKTraceVulkanCallStart();
+    MVKTraceVulkanCallEnd();
+}
+```
+
+No dibujan nada. MoltenVK declara la verdad.
+
+## Lo que NO se va a hacer
+
+Activar el flag a mano. El juego arrancaría —pasaría su comprobación— y **no pintaría** la
+geometría que dibuja por indirect-count, que en un motor moderno es prácticamente todo. Un juego
+que «arranca» y no renderiza es peor que un rechazo honesto, y además ocultaría la causa.
+
+## Estado upstream y línea de trabajo real
+
+El issue [KhronosGroup/MoltenVK#168](https://github.com/KhronosGroup/MoltenVK/issues/168) sigue
+**abierto desde 2018**, etiquetado «Metal improvement required». No hay implementación parcial ni
+workaround publicado.
+
+Conviene registrar una matización: cuando se abrió el issue, Metal no tenía la primitiva. Hoy sí
+—`MTLIndirectCommandBuffer` con `executeCommandsInBuffer:indirectBuffer:offset:` permite que sea
+la GPU quien fije el número de comandos a ejecutar, que es exactamente lo que pide
+`drawIndirectCount`—. Implementarlo es, por tanto, **posible**, pero significa mantener un fork de
+MoltenVK con trabajo serio de Metal y SPIR-V. Es una línea de investigación, no una corrección de
+esta sesión, y una implementación a medias sería justo el fallo silencioso que este proyecto evita.
+
+## Corrección de un diagnóstico anterior
+
+La primera versión de este expediente atribuía el fallo a las extensiones de trazado de rayos
+(`VK_KHR_ray_tracing_pipeline`, `VK_KHR_acceleration_structure`) porque el binario las nombra.
+Era **falso**: el juego las lista pero no las exige, y su propio log señala `drawIndirectCount`.
+La lección es la de siempre — las cadenas de un binario sugieren, el log del juego acredita.
 
 ## Por qué no se enruta a D3DMetal
 
-D3DMetal implementa Direct3D, no Vulkan. Enshrouded no llama a Direct3D en ningún punto, así que
-una ruta a GPTK no cambiaría nada. El detector de rutas D3D12 lo excluye correctamente: no
-declara `d3d12.dll` ni estática ni diferidamente.
-
-## Qué haría falta
-
-Que MoltenVK implemente `VK_KHR_acceleration_structure` y `VK_KHR_ray_tracing_pipeline` sobre
-Metal Ray Tracing, o que el juego ofrezca una ruta sin trazado de rayos. Ninguna de las dos está
-en nuestra mano. Se revisa cuando MoltenVK publique soporte; hasta entonces el título queda en la
-misma categoría honesta que los bloqueados por anticheat: **incompatible y declarado como tal**.
+D3DMetal implementa Direct3D, no Vulkan. Enshrouded no llama a Direct3D, así que una ruta a GPTK
+no cambiaría nada. El detector de rutas D3D12 lo excluye correctamente: no declara `d3d12.dll`
+ni estática ni diferidamente.
