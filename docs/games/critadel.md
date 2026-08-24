@@ -37,6 +37,31 @@ Couldn't set app to fullscreen as it's occluded by something. Will try again lat
 GameMaker reintenta el paso a pantalla completa cuando cree estar ocluido. Encaja con un estado
 de foco que el runner no da por bueno.
 
+## Intento de corrección general, y por qué no se envió
+
+Se localizó una asimetría real en `winemac.drv`: al desactivarse la app, `macdrv_app_deactivated`
+deja el foco de Win32 **en el escritorio**; al reactivarse, `macdrv_app_activated` solo actualiza
+el portapapeles y **nadie lo restaura**. Se escribió un parche que, al recuperar la actividad,
+concede la condición de *key* a la ventana frontal si ninguna la tiene
+(`patches/wine-26.3.0-winemac-restore-focus-on-activate.patch`).
+
+Se compiló, se instaló y **no arregló este caso**: cuando la app se activa por primera vez la
+ventana del juego todavía no existe, así que no hay ninguna a la que dar el foco. El parche se
+conserva en `patches/` pero **está fuera de la serie** de `build/apply-wine-patches.sh`: enviar un
+cambio del motor cuyo beneficio no se ha demostrado sería justo lo que este proyecto no hace.
+
+La ruta que sí toca investigar es `makeFocused:` en `cocoa_window.m` —la que concede el foco
+cuando el lado Win32 lo pide— y por qué no se invoca al crear una ventana a pantalla completa
+mientras la app ya está activa.
+
+## Aviso sobre un diagnóstico contaminado
+
+Durante la validación se creyó además que Steam dejaba de responder al clic y mostraba la tienda
+en negro. **Era falso**: Fields of Mistria estaba abierto a pantalla completa por delante,
+interceptando los clics y ocultando la captura. Con el escritorio despejado, Steam responde y la
+Biblioteca renderiza entera. Antes de dar por roto Steam, comprueba que no haya un juego a
+pantalla completa delante.
+
 ## Relación con otros síntomas reportados
 
 El usuario describe además que en Steam «de repente el clic derecho deja de funcionar» y que «a

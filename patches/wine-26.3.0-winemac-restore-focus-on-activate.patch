@@ -1,0 +1,30 @@
+--- a/dlls/winemac.drv/cocoa_app.m
++++ b/dlls/winemac.drv/cocoa_app.m
+@@ -2450,6 +2450,27 @@
+             [self unminimizeWindowIfNoneVisible];
+         beenActive = TRUE;
+ 
++        // Al desactivarse, `macdrv_app_deactivated` deja el foco de Win32 en el escritorio, y al
++        // reactivarse `macdrv_app_activated` solo actualiza el portapapeles: nadie devuelve el
++        // foco. macOS tampoco lo hace por su cuenta, porque las ventanas de Wine son borderless y
++        // AppKit no restaura una ventana key que nunca marcó como tal.
++        //
++        // El resultado es una app que está en primer plano, con su ventana visible, y que no
++        // recibe teclado hasta que un clic genera la activación. Se ve como un juego colgado en su
++        // pantalla de título, y en Steam como que el clic derecho deja de funcionar y la
++        // biblioteca abre el shell de Wine —que es literalmente el escritorio, el sitio donde
++        // quedó el foco—.
++        //
++        // Al recuperar la actividad, si ninguna ventana de Wine es key se le concede a la frontal
++        // que pueda serlo. Eso emite WINDOW_GOT_FOCUS y el lado Win32 restaura su ventana en
++        // primer plano. Si ya hay una key, no se toca nada.
++        if (![[NSApp keyWindow] isKindOfClass:[WineWindow class]])
++        {
++            WineWindow* windowToFocus = [self frontWineWindow];
++            if ([windowToFocus canBecomeKeyWindow])
++                [windowToFocus makeKeyWindow];
++        }
++
+         // If a Wine process terminates abruptly while it has the display captured
+         // and switched to a different resolution, Mac OS X will uncapture the
+         // displays and switch their resolutions back.  However, the other Wine
