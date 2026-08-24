@@ -485,6 +485,19 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
     una versión nueva se **añaden** al cortarla. `build/release.sh` toma un testigo del archivo
     antes de sellar y aborta si cambió.
 
+62. **Un juego con launcher no se rastrea por el nombre del juego.** Witcher 3 corre como
+    `redprelauncher.exe` y Sonic Adventure 2 como `launcher.exe`; buscar el ejecutable del juego
+    da «nunca arrancó» cuando sí arrancó, y matar el patrón equivocado deja el launcher vivo.
+    Steam rechaza entonces el siguiente intento con `AppError_16` en `WaitingPrevProcess`, que se
+    lee como «el juego no arranca» y manda el diagnóstico al sitio equivocado. Antes de concluir,
+    mira qué ejecutable declara Steam en `logs/console_log.txt`.
+
+63. **Una ventana de Wine a pantalla completa vive en la capa 21, no en la 0.** Filtrar por
+    `layer == 0` esconde juegos que están renderizando perfectamente. Le pasó a
+    `tools/diagnostics/list-windows.swift` y produjo tres diagnósticos falsos de «no abre ventana»
+    en una sola sesión. Si un juego «no tiene ventana», compruébalo con `--all` y mirando la capa
+    antes de buscar la causa en el motor.
+
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 
 Este proyecto es un sistema de muchas piezas acopladas (wine + DXMT + DXVK + D3DMetal + CEF +

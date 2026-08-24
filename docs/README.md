@@ -102,6 +102,7 @@ el run cerrado. **No** tienen entrada en `VerifiedGameCatalog` hasta entonces.
 | D3D12 por delay-load | Corrección transversal: enruta a D3DMetal por la evidencia real de Unreal | [`d3d12-delay-load-routing.md`](games/d3d12-delay-load-routing.md) |
 | Enshrouded | Vulkan con trazado de rayos; MoltenVK no lo implementa | [`enshrouded.md`](games/enshrouded.md) |
 | Critadel | Renderiza bien; el teclado no llega hasta hacer clic (foco de ventana) | [`critadel.md`](games/critadel.md) |
+| Triaje 2026-08-24 | Nueve juegos reportados: qué se resolvió, qué es límite real y qué queda | [`triaje-2026-08-24.md`](games/triaje-2026-08-24.md) |
 
 ### Validados con incidencia
 
