@@ -414,9 +414,10 @@ exacto que recibirá GitHub.** Actualizar también la nota de contrato en `READM
   vacíos**. Activar el flag haría que arrancara sin pintar nada. Upstream lleva el issue abierto
   desde 2018. No se enruta a D3DMetal porque el juego no llama a Direct3D.
   Ver `docs/games/enshrouded.md`.
-- **Reparado por la corrección general de D3D12**: **Redfall** (1294810) llega a su pantalla de
-  título con la escena completa, y **Wayfinder** (1171690) inicializa D3D12 (`Feature Level 12_1`).
-  A Wayfinder le queda que no llega a crear ventana; se investiga aparte.
+- **Reparado por la corrección general de D3D12 y publicado en 1.12.6**: **Redfall** (1294810)
+  llega a su pantalla de título con la escena completa —validado desde la release instalada, con
+  D3DMetal cargado— y **Wayfinder** (1171690) inicializa D3D12 (`Feature Level 12_1`). A Wayfinder
+  le queda que no llega a crear ventana; se investiga aparte.
 - **Diagnosticado, corrección pendiente**: **Critadel** (808010) renderiza perfecto pero su
   ventana a pantalla completa es *frontmost* sin ser *key*, así que el teclado no llega hasta que
   se hace clic. Probablemente comparte causa con «el clic derecho deja de funcionar en Steam» y
