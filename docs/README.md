@@ -99,6 +99,9 @@ el run cerrado. **No** tienen entrada en `VerifiedGameCatalog` hasta entonces.
 | Dragonkin: The Banished | D3D12 enrutado a D3DMetal (GPTK 4.0b2) por proceso exacto | [`dragonkin-the-banished.md`](games/dragonkin-the-banished.md) |
 | TMNT: Shredder's Revenge | Overlay de Epic aislado en `TMNT.exe`; la colisión es del EOS SDK, no de Unreal | [`tmnt-shredders-revenge.md`](games/tmnt-shredders-revenge.md) |
 | Core Keeper | Caché de Steam Cloud desincronizada del disco; se diagnostica con `regressionctl cloud-status` | [`core-keeper.md`](games/core-keeper.md) |
+| D3D12 por delay-load | Corrección transversal: enruta a D3DMetal por la evidencia real de Unreal | [`d3d12-delay-load-routing.md`](games/d3d12-delay-load-routing.md) |
+| Enshrouded | Vulkan con trazado de rayos; MoltenVK no lo implementa | [`enshrouded.md`](games/enshrouded.md) |
+| Critadel | Renderiza bien; el teclado no llega hasta hacer clic (foco de ventana) | [`critadel.md`](games/critadel.md) |
 
 ### Validados con incidencia
 

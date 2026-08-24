@@ -32,6 +32,14 @@ que el checkout coincide con él: una rama antigua contiene reglas, PIN, version
 caducados, y llevaría a "arreglar" sobre un estado que ya no existe. `build/` contiene todos los
 verificadores del estado protegido; si falta, el checkout está incompleto.
 
+**Si `build/` no existe, casi siempre lo ha borrado el limpiador de disco Mole**, que la trata
+como carpeta de artefactos: lo es en su mayor parte (los `dxmt64`, `vkd3d64` y
+`windows-media-component` que `.gitignore` excluye), pero ahí viven también los 36 scripts
+versionados. Se recupera entero con `git restore build/`; comprobado en el log de la app
+(`~/Library/Logs/mole/operations.log`), que lo registra el 2026-07-27, el 2026-08-12 y el
+2026-08-22. No es un borrado del proyecto ni de ningún script de `build/`: los `rm -rf` de la
+serie están todos acotados a subrutas (`$ROOT/build/dxmt64`, `$STAGING_APP`).
+
 Al empezar una sesión que continúa trabajo previo: `mem_session_start` + `mem_search` (Engram)
 antes de actuar, y `mem_save` proactivamente ante cada decisión, bug resuelto o hallazgo.
 
@@ -400,6 +408,17 @@ exacto que recibirá GitHub.** Actualizar también la nota de contrato en `READM
   con el run cerrado. Ver `docs/games/cloudheim.md`.
 - **Bloqueado por anticheat**: **Dune: Awakening** (1172710) lleva **BattlEye**. Misma categoría
   que FANTASY LIFE i: no se elude ni se presenta como compatible.
+- **Incompatible por Vulkan**: **Enshrouded** (1203620) es Vulkan puro y exige
+  `VK_KHR_ray_tracing_pipeline` y `VK_KHR_acceleration_structure`. MoltenVK expone 111 extensiones
+  y ninguna de trazado de rayos, así que «No compatible graphics device found» es correcto. No se
+  enruta a D3DMetal porque el juego no llama a Direct3D. Ver `docs/games/enshrouded.md`.
+- **Reparado por la corrección general de D3D12**: **Redfall** (1294810) llega a su pantalla de
+  título con la escena completa, y **Wayfinder** (1171690) inicializa D3D12 (`Feature Level 12_1`).
+  A Wayfinder le queda que no llega a crear ventana; se investiga aparte.
+- **Diagnosticado, corrección pendiente**: **Critadel** (808010) renderiza perfecto pero su
+  ventana a pantalla completa es *frontmost* sin ser *key*, así que el teclado no llega hasta que
+  se hace clic. Probablemente comparte causa con «el clic derecho deja de funcionar en Steam» y
+  con «Enter pasa el juego a ventana». Ver `docs/games/critadel.md`.
 - **Reparados y pendientes de certificar**: **Dragonkin: The Banished** (1863430). Es UE5 con
   **D3D12** y no tenía ruta a D3DMetal, así que caía al `d3d12` de Wine sobre vkd3d/MoltenVK y
   perdía toda la geometría estática (edificios, props, decoración) mientras terreno, personajes y
@@ -423,10 +442,13 @@ exacto que recibirá GitHub.** Actualizar también la nota de contrato en `READM
   no se presenta como compatible. La línea de trabajo es Proton sobre ARM en Mac (FEXCore nativo
   arm64) para los títulos con anticheat; vive en `tools/research/` y `work/` como **rama de
   investigación aparte**, no forma parte del producto y solo se integraría si diera resultados.
-- **D3D12 se enruta por evidencia, no por lista**: `D3D12MetalRouteDetector` propone ruta a
-  D3DMetal para los títulos que acreditan el Agility SDK en la estructura canónica de Unreal.
-  Las rutas compiladas mandan (DragonSword sigue en GPTK 3.0) y un Unity que solo empaqueta el
-  SDK en la raíz no se toca — el caso de Core Keeper, que funciona. `regressionctl d3d12-metal-routes`.
+- **D3D12 se enruta por evidencia, no por lista**: `D3D12MetalRouteDetector` acepta **dos**
+  formas, ambas del propio juego: el Agility SDK en la estructura canónica de Unreal, o que el
+  ejecutable declare `d3d12.dll` como **delay-load** en su PE. La segunda es la que de verdad usa
+  Unreal —enlazarlo estáticamente impediría arrancar sin D3D12— y es la que resolvió el
+  «DX12 is not supported in your system» que se repetía juego tras juego. Las rutas compiladas
+  mandan (DragonSword sigue en GPTK 3.0) y un Unity que solo empaqueta el SDK en la raíz no se
+  toca. `regressionctl d3d12-metal-routes`. Ver `docs/games/d3d12-delay-load-routing.md`.
 - **La autorreparación ya está desbloqueada y blindada.** El loader v2 acredita el App ID contra
   el `appmanifest` de Steam antes de aplicar nada, y la activación solo se promueve a aplicada si
   trae respaldo real y manifiesto de rollback de dos entradas. `reconcile` y `restore` funcionan.
