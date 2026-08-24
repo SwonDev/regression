@@ -74,6 +74,12 @@ case "$MODE" in
         [[ -d "$APP" && ! -L "$APP" ]] \
             || fail "la release pública debe ser un bundle físico"
         ;;
+    --release-1.12.6)
+        EXPECTED_VERSION="1.12.6"
+        EXPECTED_BUILD="44"
+        [[ -d "$APP" && ! -L "$APP" ]] \
+            || fail "la release pública debe ser un bundle físico"
+        ;;
     --candidate-1.12.1-before-runtime-join-fix)
         EXPECTED_VERSION="1.12.1"
         EXPECTED_BUILD="39"
@@ -81,7 +87,7 @@ case "$MODE" in
             || fail "el candidato público debe ser un bundle físico"
         ;;
     *)
-        fail "uso: $0 --baseline-1.10.0 | --release-1.10.1 | --release-1.11.0 | --release-1.12.0 | --release-1.12.1 | --release-1.12.2 | --release-1.12.3 | --release-1.12.4 | --release-1.12.5 | --candidate-1.12.1-before-runtime-join-fix"
+        fail "uso: $0 --baseline-1.10.0 | --release-1.10.1 | --release-1.11.0 | --release-1.12.0 | --release-1.12.1 | --release-1.12.2 | --release-1.12.3 | --release-1.12.4 | --release-1.12.5 | --release-1.12.6 | --candidate-1.12.1-before-runtime-join-fix"
         ;;
 esac
 codesign --verify --deep --strict "$APP"
@@ -98,7 +104,20 @@ fi
 [[ "$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")" == "$EXPECTED_BUILD" ]] \
     || fail "build público no soportado"
 
-if [[ "$MODE" == "--release-1.12.5" ]]; then
+if [[ "$MODE" == "--release-1.12.6" ]]; then
+    # 1.12.6 enruta a D3DMetal por la evidencia de delay-load del propio PE, así que el
+    # lanzador cambia respecto a 1.12.5.
+    verify_hash c50138d424af649291c7906725ec24c799ca67124c956fd4ea7ec570ba810b0a \
+        "$APP/Contents/MacOS/regression-engine"
+    verify_hash 276090bbf100ae02ad5bac5cd254dab1c105c3b44fd025b5ef205f3775463ea1 \
+        "$APP/Contents/SharedSupport/wine-root/bin/wine"
+    verify_hash e88c8c63e2a4cbfb8cacfb1b5c322ea166665575e5982ecd2ef6a831fde5212a \
+        "$APP/Contents/SharedSupport/wine-root/bin/wineserver"
+    verify_hash 0bd32de30071bdedc05a40d5750a4603586e45a1a66be25aad7975366b81f620 \
+        "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/wine"
+    verify_hash 047f1f18abc33084b2308b17f4db7204e835283e629552610008cd4a5482798d \
+        "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+elif [[ "$MODE" == "--release-1.12.5" ]]; then
     # 1.12.5 recompila el arranque público: su `ntdll` acredita el App ID contra
     # el `appmanifest` de Steam antes de aplicar una reparación compilada.
     verify_hash 3c1c789244ae8e7f8e3c97f5b905ca521dedcfff444efeec7e5fdf32bc1b31b8 \
@@ -178,7 +197,7 @@ if [[ "$MODE" == "--release-1.12.3" || "$MODE" == "--release-1.12.4" ]]; then
         || fail "winemac no conserva el shell explorer.exe como auxiliar sin Dock"
 fi
 
-if [[ "$MODE" == "--release-1.12.2" || "$MODE" == "--release-1.12.3" || "$MODE" == "--release-1.12.4" || "$MODE" == "--release-1.12.5" ]]; then
+if [[ "$MODE" == "--release-1.12.2" || "$MODE" == "--release-1.12.3" || "$MODE" == "--release-1.12.4" || "$MODE" == "--release-1.12.5" || "$MODE" == "--release-1.12.6" ]]; then
     baseline="$APP/Contents/SharedSupport/components/steam-bottle-baseline/1"
     verify_hash 884912891b7a3f5440a46b30b9241aa604e248fbbe578498058658e2293b00f4 \
         "$baseline/manifest.sha256"
