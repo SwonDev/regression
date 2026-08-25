@@ -82,12 +82,32 @@ funcionando con ese binario.
 
 Aun así **no se publica**, por dos motivos:
 
-1. **Enshrouded todavía no arranca con él.** El juego pasa de rechazar el dispositivo a aceptarlo
-   —`drawIndirectCount=VK_TRUE`, `maxDrawIndirectCount=1.073.741.824`, `Created Vulkan device!`— y
-   muere después, en `start creation step WaitForGpcLoaderReady`, **sin escribir ningún error**:
-   ni en su log, ni en el de MoltenVK con `MVK_CONFIG_LOG_LEVEL=4`, ni como informe de fallo de
-   macOS. Con el build contaminado sí llegaba a reportar `VK_ERROR_INVALID_SHADER_NV` en el shader
-   `VolumetricFog3ViewVolumeIntegrate`; con el bueno, muere antes de contarlo.
+1. **Enshrouded todavía no arranca con él, y no sé por qué.** Lo que sí está medido:
+
+   - Acepta la GPU: `drawIndirectCount=VK_TRUE`, `maxDrawIndirectCount=1.073.741.824`,
+     `Created Vulkan device!` con seis extensiones.
+   - Inicializa todo lo demás sin una queja: caché de pipelines, sonido WASAPI, animación, P2P.
+   - Crea su cola de compilación de pipelines con **14 hilos de trabajo**.
+   - Escribe `[app] start creation step WaitForGpcLoaderReady` y **el proceso desaparece a los
+     3 segundos** (Steam: `Game process removed`).
+
+   Y lo que se descartó buscándolo:
+
+   - **No es un crash**: no hay informe en `~/Library/Logs/DiagnosticReports`, ni minidump de
+     breakpad en `Steam/dumps` (sí los hay de otros procesos esa misma noche, así que el
+     mecanismo funciona).
+   - **No es una excepción de Windows**: con `WINEDEBUG=+seh` las únicas `c0000005` del log
+     pertenecen al dispositivo Vulkan 1.0 de Steam, no al 1.2 del juego.
+   - **No es un error de MoltenVK**: su log llega hasta la creación del `VkDevice` del juego y no
+     emite un solo `[mvk-error]` después. Con el build contaminado sí lo emitía —
+     `VK_ERROR_INVALID_SHADER_NV` en `VolumetricFog3ViewVolumeIntegrate`—, así que el canal
+     funciona y aquí simplemente no hay error que contar.
+   - **No es falta de tiempo**: el proceso no está compilando, ha terminado.
+
+   Sale limpio, sin decir nada, justo al empezar a cargar pipelines. Sin un rastro nuevo, seguir
+   probando sería dar palos de ciego; hace falta instrumentar la creación de pipelines dentro de
+   MoltenVK y ver qué hilo se va.
+
 2. **Publicar `libMoltenVK.dylib` obliga a revalidar toda la fila D3D9 de la matriz**, y no hay
    ningún juego D3D9 puro instalado con el que hacerlo: Sonic Adventure 2 va por `wined3d` desde
    1.12.7 y el resto son D3D11/D3D12. Sustituir el traductor de shaders de todos los juegos D3D9
