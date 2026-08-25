@@ -426,62 +426,16 @@ exacto que recibirá GitHub.** Actualizar también la nota de contrato en `READM
 - **Verificados en esta sesión sobre 1.12.7**: Sonic Adventure 2, Critadel, Wayfinder (pantalla de
   perfiles con partidas), Redfall, Beyond Contact, Runika, The Last Spell, Fields of Mistria,
   The Witcher 3 y la tienda de Steam.
-- **Enshrouded: el bloqueo documentado está resuelto, pero no se puede publicar.**
+- **Enshrouded: el bloqueo documentado está resuelto; lo que queda es otra cosa.**
   `vkCmdDrawIndirectCount` y su variante indexada están **implementados** contra las fuentes FOSS
   oficiales (`patches/moltenvk-26.3.0-draw-indirect-count.patch`): un kernel recorta los argumentos
-  indirectos con el contador de la GPU y anula los draws sobrantes. Con ese MoltenVK el juego pasa
-  de descartar el dispositivo a `Created Vulkan device!` y llega a compilar pipelines. **No se
-  publica** porque el MoltenVK de este runtime es el fork de CodeWeavers y usa campos que el
-  `External/SPIRV-Cross` del árbol solo tiene como *stubs*: publicarlo pondría a todos los juegos
-  D3D9 sobre un traductor que ignora parámetros en silencio (regla 77 de `AGENTS.md`). Después,
-  además, el juego topa con un bug de SPIRV-Cross al traducir un shader de cómputo. Ver
+  indirectos con el contador de la GPU y anula los draws sobrantes. Compilado **desde el tar**, el
+  juego pasa a `drawIndirectCount=VK_TRUE` y `Created Vulkan device!`, y Wayfinder y Redfall siguen
+  bien con ese MoltenVK. **No se publica** porque el juego muere después, en
+  `WaitForGpcLoaderReady`, sin dejar rastro, y porque sustituir `libMoltenVK.dylib` obliga a
+  revalidar la fila D3D9 entera y no hay ningún juego D3D9 puro instalado con el que hacerlo
+  (reglas 77-78 de `AGENTS.md`). El binario publicado está restaurado y verificado. Ver
   `docs/games/enshrouded.md`.
-- **27 certificaciones activas**, todas fijadas en el catálogo compilado (revisión `2026-08-19.2`).
-  Con expediente público: Grim Dawn, Clair Obscur, DragonSword, Hell Clock, Heroes of Hammerwatch II,
-  Secrets of Grindea, Fields of Mistria, Titan Quest II, Forsaken Isle, Dragonwilds, Tinkerlands,
-  Moonlighter 2, Cross Blitz, Luminary Demo, Borderlands 4, Cursemark; más Cube World y FFT en el
-  catálogo integrado. **Verificados por el usuario sin expediente propio** —funcionaron sobre el
-  baseline general desde el primer lanzamiento, sin perfil ni receta, así que no hay investigación
-  que contar—: Sephiria, Dwarven Realms, Monsuta, Luma Island, Crashlands 2, Tainted Grail,
-  IRON NEST, Granblue Fantasy: Relink y Temtem: Swarm.
-- **Reparados y pendientes de certificar**: **Cloudheim** (2070270). El overlay de Epic
-  (`EOSOVH`) y el de Steam encadenaban hooks sobre el `d3d11` de DXMT y saltaban a un puntero
-  corrupto. Se aísla `EOSOVH-Win64-Shipping` **solo** dentro de `CloudheimSteam-Win64-Shipping.exe`
-  (perfil compilado + ruta en el lanzador). Confirmado por el usuario; falta la matriz funcional
-  con el run cerrado. Ver `docs/games/cloudheim.md`.
-- **Bloqueado por anticheat**: **Dune: Awakening** (1172710) lleva **BattlEye**. Misma categoría
-  que FANTASY LIFE i: no se elude ni se presenta como compatible.
-- **Incompatible por Vulkan**: **Enshrouded** (1203620) es Vulkan puro y exige la característica
-  1.2 `drawIndirectCount`. Su propio log lo dice —«skipping device because 'drawIndirectCount' is
-  not supported»— y MoltenVK la declara falsa porque sus `vkCmdDrawIndirectCount` son **stubs
-  vacíos**. Activar el flag haría que arrancara sin pintar nada. Upstream lleva el issue abierto
-  desde 2018. No se enruta a D3DMetal porque el juego no llama a Direct3D.
-  Ver `docs/games/enshrouded.md`.
-- **Reparado por la corrección general de D3D12 y publicado en 1.12.6**: **Redfall** (1294810)
-  llega a su pantalla de título con la escena completa —validado desde la release instalada, con
-  D3DMetal cargado— y **Wayfinder** (1171690) inicializa D3D12 (`Feature Level 12_1`). A Wayfinder
-  le queda que no llega a crear ventana; se investiga aparte.
-- **Diagnosticado, corrección pendiente**: **Critadel** (808010) renderiza perfecto pero su
-  ventana a pantalla completa es *frontmost* sin ser *key*, así que el teclado no llega hasta que
-  se hace clic. Probablemente comparte causa con «el clic derecho deja de funcionar en Steam» y
-  con «Enter pasa el juego a ventana». Ver `docs/games/critadel.md`.
-- **Reparados y pendientes de certificar**: **Dragonkin: The Banished** (1863430). Es UE5 con
-  **D3D12** y no tenía ruta a D3DMetal, así que caía al `d3d12` de Wine sobre vkd3d/MoltenVK y
-  perdía toda la geometría estática (edificios, props, decoración) mientras terreno, personajes y
-  HUD sí pintaban. Se le asigna **Apple GPTK 4.0b2** por proceso exacto. Confirmado por el
-  usuario. Ver `docs/games/dragonkin-the-banished.md`.
-- **Reparados y pendientes de certificar**: **TMNT: Shredder's Revenge** (1361510). Es **FNA**,
-  no Unreal, y aun así reprodujo el crash de Cloudheim con el **mismo** puntero corrupto
-  `0x5320747375725420` —que es texto ASCII, no una dirección—: lo único que comparten es el EOS
-  SDK. Se aísla `EOSOVH-Win64-Shipping` **solo** dentro de `TMNT.exe`. Arranque confirmado por el
-  usuario (pantalla de título, versión 1.0.0.349). Ver `docs/games/tmnt-shredders-revenge.md`.
-- **Resuelto sin tocar el motor**: **Core Keeper** (1621690). Se cerraba solo a los ~15 s, sin
-  ventana y sin crash, porque el `remotecache.vdf` de Steam declaraba los ocho archivos de nube
-  como sincronizados en local mientras la carpeta de guardado del juego estaba vacía: Steam no los
-  volvía a bajar y el juego abandonaba el arranque. Las partidas seguían íntegras en
-  `userdata/.../remote/`; bastó copiarlas a la carpeta local conservando fechas. Descartado el
-  runtime nuevo con un **A/B de una sola variable** (con el `ntdll.so` anterior fallaba igual).
-  Confirmado por el usuario. Ver `docs/games/core-keeper.md`.
 - **Validados con incidencia**: Dragon's Dogma 2 (letterbox 16:9), Rotwood (superficie 1512×870).
 - **Investigación abierta y separada**: FANTASY LIFE i, bloqueado por la política oficial de EAC en
   entornos virtualizados (`208 Cannot run under Virtual Machine`). No se elude, no se oculta la VM,

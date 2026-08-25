@@ -564,15 +564,17 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
     algunos juegos antes siquiera de crear su ventana (reproducido con Runika, parado justo tras
     inicializar su input). Las dos mitades se separan, y cada cambio de foco se valida contra
     **ambos** casos: un juego que necesita el foco y otro que se colgaba.
-77. **El MoltenVK de este runtime es el fork de CodeWeavers y no se puede recompilar con el
-    SPIRV-Cross oficial.** MoltenVK **usa** `for_mesh_pipeline`, `input_primitive_type`,
-    `add_texture_buffer_offsets`, `texture_offset_buffer_index` y un `MSLShaderInterfaceVariable`
-    con `binding`, `offset`, `stride` y `normalized`; el `External/SPIRV-Cross` del árbol es el
-    upstream con esos campos añadidos **como stubs**, así que MoltenVK los rellena y el traductor
-    los ignora en silencio. Publicar ese binario pondría a **todos** los juegos D3D9 sobre un
-    traductor que descarta parámetros sin avisar. Antes de sustituir `libMoltenVK.dylib` hay que
-    acreditar que su SPIRV-Cross implementa de verdad lo que MoltenVK le pide. Ver
-    `docs/games/enshrouded.md`.
+77. **MoltenVK también se compila desde el tar oficial, nunca desde el árbol de trabajo.** El
+    `External/SPIRV-Cross` de `sources-26.3.0/moltenvk` es el upstream con los campos que el fork
+    de CodeWeavers necesita añadidos **como stubs**: MoltenVK los rellena —`for_mesh_pipeline`,
+    `input_primitive_type`, `add_texture_buffer_offsets`, `texture_offset_buffer_index` y el
+    `MSLShaderInterfaceVariable` con `binding`/`offset`/`stride`/`normalized`— y el traductor los
+    ignora en silencio. El tar **sí** trae la versión buena. Es la misma regla que el runtime de
+    Wine, y se incumplió por no comprobarlo: antes de sustituir `libMoltenVK.dylib`, acredita que
+    su SPIRV-Cross implementa lo que MoltenVK le pide. Ver `docs/games/enshrouded.md`.
+78. **Sustituir `libMoltenVK.dylib` obliga a revalidar la fila D3D9 entera.** MoltenVK sirve a
+    DXVK, así que afecta a **todos** los juegos D3D9, no solo al que motivó el cambio. Si no hay
+    un juego D3D9 puro instalado con el que acreditarlo, el cambio no se publica.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 

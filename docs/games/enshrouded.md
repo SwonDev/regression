@@ -61,57 +61,46 @@ dispositivo a esto:
 
 El juego acepta la GPU y avanza hasta compilar sus pipelines. El bloqueo documentado ya no existe.
 
-## Por qué no se publica
+## Por qué no se publica todavía
 
-Dos motivos, y el primero es el que manda.
+**Corrección de un diagnóstico anterior.** Se llegó a escribir aquí que el SPIRV-Cross que este
+MoltenVK necesita «no viaja en el tar FOSS». **Es falso, y conviene que quede dicho.** El tar sí lo
+trae: `sources/moltenvk/External/SPIRV-Cross` es la versión de CodeWeavers, con
+`for_mesh_pipeline` (31 usos en `spirv_msl.cpp`), `input_primitive_type`,
+`add_texture_buffer_offsets`, `texture_offset_buffer_index` y el `MSLShaderInterfaceVariable`
+extendido con `binding`, `offset`, `stride` y `normalized`, **implementados de verdad**.
 
-### 1. MoltenVK aquí es el fork de CodeWeavers, y su SPIRV-Cross no está en el tar
+Lo que estaba contaminado era el **árbol de trabajo**: su `External/SPIRV-Cross` es el upstream
+oficial con esos campos añadidos a mano como *stubs*, mil líneas más corto. Compilar MoltenVK desde
+ahí produce un traductor que acepta esos parámetros y los ignora en silencio. Es exactamente el
+mismo error que la regla del runtime de Wine ya prohíbe: **se compila desde el tar oficial, nunca
+desde el árbol de trabajo tal como esté**.
 
-El `MoltenVK` de `sources-26.3.0` **usa** campos que el SPIRV-Cross oficial no tiene:
-`for_mesh_pipeline`, `input_primitive_type`, `add_texture_buffer_offsets`,
-`texture_offset_buffer_index` y un `MSLShaderInterfaceVariable` extendido con
-`binding`, `offset`, `stride` y `normalized`. Están comprobados uno a uno: MoltenVK los referencia.
+Compilado desde el tar, con el SPIRV-Cross correcto y el parche encima, MoltenVK sale limpio.
+Wayfinder y Redfall —los dos títulos instalados que tocan DXVK D3D9 al arrancar— siguen
+funcionando con ese binario.
 
-En el árbol, `External/SPIRV-Cross` es el **upstream oficial** con esos campos añadidos a mano como
-*stubs* para que compile. Es decir: MoltenVK los rellena y SPIRV-Cross los **ignora en silencio**.
-Compilar y publicar ese binario pondría a **todos** los juegos D3D9 —que van por DXVK y por tanto
-por MoltenVK— sobre un traductor de shaders que descarta parámetros de vertex input y de pipeline
-sin decir nada. Eso es exactamente el fallo silencioso que este proyecto no produce.
+Aun así **no se publica**, por dos motivos:
 
-Publicarlo exigiría el SPIRV-Cross del fork de CodeWeavers, que no viaja en el tar FOSS.
+1. **Enshrouded todavía no arranca con él.** El juego pasa de rechazar el dispositivo a aceptarlo
+   —`drawIndirectCount=VK_TRUE`, `maxDrawIndirectCount=1.073.741.824`, `Created Vulkan device!`— y
+   muere después, en `start creation step WaitForGpcLoaderReady`, **sin escribir ningún error**:
+   ni en su log, ni en el de MoltenVK con `MVK_CONFIG_LOG_LEVEL=4`, ni como informe de fallo de
+   macOS. Con el build contaminado sí llegaba a reportar `VK_ERROR_INVALID_SHADER_NV` en el shader
+   `VolumetricFog3ViewVolumeIntegrate`; con el bueno, muere antes de contarlo.
+2. **Publicar `libMoltenVK.dylib` obliga a revalidar toda la fila D3D9 de la matriz**, y no hay
+   ningún juego D3D9 puro instalado con el que hacerlo: Sonic Adventure 2 va por `wined3d` desde
+   1.12.7 y el resto son D3D11/D3D12. Sustituir el traductor de shaders de todos los juegos D3D9
+   sin una sola prueba D3D9 real, y sin que arregle nada visible hoy, es riesgo sin beneficio.
 
-### 2. Aun así, el juego topa después con otra cosa
-
-Con la característica ya aceptada, Enshrouded falla más adelante compilando un shader de cómputo:
-
-```text
-[graphics] vkCreateComputePipelines of pipeline 'VolumetricFog3ViewVolumeIntegrate' failed
-           with error 'VK_ERROR_INVALID_SHADER_NV'
-[X] Error compiling gpc pipeline 1/16
-```
-
-Y el error real de SPIRV-Cross, con `MVK_CONFIG_LOG_LEVEL=4`:
-
-```text
-error: Maximum compilation loops detected and no forward progress was made. Must be a SPIRV-Cross bug!
-```
-
-Es un defecto del traductor con ese shader concreto, no una característica que falte. El
-SPIRV-Cross del árbol es de **julio de 2024** (`68d4011`) y upstream lleva 449 commits por delante,
-pero actualizarlo choca de nuevo con el punto 1: los stubs son precisamente lo que habría que
-rebasar sobre la revisión nueva.
+El binario publicado se restauró y el estado instalado vuelve a verificar como 1.12.7 (45).
 
 ## Qué haría falta para cerrarlo
 
-En este orden, y ninguno es un atajo:
-
-1. Conseguir el SPIRV-Cross que corresponde a este MoltenVK —el del fork— o portar los campos que
-   MoltenVK usa a una revisión reciente del oficial, implementándolos de verdad en vez de stubs.
-2. Reconstruir MoltenVK con el parche de `drawIndirectCount` sobre esa base.
-3. Comprobar si el shader `VolumetricFog3ViewVolumeIntegrate` ya traduce; si no, aislar el
-   constructo que hace bucle en `CompilerGLSL::compile()` y corregirlo.
-4. Revalidar **toda** la fila D3D9 de la matriz, porque MoltenVK sirve a DXVK: sustituirlo afecta
-   a cualquier juego D3D9, no solo a este.
+1. Averiguar por qué el proceso muere en `WaitForGpcLoaderReady` sin dejar rastro. La vía es
+   instrumentar la compilación de pipelines de MoltenVK, no el juego.
+2. Instalar un juego D3D9 puro para poder acreditar la fila D3D9 de la matriz con el MoltenVK nuevo.
+3. Solo entonces, cortar una release con él.
 
 ## Lo que no se hace
 
