@@ -225,6 +225,41 @@ a dereferenciar lo bastante lejos como para reventar.
 | Que un array *bindless* indexado fuera de los descriptores reservados lo provoque | Reproductor: con `VARIABLE_DESCRIPTOR_COUNT` y `PARTIALLY_BOUND`, reservando 0 ó 4 descriptores e indexando el 264 o el 1023, **no falla**. MoltenVK dimensiona por la cuenta declarada, no por la reservada |
 | Que el buffer implícito de tamaños se enlace vacío al cambiar de pipeline | Reproductor: tres dispatches con un cambio de pipeline en medio y sin re-enlazar los descriptor sets dan `length()` = 1024 en los tres |
 | Que el array *bindless* de **texturas** fuera de rango lo provoque | Reproductor: array de texturas 3D con `PARTIALLY_BOUND`, cuatro escritas y muestreando la 3000, **no falla**. Es la forma que tienen de verdad los shaders del juego: su firma real declara `array<texture3d<float>, 32768>` |
+| Que el orden de vinculación lo provoque | Reproductor: enlazar los descriptor sets **antes** de la pipeline no falla |
+| Que un layout de pipeline compatible pero distinto invalide el set | Reproductor: enlazar los sets con un layout y la pipeline con otro compatible no falla |
+
+### El mecanismo, ya identificado
+
+Los shaders del juego se pudieron **extraer y convertir sin ejecutarlo**: su SPIR-V viaja sin
+comprimir dentro de los `enshrouded_0NN.dat` y se localiza por su número mágico
+(`tools/research/shader-extract/`). De ahí salieron **6 050 módulos**, 5 824 de cómputo, convertidos
+a MSL con las mismas opciones que usa el runtime (`-mab`, argument buffers) para que la numeración
+de líneas coincida con la que reporta la validación.
+
+Con eso, la línea 501 que señala el informe deja de ser un misterio. Tiene esta forma:
+
+```metal
+_363._m1._m0[1] = (*spvDescriptorSet1.m_8)._m0[_262]._m1._m0[1];
+```
+
+donde `m_8` se declara dentro del propio argument buffer:
+
+```metal
+const device _29* m_8 [[id(3)]];
+```
+
+Es decir: **el shader lee un puntero guardado dentro del argument buffer y lo desreferencia**, con
+un índice dinámico. Si ese argument buffer no está enlazado, el puntero sale nulo y desreferenciar
+cero más un desplazamiento da exactamente lo que dice el informe —«Out of bounds of user address
+space, length:1»—. No hay nada que Metal pueda acotar: es una dirección cruda.
+
+Eso explica de paso por qué **rellenar la ranura con memoria cero no sirvió**: ceros son un puntero
+nulo, y el fallo es el mismo. La corrección tiene que hacer que ese argument buffer esté enlazado
+con su contenido real, no con relleno.
+
+Lo que sigue sin reproducirse en el arnés es **la condición que deja ese set sin enlazar**: ni el
+orden de vinculación (sets antes que la pipeline), ni un layout compatible pero distinto, ni un set
+sencillamente no enlazado bastan por sí solos.
 
 ### Aviso de método
 
@@ -259,8 +294,9 @@ Dos trampas del propio build, las dos fijadas en el script:
 
 ## Pendiente antes de certificar
 
-1. **Cerrar el bloqueo 5.** Siete hipótesis descartadas, seis de ellas con el reproductor y sin
-   tocar el juego. Lo que queda no se puede adivinar: hace falta **un dato concreto del juego**, y
+1. **Cerrar el bloqueo 5.** Nueve hipótesis descartadas, ocho de ellas sin tocar el juego, y el
+   **mecanismo ya identificado** (arriba): un puntero nulo leído de un argument buffer sin enlazar.
+   Lo que falta es la condición que lo deja sin enlazar. Lo que queda no se puede adivinar: hace falta **un dato concreto del juego**, y
    se obtiene con una sola ejecución.
 
    **El paso exacto que falta** es leer el MSL del shader que revienta. El informe de la validación

@@ -15,16 +15,20 @@ static uint32_t tipoMemoria(VkPhysicalDevice pd, uint32_t bits, VkMemoryProperty
 }
 
 int main(int argc, char** argv) {
-    int enlazarSet4 = 0, rangoParcial = 0;
+    int enlazarSet4 = 0, rangoParcial = 0, setsPrimero = 0, otroLayout = 0;
     const char* spv = "probe.spv";
     for (int i=1;i<argc;i++) {
         if (!strcmp(argv[i],"--enlazar-set4")) enlazarSet4 = 1;
         else if (!strcmp(argv[i],"--rango-parcial")) rangoParcial = 1;
+        else if (!strcmp(argv[i],"--sets-primero")) setsPrimero = 1;
+        else if (!strcmp(argv[i],"--otro-layout")) otroLayout = 1;
         else if (argv[i][0] != '-') spv = argv[i];
     }
-    printf("caso: set alto %s, rango del descriptor %s\n",
+    printf("caso: set alto %s, rango %s, orden %s, layout %s\n",
            enlazarSet4 ? "ENLAZADO" : "SIN ENLAZAR",
-           rangoParcial ? "PARCIAL (1/4 del buffer)" : "VK_WHOLE_SIZE");
+           rangoParcial ? "PARCIAL" : "VK_WHOLE_SIZE",
+           setsPrimero ? "SETS ANTES DE LA PIPELINE" : "pipeline antes",
+           otroLayout ? "COMPATIBLE PERO DISTINTO" : "el mismo");
 
     const char* extInst[] = { "VK_KHR_get_physical_device_properties2" };
     VkApplicationInfo ai = { .sType=VK_STRUCTURE_TYPE_APPLICATION_INFO, .apiVersion=VK_API_VERSION_1_2 };
@@ -60,7 +64,9 @@ int main(int argc, char** argv) {
     VkPushConstantRange pcr={ .stageFlags=VK_SHADER_STAGE_COMPUTE_BIT,.offset=0,.size=4 };
     VkPipelineLayoutCreateInfo pli={ .sType=VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,.setLayoutCount=5,.pSetLayouts=sets,
         .pushConstantRangeCount=1,.pPushConstantRanges=&pcr };
-    VkPipelineLayout pl; CHK(vkCreatePipelineLayout(dev,&pli,NULL,&pl));
+    VkPipelineLayout pl, plB;
+    CHK(vkCreatePipelineLayout(dev,&pli,NULL,&pl));
+    CHK(vkCreatePipelineLayout(dev,&pli,NULL,&plB));   // compatible: mismas descripciones
 
     FILE* f=fopen(spv,"rb");
     if(!f){ printf("no se pudo abrir el SPIR-V\n"); return 2; }
@@ -107,12 +113,14 @@ int main(int argc, char** argv) {
     VkCommandBuffer cb; CHK(vkAllocateCommandBuffers(dev,&cbi,&cb));
     VkCommandBufferBeginInfo bi={ .sType=VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
     CHK(vkBeginCommandBuffer(cb,&bi));
-    vkCmdBindPipeline(cb,VK_PIPELINE_BIND_POINT_COMPUTE,pipe);
-    vkCmdBindDescriptorSets(cb,VK_PIPELINE_BIND_POINT_COMPUTE,pl,0,1,&ds[0],0,NULL);
     {
         uint32_t destino = (strstr(spv,"length") != NULL) ? 1u : 4u;
+        VkPipelineLayout usado = otroLayout ? plB : pl;
+        if (!setsPrimero) vkCmdBindPipeline(cb,VK_PIPELINE_BIND_POINT_COMPUTE,pipe);
+        vkCmdBindDescriptorSets(cb,VK_PIPELINE_BIND_POINT_COMPUTE,usado,0,1,&ds[0],0,NULL);
         if (enlazarSet4 || destino==1u)
-            vkCmdBindDescriptorSets(cb,VK_PIPELINE_BIND_POINT_COMPUTE,pl,destino,1,&ds[1],0,NULL);
+            vkCmdBindDescriptorSets(cb,VK_PIPELINE_BIND_POINT_COMPUTE,usado,destino,1,&ds[1],0,NULL);
+        if (setsPrimero) vkCmdBindPipeline(cb,VK_PIPELINE_BIND_POINT_COMPUTE,pipe);
     }
     uint32_t ranura=0; vkCmdPushConstants(cb,pl,VK_SHADER_STAGE_COMPUTE_BIT,0,4,&ranura);
     vkCmdDispatch(cb,64,1,1);
