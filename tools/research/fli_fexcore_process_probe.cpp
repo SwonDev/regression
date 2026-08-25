@@ -35,6 +35,7 @@
 #include <fcntl.h>
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
+#include <mach-o/dyld.h>
 #include <poll.h>
 #include <pthread.h>
 #include <spawn.h>
@@ -56,6 +57,19 @@
 extern "C" ssize_t __getdirentries64(int, char*, size_t, off_t*);
 
 namespace {
+uintptr_t LoadedMachOImageBase(std::string_view ImageSuffix) {
+  const uint32_t ImageCount = _dyld_image_count();
+  for (uint32_t Index = 0; Index < ImageCount; ++Index) {
+    const char* ImageName = _dyld_get_image_name(Index);
+    const auto* ImageHeader = _dyld_get_image_header(Index);
+    if (ImageName != nullptr && ImageHeader != nullptr
+        && std::string_view {ImageName}.ends_with(ImageSuffix)) {
+      return reinterpret_cast<uintptr_t>(ImageHeader);
+    }
+  }
+  return 0;
+}
+
 constexpr uint64_t InterpreterLoadOffset = 0x1'0000;
 constexpr uint64_t InterpreterEntryOffset = 0x200;
 constexpr uint64_t InterpreterDataOffset = 0x2000;
@@ -96,6 +110,7 @@ constexpr uint64_t LinuxTCGets2 = 0x802c542a;
 constexpr uint64_t LinuxExt2IOCGetFlags = 0x80086601;
 constexpr uint64_t AccessSyscall = 21;
 constexpr uint64_t DupSyscall = 32;
+constexpr uint64_t Dup2Syscall = 33;
 constexpr uint64_t SocketSyscall = 41;
 constexpr uint64_t ConnectSyscall = 42;
 constexpr uint64_t AcceptSyscall = 43;
@@ -160,6 +175,7 @@ constexpr uint64_t SysinfoSyscall = 99;
 constexpr uint64_t TimeSyscall = 201;
 constexpr uint64_t SchedGetAffinitySyscall = 204;
 constexpr uint64_t GetUIDSyscall = 102;
+constexpr uint64_t SetSIDSyscall = 112;
 constexpr uint64_t SetPrioritySyscall = 141;
 constexpr uint64_t SigAltStackSyscall = 131;
 constexpr uint64_t LinuxX86MinSignalStackSize = 2048;
@@ -2146,6 +2162,8 @@ public:
     ActiveLowRedirectHostLimit = LowRedirectHostBase + LowRedirectHostSize;
     ActiveHighSparseHostBase = HighSparseHostBase;
     ActiveHighSparseHostLimit = HighSparseHostBase + HighSparseHostSize;
+    ActiveFEXImageBase = LoadedMachOImageBase("/libFEXCore.dylib");
+    ActiveProbeImageBase = reinterpret_cast<uintptr_t>(_dyld_get_image_header(0));
     ActiveLowShadowMapping = LowShadowMapping;
     ActiveHighSparseMapping = HighSparseMapping;
     HandledCount = 0;
@@ -2205,6 +2223,8 @@ public:
     ActiveLowRedirectHostLimit = 0;
     ActiveHighSparseHostBase = 0;
     ActiveHighSparseHostLimit = 0;
+    ActiveFEXImageBase = 0;
+    ActiveProbeImageBase = 0;
     ActiveLowShadowMapping = nullptr;
     ActiveHighSparseMapping = nullptr;
     Handling = false;
@@ -2448,10 +2468,11 @@ private:
     uintptr_t ProgramCounter,
     uintptr_t FaultAddress,
     uintptr_t GuestRIP,
-    uintptr_t HostLinkRegister,
+    uintptr_t CurrentFrame,
+    const __darwin_arm_thread_state64& HostState,
     uintptr_t JITGuardPage,
     uintptr_t JITGuardLimit) {
-    std::array<char, 768> Buffer {};
+    std::array<char, 1536> Buffer {};
     size_t Offset = AppendSignalTraceLiteral(
       Buffer.data(), 0, Buffer.size(), "REGRESSION_SIGNAL_OUTSIDE_CODE_BUFFER signal=");
     Offset = AppendSignalTraceHex(
@@ -2466,7 +2487,28 @@ private:
     Offset = AppendSignalTraceLiteral(Buffer.data(), Offset, Buffer.size(), " guest_rip=");
     Offset = AppendSignalTraceHex(Buffer.data(), Offset, Buffer.size(), GuestRIP);
     Offset = AppendSignalTraceLiteral(Buffer.data(), Offset, Buffer.size(), " lr=");
-    Offset = AppendSignalTraceHex(Buffer.data(), Offset, Buffer.size(), HostLinkRegister);
+    Offset = AppendSignalTraceHex(Buffer.data(), Offset, Buffer.size(), HostState.__lr);
+    Offset = AppendSignalTraceLiteral(Buffer.data(), Offset, Buffer.size(), " sp=");
+    Offset = AppendSignalTraceHex(Buffer.data(), Offset, Buffer.size(), HostState.__sp);
+    Offset = AppendSignalTraceLiteral(Buffer.data(), Offset, Buffer.size(), " fp=");
+    Offset = AppendSignalTraceHex(Buffer.data(), Offset, Buffer.size(), HostState.__fp);
+    static constexpr std::array<std::string_view, 9> HostRegisterLabels {
+      " x0=", " x1=", " x2=", " x3=", " x4=", " x5=", " x6=", " x7=", " x8="};
+    for (size_t Index = 0; Index < HostRegisterLabels.size(); ++Index) {
+      Offset = AppendSignalTraceLiteral(
+        Buffer.data(), Offset, Buffer.size(), HostRegisterLabels[Index]);
+      Offset = AppendSignalTraceHex(
+        Buffer.data(), Offset, Buffer.size(), HostState.__x[Index]);
+    }
+    Offset = AppendSignalTraceLiteral(Buffer.data(), Offset, Buffer.size(), " thread=");
+    Offset = AppendSignalTraceHex(
+      Buffer.data(), Offset, Buffer.size(), reinterpret_cast<uintptr_t>(ActiveThread));
+    Offset = AppendSignalTraceLiteral(Buffer.data(), Offset, Buffer.size(), " frame=");
+    Offset = AppendSignalTraceHex(Buffer.data(), Offset, Buffer.size(), CurrentFrame);
+    Offset = AppendSignalTraceLiteral(Buffer.data(), Offset, Buffer.size(), " fex_base=");
+    Offset = AppendSignalTraceHex(Buffer.data(), Offset, Buffer.size(), ActiveFEXImageBase);
+    Offset = AppendSignalTraceLiteral(Buffer.data(), Offset, Buffer.size(), " probe_base=");
+    Offset = AppendSignalTraceHex(Buffer.data(), Offset, Buffer.size(), ActiveProbeImageBase);
     Offset = AppendSignalTraceLiteral(Buffer.data(), Offset, Buffer.size(), " guest_base=");
     Offset = AppendSignalTraceHex(Buffer.data(), Offset, Buffer.size(), ActiveGuestMemoryBase);
     Offset = AppendSignalTraceLiteral(Buffer.data(), Offset, Buffer.size(), " guest_limit=");
@@ -2546,7 +2588,8 @@ private:
         ProgramCounter,
         FaultAddress,
         Frame != nullptr ? Frame->State.rip : 0,
-        HostState.__lr,
+        reinterpret_cast<uintptr_t>(Frame),
+        HostState,
         Thread->JITGuardPage,
         JITGuardLimit);
       _exit(202);
@@ -2704,6 +2747,8 @@ private:
   inline static thread_local uintptr_t ActiveLowRedirectHostLimit {};
   inline static thread_local uintptr_t ActiveHighSparseHostBase {};
   inline static thread_local uintptr_t ActiveHighSparseHostLimit {};
+  inline static thread_local uintptr_t ActiveFEXImageBase {};
+  inline static thread_local uintptr_t ActiveProbeImageBase {};
   inline static thread_local LowGuestShadowMapping* ActiveLowShadowMapping {};
   inline static thread_local HighGuestSparseMapping* ActiveHighSparseMapping {};
   inline static thread_local volatile sig_atomic_t HandledCount {};
@@ -2760,6 +2805,48 @@ private:
   bool Installed {};
 };
 
+bool IsValidWinePreloadReserve(std::string_view Value) {
+  constexpr uint64_t LinuxPageSize = 4096;
+  const size_t Separator = Value.find('-');
+  if (Value.empty() || Value.size() > 33
+      || Separator == std::string_view::npos
+      || Separator == 0 || Separator + 1 >= Value.size()
+      || Value.find('-', Separator + 1) != std::string_view::npos) {
+    return false;
+  }
+
+  const auto ParseHex = [](std::string_view Component) -> std::optional<uint64_t> {
+    if (Component.empty() || Component.size() > 16) {
+      return std::nullopt;
+    }
+    uint64_t Result {};
+    for (const char Character : Component) {
+      uint64_t Digit {};
+      if (Character >= '0' && Character <= '9') {
+        Digit = static_cast<uint64_t>(Character - '0');
+      } else if (Character >= 'a' && Character <= 'f') {
+        Digit = static_cast<uint64_t>(Character - 'a' + 10);
+      } else if (Character >= 'A' && Character <= 'F') {
+        Digit = static_cast<uint64_t>(Character - 'A' + 10);
+      } else {
+        return std::nullopt;
+      }
+      if (Result > (std::numeric_limits<uint64_t>::max() - Digit) / 16) {
+        return std::nullopt;
+      }
+      Result = Result * 16 + Digit;
+    }
+    return Result;
+  };
+
+  const auto Start = ParseHex(Value.substr(0, Separator));
+  const auto End = ParseHex(Value.substr(Separator + 1));
+  return Start.has_value() && End.has_value()
+    && *Start < *End
+    && (*Start & (LinuxPageSize - 1)) == 0
+    && (*End & (LinuxPageSize - 1)) == 0;
+}
+
 class ProcessSyscallHandler final : public FEXCore::HLE::SyscallHandler {
 public:
   ProcessSyscallHandler(
@@ -2787,6 +2874,7 @@ public:
     std::string WineServerBridgeDirectory = {},
     std::string CXAltLoaderGuestSocketPath = {},
     std::string CXAltLoaderHostSocketPath = {},
+    int InheritedWineServerSocketFD = -1,
     uint64_t DiagnosticPostSessionSyscallLimit = 0)
     : GuestBase {GuestBase}
     , GuestSize {GuestSize}
@@ -2816,6 +2904,9 @@ public:
     VForkParentProcessBridgeEnabled = InstrumentVForkParentProcessBridge;
     VForkParentWineServerBridgeEnabled = InstrumentVForkParentWineServerBridge;
     PostSessionSyscallDiagnosticLimit = DiagnosticPostSessionSyscallLimit;
+    if (InheritedWineServerSocketFD >= 0) {
+      OwnedDescriptors.insert(InheritedWineServerSocketFD);
+    }
     if (!this->RootFS.empty()) {
       std::array<char, 4096> Canonical {};
       if (realpath(this->RootFS.c_str(), Canonical.data()) != nullptr) {
@@ -2827,9 +2918,15 @@ public:
   ~ProcessSyscallHandler() override {
     FinalizeVirtualVForkWineServerBridge();
     CleanupVirtualVForkBridgeChild();
+    CleanupNativeForkCloneChild();
     for (const int Descriptor : OwnedDescriptors) {
       close(Descriptor);
     }
+  }
+
+  void AttachForkContext(FEXCore::Context::Context* Context) {
+    ForkContext = Context;
+    NativeForkCloneContextAttached = Context != nullptr;
   }
 
   void FinalizeOwnedVirtualVForkProcesses() {
@@ -4734,6 +4831,20 @@ public:
       LastGetPID = static_cast<uint64_t>(getpid());
       return LastGetPID;
     }
+    if (Number == SetSIDSyscall && !RootFS.empty()
+        && NativeForkCloneChildProcess) {
+      SetSIDSeen = true;
+      ++SetSIDCallCount;
+      errno = 0;
+      const pid_t Result = setsid();
+      if (Result < 0) {
+        SetSIDLastHostError = errno;
+        return static_cast<uint64_t>(-errno);
+      }
+      ++SetSIDSuccessCount;
+      SetSIDLastSessionID = Result;
+      return static_cast<uint64_t>(Result);
+    }
     if (Number == SchedGetAffinitySyscall && !RootFS.empty()) {
       constexpr uint64_t LinuxKernelAffinityBytes = sizeof(uint64_t);
       constexpr int LinuxBadAddress = 14;
@@ -4754,6 +4865,15 @@ public:
       const uint64_t AffinityMask = LogicalCPUCount >= 64
         ? std::numeric_limits<uint64_t>::max()
         : (uint64_t {1} << LogicalCPUCount) - 1;
+      std::cerr << "TRACE sched_getaffinity-write"
+                << " handler-call=" << HandleSyscallCallCount
+                << " arguments=" << reinterpret_cast<uintptr_t>(Arguments)
+                << " pid=" << ProcessID
+                << " cpusetsize=" << CPUSetSize
+                << " mask=" << GuestMask
+                << " mask-contained=" << (Contains(GuestMask, CPUSetSize) ? 1 : 0)
+                << '\n';
+      std::cerr.flush();
       std::memcpy(
         reinterpret_cast<void*>(GuestMask),
         &AffinityMask,
@@ -4787,6 +4907,29 @@ public:
                 << '\n';
       std::cerr.flush();
       return static_cast<uint64_t>(DuplicatedDescriptor);
+    }
+    if (Number == Dup2Syscall && !RootFS.empty()) {
+      Dup2Seen = true;
+      ++Dup2CallCount;
+      const int SourceDescriptor = static_cast<int>(Arguments->Argument[1]);
+      const int TargetDescriptor = static_cast<int>(Arguments->Argument[2]);
+      Dup2LastSourceDescriptor = SourceDescriptor;
+      Dup2LastTargetDescriptor = TargetDescriptor;
+      Dup2LastSourceOwned = OwnedDescriptors.contains(SourceDescriptor);
+      if (!Dup2LastSourceOwned || TargetDescriptor < 0) {
+        Dup2LastLinuxError = EBADF;
+        return static_cast<uint64_t>(-EBADF);
+      }
+      const int Result = dup2(SourceDescriptor, TargetDescriptor);
+      if (Result == -1) {
+        Dup2LastLinuxError = TranslateHostDupErrorToLinux(errno);
+        return static_cast<uint64_t>(-Dup2LastLinuxError);
+      }
+      OwnedDescriptors.insert(Result);
+      ClosedStandardDescriptors.erase(Result);
+      ++Dup2SuccessCount;
+      Dup2LastLinuxError = 0;
+      return static_cast<uint64_t>(Result);
     }
     if (Number == GetTIDSyscall && !RootFS.empty()) {
       GetTIDSeen = true;
@@ -6321,6 +6464,7 @@ public:
       SendMsgLastControlType = 0;
       SendMsgLastMessageFlags = 0;
       SendMsgLastTransferredDescriptor = -1;
+      SendMsgLastTransferredDescriptorCount = 0;
       SendMsgLastTransferredDescriptorOwned = false;
       SendMsgLastTransferredDescriptorStandard = false;
       SendMsgLastTransferredDescriptorClosed = false;
@@ -6402,6 +6546,113 @@ public:
       SendMsgLastControlMessageLength = GuestControl.Length;
       SendMsgLastControlLevel = GuestControl.Level;
       SendMsgLastControlType = GuestControl.Type;
+      constexpr size_t AltLoaderMinimumDescriptorCount = 4;
+      constexpr size_t AltLoaderMaximumDescriptorCount = 5;
+      constexpr uint64_t AltLoaderPayloadSize = 1;
+      const bool AltLoaderControlLengthValid = GuestControl.Length
+        >= sizeof(LinuxControlMessageHeader64)
+          + AltLoaderMinimumDescriptorCount * sizeof(int32_t)
+        && GuestControl.Length
+          <= sizeof(LinuxControlMessageHeader64)
+            + AltLoaderMaximumDescriptorCount * sizeof(int32_t)
+        && (GuestControl.Length - sizeof(LinuxControlMessageHeader64))
+          % sizeof(int32_t) == 0;
+      const size_t AltLoaderDescriptorCount = AltLoaderControlLengthValid
+        ? static_cast<size_t>(
+            (GuestControl.Length - sizeof(LinuxControlMessageHeader64))
+              / sizeof(int32_t))
+        : 0;
+      const bool ExactAltLoaderShape = CallFlags == 0
+        && GuestHeader.Name == 0
+        && GuestHeader.NameLength == 0
+        && GuestHeader.IOVectorCount == 1
+        && GuestHeader.Flags == 0
+        && GuestVector.Length == AltLoaderPayloadSize
+        && SendMsgLastFirstIOVectorPayloadReadable
+        && SendMsgLastControlReadable
+        && GuestHeader.ControlLength == GuestControl.Length
+        && AltLoaderControlLengthValid
+        && GuestControl.Level == LinuxSOLSocket
+        && GuestControl.Type == LinuxSCMRights;
+      if (ExactAltLoaderShape) {
+        ++SendMsgAltLoaderCandidateCount;
+        std::array<int, AltLoaderMaximumDescriptorCount> TransferredDescriptors {};
+        std::memcpy(
+          TransferredDescriptors.data(),
+          reinterpret_cast<const void*>(
+            GuestHeader.Control + sizeof(LinuxControlMessageHeader64)),
+          AltLoaderDescriptorCount * sizeof(int));
+        SendMsgLastTransferredDescriptorCount = AltLoaderDescriptorCount;
+        SendMsgLastTransferredDescriptor = TransferredDescriptors[3];
+        SendMsgLastTransferredDescriptorOwned = OwnedDescriptors.contains(
+          TransferredDescriptors[3]);
+        bool AllTransferredDescriptorsPermitted = true;
+        for (size_t Index = 0; Index < AltLoaderDescriptorCount; ++Index) {
+          const int CandidateDescriptor = TransferredDescriptors[Index];
+          const bool CandidateOwned = OwnedDescriptors.contains(CandidateDescriptor);
+          const bool CandidateStandard = CandidateDescriptor >= STDIN_FILENO
+            && CandidateDescriptor <= STDERR_FILENO;
+          const bool CandidateStandardOpen = CandidateStandard
+            && !ClosedStandardDescriptors.contains(CandidateDescriptor)
+            && fcntl(CandidateDescriptor, F_GETFD) != -1;
+          const bool PositionPermitted = Index < 3
+            ? CandidateOwned || CandidateStandardOpen
+            : CandidateOwned;
+          AllTransferredDescriptorsPermitted &= PositionPermitted;
+        }
+        if (!AllTransferredDescriptorsPermitted) {
+          SendMsgLastLinuxError = EBADF;
+          SendMsgLastFailureReason =
+            SendMsgFailureReason::UnownedTransferredDescriptor;
+          ++SendMsgAltLoaderFailureCount;
+          return static_cast<uint64_t>(-EBADF);
+        }
+        iovec HostVector {
+          .iov_base = reinterpret_cast<void*>(GuestVector.Base),
+          .iov_len = static_cast<size_t>(GuestVector.Length),
+        };
+        alignas(cmsghdr) std::array<std::byte, 64> HostControlStorage {};
+        static_assert(
+          CMSG_SPACE(AltLoaderMaximumDescriptorCount * sizeof(int))
+          <= HostControlStorage.size());
+        msghdr HostHeader {};
+        HostHeader.msg_iov = &HostVector;
+        HostHeader.msg_iovlen = 1;
+        HostHeader.msg_control = HostControlStorage.data();
+        HostHeader.msg_controllen = CMSG_SPACE(
+          AltLoaderDescriptorCount * sizeof(int));
+        cmsghdr* HostControl = CMSG_FIRSTHDR(&HostHeader);
+        if (HostControl == nullptr) {
+          SendMsgLastLinuxError = EIO;
+          SendMsgLastFailureReason =
+            SendMsgFailureReason::HostControlLayoutUnavailable;
+          ++SendMsgAltLoaderFailureCount;
+          return static_cast<uint64_t>(-EIO);
+        }
+        HostControl->cmsg_len = CMSG_LEN(
+          AltLoaderDescriptorCount * sizeof(int));
+        HostControl->cmsg_level = SOL_SOCKET;
+        HostControl->cmsg_type = SCM_RIGHTS;
+        std::memcpy(
+          CMSG_DATA(HostControl),
+          TransferredDescriptors.data(),
+          AltLoaderDescriptorCount * sizeof(int));
+        SendMsgLastHostControlLength = HostHeader.msg_controllen;
+        const ssize_t Result = sendmsg(Descriptor, &HostHeader, 0);
+        if (Result == -1) {
+          const int HostError = errno;
+          const int LinuxError = TranslateHostSocketErrorToLinux(HostError);
+          SendMsgLastHostError = HostError;
+          SendMsgLastLinuxError = LinuxError;
+          SendMsgLastFailureReason = SendMsgFailureReason::HostSendFailed;
+          ++SendMsgAltLoaderFailureCount;
+          return static_cast<uint64_t>(-LinuxError);
+        }
+        SendMsgLastByteCount = static_cast<uint64_t>(Result);
+        ++SendMsgSuccessCount;
+        ++SendMsgAltLoaderSuccessCount;
+        return static_cast<uint64_t>(Result);
+      }
       int TransferredDescriptor {-1};
       std::memcpy(
         &TransferredDescriptor,
@@ -7558,10 +7809,7 @@ public:
         constexpr uint64_t MeasuredWineReplyHeaderSize = 64;
         constexpr uint64_t MeasuredWineInitReplyPayloadSize = 4;
         constexpr uint64_t MeasuredWineDefaultDaclReplyPayloadSize = 28;
-        constexpr uint64_t MeasuredWineVariableReplyPayloadSize = 162;
-        constexpr uint64_t MeasuredWineSecondVariableReplyPayloadSize = 171;
-        constexpr uint64_t MeasuredWineSecondVariableReplyFingerprint =
-          10951602325348628875ULL;
+        constexpr uint64_t MaximumWineReplyPayloadSize = 16ULL * 1024ULL * 1024ULL;
         constexpr uint64_t MeasuredWineRequestHeaderSize = 64;
         constexpr uint64_t MeasuredWineOpenMappingRequestPayloadSize = 76;
         constexpr uint64_t MeasuredWineCreateKeyRequestPrimaryPayloadSize = 112;
@@ -7671,9 +7919,12 @@ public:
         const bool ReplyDescriptorStatSucceeded = fstat(Descriptor, &ReplyDescriptorStat) == 0;
         const int ReplyDescriptorFlags = fcntl(Descriptor, F_GETFD);
         const LinuxIOVector64* ReplyVectors {};
-        const bool MeasuredWineVectorCount = VectorCount == 2
-          || VectorCount == 3
-          || VectorCount == 4;
+        // Wine's public server ABI permits one fixed request plus at most five
+        // variable data blocks (__SERVER_MAX_DATA).  Keep that exact bound so
+        // previously unseen, but valid, requests can be forwarded without
+        // turning this bridge into an arbitrary writev proxy.
+        const bool MeasuredWineVectorCount = VectorCount >= 2
+          && VectorCount <= 6;
         const uint64_t MeasuredWineVectorSpan = VectorCount * sizeof(LinuxIOVector64);
         if (MeasuredWineVectorCount) {
           ReplyVectors = static_cast<const LinuxIOVector64*>(
@@ -7785,19 +8036,16 @@ public:
           && ReplyVectors[1].Length == MeasuredWineDefaultDaclReplyPayloadSize
           && ReplyHeaderError == 0
           && ReplyHeaderDeclaredSize == MeasuredWineDefaultDaclReplyPayloadSize;
-        const bool MeasuredWineVariableReplyShape = GuestProgram
+        const bool BoundedWineVariableReplyShape = GuestProgram
             == "/opt/proton/files/bin/wineserver"
           && ReplyVectors
-          && ReplyDescriptorFlags == 0
-          && ReplyHeaderError == 0
+          && VectorCount == 2
+          && ReplyVectors[0].Length == MeasuredWineReplyHeaderSize
+          && ReplyVectors[1].Length > 0
+          && ReplyVectors[1].Length <= MaximumWineReplyPayloadSize
           && ReplyHeaderDeclaredSize == ReplyVectors[1].Length
-          && (ReplyVectors[1].Length == MeasuredWineVariableReplyPayloadSize
-            || (ReplyVectors[1].Length == MeasuredWineSecondVariableReplyPayloadSize
-              && ReplyPayload
-              && FingerprintBytes(
-                static_cast<const uint8_t*>(ReplyPayload),
-                static_cast<size_t>(ReplyVectors[1].Length))
-                == MeasuredWineSecondVariableReplyFingerprint));
+          && ReplyHeader
+          && ReplyPayload;
         const bool ExactWineReply = Descriptor != STDOUT_FILENO
           && Descriptor != STDERR_FILENO
           && VectorCount == 2
@@ -7810,7 +8058,7 @@ public:
           && ReplyVectors[0].Length == MeasuredWineReplyHeaderSize
           && (MeasuredWineInitReplyShape
             || MeasuredWineDefaultDaclReplyShape
-            || MeasuredWineVariableReplyShape)
+            || BoundedWineVariableReplyShape)
           && ReplyHeader
           && ReplyPayload;
         if (ExactWineReply) {
@@ -7823,7 +8071,7 @@ public:
           if (MeasuredWineDefaultDaclReplyShape) {
             ++WriteVWineDefaultDaclReplyCandidateCount;
           }
-          if (MeasuredWineVariableReplyShape) {
+          if (BoundedWineVariableReplyShape) {
             ++WriteVWineVariableReplyCandidateCount;
           }
           WriteVWineReplyLastDescriptor = Descriptor;
@@ -7844,7 +8092,7 @@ public:
             if (MeasuredWineDefaultDaclReplyShape) {
               ++WriteVWineDefaultDaclReplyFailureCount;
             }
-            if (MeasuredWineVariableReplyShape) {
+            if (BoundedWineVariableReplyShape) {
               ++WriteVWineVariableReplyFailureCount;
             }
             WriteVWineReplyLastHostError = HostError;
@@ -7855,7 +8103,7 @@ public:
           if (MeasuredWineDefaultDaclReplyShape) {
             ++WriteVWineDefaultDaclReplySuccessCount;
           }
-          if (MeasuredWineVariableReplyShape) {
+          if (BoundedWineVariableReplyShape) {
             ++WriteVWineVariableReplySuccessCount;
           }
           ++WriteVSuccessCount;
@@ -8552,6 +8800,76 @@ public:
           if (MeasuredWineCreateSymlinkRequestShape) {
             ++WriteVWineCreateSymlinkRequestSuccessCount;
           }
+          ++WriteVSuccessCount;
+          WriteVVectorCount += VectorCount;
+          WriteVByteCount += static_cast<uint64_t>(Result);
+          WriteVWineRequestLastHostError = 0;
+          WriteVWineRequestLastLinuxError = 0;
+          return static_cast<uint64_t>(Result);
+        }
+        constexpr uint64_t PublicWineMaximumRequestLength = 8192;
+        const bool BoundedWineVariableRequestShape = [&] {
+          if (!ExactWineRequestDescriptor
+              || !ReplyVectors
+              || VectorCount < 2
+              || VectorCount > 6
+              || ReplyVectors[0].Length != MeasuredWineRequestHeaderSize
+              || !ReplyHeader
+              || RequestHeaderRequestSize > PublicWineMaximumRequestLength
+              || RequestHeaderReplySize > PublicWineMaximumRequestLength) {
+            return false;
+          }
+
+          uint64_t VariableSize {};
+          for (uint64_t Index = 1; Index < VectorCount; ++Index) {
+            if (ReplyVectors[Index].Length > PublicWineMaximumRequestLength - VariableSize
+                || (ReplyVectors[Index].Length != 0
+                  && ResolveReplyPayload(ReplyVectors[Index]) == nullptr)) {
+              return false;
+            }
+            VariableSize += ReplyVectors[Index].Length;
+          }
+          return VariableSize == RequestHeaderRequestSize;
+        }();
+        if (BoundedWineVariableRequestShape) {
+          TraceWineRequestHeader(
+            "writev-bounded-public",
+            Descriptor,
+            ReplyHeader,
+            static_cast<size_t>(MeasuredWineRequestHeaderSize));
+          ++WriteVWineRequestCandidateCount;
+          ++WriteVWineVariableRequestCandidateCount;
+          WriteVWineRequestLastDescriptor = Descriptor;
+          WriteVWineRequestLastVectorCount = VectorCount;
+          WriteVWineRequestLastRequestedByteCount =
+            MeasuredWineRequestHeaderSize + RequestHeaderRequestSize;
+
+          std::vector<iovec> HostVectors;
+          HostVectors.reserve(static_cast<size_t>(VectorCount));
+          for (uint64_t Index = 0; Index < VectorCount; ++Index) {
+            HostVectors.push_back({
+              const_cast<void*>(ResolveReplyPayload(ReplyVectors[Index])),
+              static_cast<size_t>(ReplyVectors[Index].Length),
+            });
+          }
+
+          errno = 0;
+          const ssize_t Result = ::writev(
+            Descriptor,
+            HostVectors.data(),
+            static_cast<int>(HostVectors.size()));
+          WriteVWineRequestLastReturnedByteCount = Result;
+          if (Result < 0) {
+            const int HostError = errno;
+            const int LinuxError = TranslateHostSocketErrorToLinux(HostError);
+            ++WriteVWineRequestFailureCount;
+            ++WriteVWineVariableRequestFailureCount;
+            WriteVWineRequestLastHostError = HostError;
+            WriteVWineRequestLastLinuxError = LinuxError;
+            return static_cast<uint64_t>(-LinuxError);
+          }
+          ++WriteVWineRequestSuccessCount;
+          ++WriteVWineVariableRequestSuccessCount;
           ++WriteVSuccessCount;
           WriteVVectorCount += VectorCount;
           WriteVByteCount += static_cast<uint64_t>(Result);
@@ -9952,10 +10270,13 @@ public:
             || VForkParentWineServerBridgeEnabled)) {
       constexpr uint64_t LinuxCloneVM = 0x00000100;
       constexpr uint64_t LinuxCloneVFork = 0x00004000;
+      constexpr uint64_t LinuxCloneChildClearTID = 0x00200000;
+      constexpr uint64_t LinuxCloneChildSetTID = 0x01000000;
       constexpr uint64_t LinuxSigChild = 17;
       constexpr uint64_t DiagnosticParentPID = 4242;
       const uint64_t Flags = Arguments->Argument[1];
       const uint64_t ChildStack = Arguments->Argument[2];
+      const uint64_t GuestChildTID = Arguments->Argument[4];
       const bool ExactObservedVFork = Flags == (LinuxCloneVM | LinuxCloneVFork | LinuxSigChild)
         && ChildStack != 0 && Contains(ChildStack, 1)
         && Arguments->Argument[3] == 0 && Arguments->Argument[4] == 0
@@ -9992,6 +10313,72 @@ public:
         Frame->State.gregs[FEXCore::X86State::REG_RSP] = ChildStack;
         VirtualVForkChildStackApplied = true;
         return 0;
+      }
+      void* const HostChildTID = HostPointerForGuestRange(
+        GuestChildTID,
+        sizeof(uint32_t),
+        PROT_WRITE);
+      const bool ExactObservedProcessClone =
+        Flags == (LinuxCloneChildSetTID | LinuxCloneChildClearTID | LinuxSigChild)
+        && ChildStack == 0 && Arguments->Argument[3] == 0
+        && GuestChildTID != 0 && HostChildTID != nullptr
+        && Arguments->Argument[5] == 0;
+      constexpr uint64_t MaximumNativeForkCloneDepth = 16;
+      if (VForkParentWineServerBridgeEnabled && ExactObservedProcessClone
+          && NativeForkCloneAttemptCount < MaximumNativeForkCloneDepth) {
+        ++NativeForkCloneAttemptCount;
+        NativeForkCloneFlags = Flags;
+        NativeForkCloneChildTIDClass = "guest-memory";
+        if (ForkContext == nullptr) {
+          NativeForkCloneLastHostError = EINVAL;
+          return static_cast<uint64_t>(-EAGAIN);
+        }
+        ForkContext->LockBeforeFork(Frame->Thread);
+        ++NativeForkCloneLockBeforeCount;
+        const pid_t Result = fork();
+        const int ForkError = errno;
+        ForkContext->UnlockAfterFork(Frame->Thread, Result == 0);
+        if (Result == 0) {
+          ++NativeForkCloneUnlockChildCount;
+        } else {
+          ++NativeForkCloneUnlockParentCount;
+        }
+        errno = ForkError;
+        if (Result < 0) {
+          NativeForkCloneLastHostError = errno;
+          return static_cast<uint64_t>(-EAGAIN);
+        }
+        if (Result == 0) {
+          NativeForkCloneChildProcess = true;
+          const uint32_t ChildProcessID = static_cast<uint32_t>(getpid());
+          std::memcpy(HostChildTID, &ChildProcessID, sizeof(ChildProcessID));
+          NativeForkCloneChildTIDWritten = true;
+
+          // The child may legitimately become a process launcher itself. It
+          // owns no child yet, so clear the parent-side slot while preserving
+          // the inherited depth counter as a hard anti-fork-bomb bound.
+          NativeForkCloneParentProcess = false;
+          NativeForkCloneProcessID = -1;
+          NativeForkCloneProcessIDPositive = false;
+          NativeForkCloneChildReaped = false;
+          NativeForkCloneHostWaitStatus = -1;
+          NativeForkCloneChildExited = false;
+          NativeForkCloneChildExitCode = -1;
+          NativeForkCloneLastHostError = 0;
+
+          // The host wineserver and proxy process are owned by the original
+          // probe. The forked guest child inherits their descriptors, but must
+          // never reap or terminate those parent-owned processes.
+          VirtualVForkWineServerProcessID = -1;
+          VirtualVForkWineServerFinalized = true;
+          VirtualVForkBridgeProcessID = -1;
+          VirtualVForkBridgeChildReaped = true;
+          return 0;
+        }
+        NativeForkCloneParentProcess = true;
+        NativeForkCloneProcessID = Result;
+        NativeForkCloneProcessIDPositive = true;
+        return static_cast<uint64_t>(Result);
       }
     }
     if (Number == Wait4Syscall && !RootFS.empty()
@@ -11399,6 +11786,8 @@ public:
       if (Number == ExecveSyscall) {
         UnsupportedExecveBoundarySeen = true;
         const auto GuestTarget = ReadGuestPath(Arguments->Argument[1]);
+        std::vector<std::string> GuestExecArguments;
+        std::vector<std::string> GuestExecEnvironment;
         if (GuestTarget.has_value()) {
           UnsupportedExecvePathLength = GuestTarget->size();
           UnsupportedExecvePathFingerprint = FingerprintBytes(
@@ -11469,6 +11858,7 @@ public:
               reinterpret_cast<const uint8_t*>(GuestArgument->data()),
               GuestArgument->size()));
             UnsupportedExecveArgKinds.push_back(ClassifyExecveArgument(Index, *GuestArgument));
+            GuestExecArguments.push_back(*GuestArgument);
             TraceExecveArgument(Index, *GuestArgument);
             ++UnsupportedExecveArgCount;
           }
@@ -11499,6 +11889,7 @@ public:
               break;
             }
             ++UnsupportedExecveEnvCount;
+            GuestExecEnvironment.push_back(*EnvironmentEntry);
             if (*EnvironmentEntry == "LC_ALL=C") {
               UnsupportedExecveEnvHasLCAllC = true;
             } else if (*EnvironmentEntry == "HOME=/home/regression") {
@@ -11507,9 +11898,22 @@ public:
               UnsupportedExecveEnvHasWineLoaderNoExec = true;
             } else if (*EnvironmentEntry == "WINEARCH=wow64") {
               UnsupportedExecveEnvHasWineArchWow64 = true;
+            } else if (EnvironmentEntry->starts_with("WINESERVERSOCKET=")) {
+              UnsupportedExecveEnvHasWineServerSocket = true;
+            } else if (EnvironmentEntry->starts_with("WINEPRELOADRESERVE=")) {
+              UnsupportedExecveEnvHasWinePreloadReserve = true;
             } else {
               ++UnsupportedExecveEnvUnknownCount;
             }
+          }
+        }
+        if (GuestTarget.has_value()) {
+          const auto ReentryResult = MaybeReexecOfficialProtonWine64Preloader(
+            *GuestTarget,
+            GuestExecArguments,
+            GuestExecEnvironment);
+          if (ReentryResult.has_value()) {
+            return *ReentryResult;
           }
         }
       }
@@ -12087,6 +12491,35 @@ public:
   int64_t VirtualVForkBridgeChildExitCode {-1};
   bool VirtualVForkBridgeChildReaped {};
   int64_t VirtualVForkBridgeLastHostError {};
+  uint64_t NativeForkCloneAttemptCount {};
+  uint64_t NativeForkCloneFlags {};
+  std::string NativeForkCloneChildTIDClass {"none"};
+  bool NativeForkCloneParentProcess {};
+  bool NativeForkCloneChildProcess {};
+  bool NativeForkCloneChildTIDWritten {};
+  int64_t NativeForkCloneProcessID {-1};
+  bool NativeForkCloneProcessIDPositive {};
+  bool NativeForkCloneChildReaped {};
+  int64_t NativeForkCloneHostWaitStatus {-1};
+  bool NativeForkCloneChildExited {};
+  int64_t NativeForkCloneChildExitCode {-1};
+  int64_t NativeForkCloneLastHostError {};
+  bool NativeForkCloneContextAttached {};
+  uint64_t NativeForkCloneLockBeforeCount {};
+  uint64_t NativeForkCloneUnlockParentCount {};
+  uint64_t NativeForkCloneUnlockChildCount {};
+  bool SetSIDSeen {};
+  uint64_t SetSIDCallCount {};
+  uint64_t SetSIDSuccessCount {};
+  int64_t SetSIDLastSessionID {-1};
+  int64_t SetSIDLastHostError {};
+  bool Dup2Seen {};
+  uint64_t Dup2CallCount {};
+  uint64_t Dup2SuccessCount {};
+  int64_t Dup2LastSourceDescriptor {-1};
+  int64_t Dup2LastTargetDescriptor {-1};
+  bool Dup2LastSourceOwned {};
+  int64_t Dup2LastLinuxError {};
   uint64_t VirtualVForkWineServerSpawnAttemptCount {};
   int64_t VirtualVForkWineServerSpawnResult {-1};
   int64_t VirtualVForkWineServerProcessID {-1};
@@ -12589,6 +13022,9 @@ public:
   uint64_t SendMsgStandardOutputCandidateCount {};
   uint64_t SendMsgStandardOutputSuccessCount {};
   uint64_t SendMsgStandardOutputFailureCount {};
+  uint64_t SendMsgAltLoaderCandidateCount {};
+  uint64_t SendMsgAltLoaderSuccessCount {};
+  uint64_t SendMsgAltLoaderFailureCount {};
   uint64_t SendMsgLastByteCount {};
   uint64_t SendMsgLastHostControlLength {};
   bool SendMsgLastDescriptorOwned {};
@@ -12625,6 +13061,7 @@ public:
   uint64_t SendMsgLastFirstIOVectorPayloadFingerprint {};
   uint64_t SendMsgLastControlLength {};
   uint64_t SendMsgLastControlMessageLength {};
+  uint64_t SendMsgLastTransferredDescriptorCount {};
   SendMsgFailureReason SendMsgLastFailureReason {SendMsgFailureReason::None};
   uint64_t RecvMsgCallCount {};
   uint64_t RecvMsgSuccessCount {};
@@ -12674,6 +13111,9 @@ public:
   uint64_t WriteVWineRequestCandidateCount {};
   uint64_t WriteVWineRequestSuccessCount {};
   uint64_t WriteVWineRequestFailureCount {};
+  uint64_t WriteVWineVariableRequestCandidateCount {};
+  uint64_t WriteVWineVariableRequestSuccessCount {};
+  uint64_t WriteVWineVariableRequestFailureCount {};
   uint64_t WriteVWineCreateKeyRequestCandidateCount {};
   uint64_t WriteVWineCreateKeyRequestSuccessCount {};
   uint64_t WriteVWineCreateKeyRequestFailureCount {};
@@ -13257,6 +13697,11 @@ public:
   bool UnsupportedExecveEnvHasPrivateHome {};
   bool UnsupportedExecveEnvHasWineLoaderNoExec {};
   bool UnsupportedExecveEnvHasWineArchWow64 {};
+  bool UnsupportedExecveEnvHasWineServerSocket {};
+  bool UnsupportedExecveEnvHasWinePreloadReserve {};
+  bool OfficialProtonExecveReentryAttempted {};
+  bool OfficialProtonExecveReentryValidationPassed {};
+  int64_t OfficialProtonExecveReentryLastHostError {};
   uint64_t UnsupportedExecvePathLength {};
   uint64_t UnsupportedExecvePathFingerprint {};
   uint64_t UnsupportedExecveNormalizedPathLength {};
@@ -13302,8 +13747,147 @@ public:
   std::string CapturedError;
 
 private:
+  FEXCore::Context::Context* ForkContext {};
   uint64_t GuestSignalMask {};
   std::array<LinuxGuestSigAction, 65> GuestSignalActions {};
+
+  std::optional<uint64_t> MaybeReexecOfficialProtonWine64Preloader(
+    const std::string& GuestTarget,
+    const std::vector<std::string>& GuestArguments,
+    const std::vector<std::string>& GuestEnvironment) {
+    constexpr std::string_view ExpectedTarget =
+      "/opt/proton/files/lib/wine/x86_64-unix/wine64-preloader";
+    constexpr std::string_view ExpectedLoader =
+      "/opt/proton/files/lib/wine/x86_64-unix/wine";
+    if (!NativeForkCloneChildProcess || GuestTarget != ExpectedTarget) {
+      return std::nullopt;
+    }
+
+    OfficialProtonExecveReentryAttempted = true;
+    const auto Reject = [this](int Error) -> std::optional<uint64_t> {
+      OfficialProtonExecveReentryLastHostError = Error;
+      return static_cast<uint64_t>(-Error);
+    };
+    if (HostExecutablePath.empty()
+        || GuestArguments.size() < 3 || GuestArguments.size() > 32
+        || GuestArguments[0] != ExpectedTarget
+        || GuestArguments[1] != ExpectedLoader
+        || GuestEnvironment.size() != 6) {
+      return Reject(EINVAL);
+    }
+
+    const auto HostTarget = ResolveGuestPathWithParents(GuestTarget);
+    struct stat TargetStat {};
+    if (!HostTarget.has_value()
+        || stat(HostTarget->c_str(), &TargetStat) != 0
+        || !S_ISREG(TargetStat.st_mode)
+        || access(HostTarget->c_str(), R_OK | X_OK) != 0) {
+      return Reject(EACCES);
+    }
+
+    bool LocaleSeen {};
+    bool HomeSeen {};
+    bool LoaderNoExecSeen {};
+    bool WineArchSeen {};
+    bool WineServerSocketSeen {};
+    bool WinePreloadReserveSeen {};
+    int WineServerSocketFD = -1;
+    std::string WinePreloadReserve;
+    for (const auto& Entry : GuestEnvironment) {
+      if (Entry == "LC_ALL=C" && !LocaleSeen) {
+        LocaleSeen = true;
+      } else if (Entry == "HOME=/home/regression" && !HomeSeen) {
+        HomeSeen = true;
+      } else if (Entry == "WINELOADERNOEXEC=1" && !LoaderNoExecSeen) {
+        LoaderNoExecSeen = true;
+      } else if (Entry == "WINEARCH=wow64" && !WineArchSeen) {
+        WineArchSeen = true;
+      } else if (Entry.starts_with("WINESERVERSOCKET=") && !WineServerSocketSeen) {
+        const std::string_view Value {Entry.data() + sizeof("WINESERVERSOCKET=") - 1,
+                                      Entry.size() - (sizeof("WINESERVERSOCKET=") - 1)};
+        const std::string ValueCopy {Value};
+        errno = 0;
+        char* End = nullptr;
+        const long StableParsed = std::strtol(ValueCopy.c_str(), &End, 10);
+        if (errno != 0 || End == ValueCopy.c_str() || *End != '\0'
+            || StableParsed <= STDERR_FILENO || StableParsed > 65'535) {
+          return Reject(EINVAL);
+        }
+        WineServerSocketFD = static_cast<int>(StableParsed);
+        WineServerSocketSeen = true;
+      } else if (Entry.starts_with("WINEPRELOADRESERVE=") && !WinePreloadReserveSeen) {
+        WinePreloadReserve = Entry.substr(sizeof("WINEPRELOADRESERVE=") - 1);
+        if (!IsValidWinePreloadReserve(WinePreloadReserve)) {
+          return Reject(EINVAL);
+        }
+        WinePreloadReserveSeen = true;
+      } else {
+        return Reject(EINVAL);
+      }
+    }
+    if (!LocaleSeen || !HomeSeen || !LoaderNoExecSeen || !WineArchSeen
+        || !WineServerSocketSeen || !WinePreloadReserveSeen
+        || !OwnedDescriptors.contains(WineServerSocketFD)) {
+      return Reject(EACCES);
+    }
+
+    struct stat WineServerSocketStat {};
+    const int DescriptorFlags = fcntl(WineServerSocketFD, F_GETFD);
+    if (DescriptorFlags == -1 || (DescriptorFlags & FD_CLOEXEC) != 0
+        || fstat(WineServerSocketFD, &WineServerSocketStat) != 0
+        || !S_ISSOCK(WineServerSocketStat.st_mode)) {
+      return Reject(EACCES);
+    }
+
+    std::vector<std::string> NativeArguments {
+      HostExecutablePath,
+      "--real-rootfs", RootFS,
+      "--guest-program", std::string {ExpectedTarget},
+      "--guest-component-kind", "official-proton-wine64-preloader",
+    };
+    for (size_t Index = 1; Index < GuestArguments.size(); ++Index) {
+      NativeArguments.emplace_back("--guest-arg");
+      NativeArguments.push_back(GuestArguments[Index]);
+    }
+    if (LowMemoryBiasModeEnabled) {
+      NativeArguments.emplace_back("--instrument-low-memory-bias");
+    }
+    if (HighMemoryRegionModeEnabled) {
+      NativeArguments.emplace_back("--instrument-high-memory-region");
+    }
+    NativeArguments.emplace_back("--wine-arch-wow64");
+    NativeArguments.emplace_back("--inherited-wineserver-socket-fd");
+    NativeArguments.push_back(std::to_string(WineServerSocketFD));
+    NativeArguments.emplace_back("--wine-preload-reserve");
+    NativeArguments.push_back(WinePreloadReserve);
+
+    std::vector<char*> NativeArgumentPointers;
+    NativeArgumentPointers.reserve(NativeArguments.size() + 1);
+    for (auto& Argument : NativeArguments) {
+      NativeArgumentPointers.push_back(Argument.data());
+    }
+    NativeArgumentPointers.push_back(nullptr);
+    char LocaleEnvironment[] = "LC_ALL=C";
+    char HomeEnvironment[] = "HOME=/home/regression";
+    char* NativeEnvironment[] = {
+      LocaleEnvironment,
+      HomeEnvironment,
+      nullptr,
+    };
+
+    OfficialProtonExecveReentryValidationPassed = true;
+    dprintf(
+      STDERR_FILENO,
+      "TRACE official-proton-execve-reentry target=wine64-preloader "
+      "argc=%llu envc=6 socket-fd=%d reserve-valid=1\n",
+      static_cast<unsigned long long>(GuestArguments.size()),
+      WineServerSocketFD);
+    execve(
+      HostExecutablePath.c_str(),
+      NativeArgumentPointers.data(),
+      NativeEnvironment);
+    return Reject(errno != 0 ? errno : EIO);
+  }
 
   void RecordVirtualVForkWineServerWaitStatus(int Status) {
     VirtualVForkWineServerHostWaitStatus = Status;
@@ -13601,6 +14185,37 @@ private:
     }
     if (Result == static_cast<pid_t>(VirtualVForkBridgeProcessID)) {
       VirtualVForkBridgeChildReaped = true;
+    }
+  }
+
+  void CleanupNativeForkCloneChild() {
+    if (!NativeForkCloneParentProcess || NativeForkCloneProcessID <= 0
+        || NativeForkCloneChildReaped) {
+      return;
+    }
+    int Status = 0;
+    pid_t Result = waitpid(
+      static_cast<pid_t>(NativeForkCloneProcessID),
+      &Status,
+      WNOHANG);
+    if (Result == 0) {
+      static_cast<void>(kill(static_cast<pid_t>(NativeForkCloneProcessID), SIGTERM));
+      do {
+        Result = waitpid(
+          static_cast<pid_t>(NativeForkCloneProcessID),
+          &Status,
+          0);
+      } while (Result < 0 && errno == EINTR);
+    }
+    if (Result == static_cast<pid_t>(NativeForkCloneProcessID)) {
+      NativeForkCloneChildReaped = true;
+      NativeForkCloneHostWaitStatus = Status;
+      NativeForkCloneChildExited = WIFEXITED(Status);
+      NativeForkCloneChildExitCode = NativeForkCloneChildExited
+        ? WEXITSTATUS(Status)
+        : -1;
+    } else if (Result < 0 && errno != ECHILD) {
+      NativeForkCloneLastHostError = errno;
     }
   }
 
@@ -14850,7 +15465,9 @@ StackResult BuildRealInitialStack(
   bool IncludeWineLoaderNoExec,
   bool IncludeWineArchWow64,
   bool IncludeBindNow,
-  std::string_view CXAltLoaderSocket) {
+  std::string_view CXAltLoaderSocket,
+  int InheritedWineServerSocketFD,
+  std::string_view WinePreloadReserve) {
   constexpr std::array<uint64_t, 2> RandomWords {
     0x5245475245535349ULL,
     0x4F4E2D464C492D31ULL,
@@ -14864,6 +15481,12 @@ StackResult BuildRealInitialStack(
   const std::string CXAltLoaderEnvironment = CXAltLoaderSocket.empty()
     ? std::string {}
     : "CX_ALT_LOADER_SOCKET=" + std::string {CXAltLoaderSocket};
+  const std::string WineServerSocketEnvironment = InheritedWineServerSocketFD < 0
+    ? std::string {}
+    : "WINESERVERSOCKET=" + std::to_string(InheritedWineServerSocketFD);
+  const std::string WinePreloadReserveEnvironment = WinePreloadReserve.empty()
+    ? std::string {}
+    : "WINEPRELOADRESERVE=" + std::string {WinePreloadReserve};
   const std::string Platform = "x86_64";
   uint64_t Cursor = GuestBase + RealStackStringsOffset;
 
@@ -14894,6 +15517,14 @@ StackResult BuildRealInitialStack(
   const uint64_t CXAltLoaderEnvironmentAddress = !CXAltLoaderEnvironment.empty()
     ? CopyString(CXAltLoaderEnvironment)
     : 0;
+  const uint64_t WineServerSocketEnvironmentAddress =
+    !WineServerSocketEnvironment.empty()
+      ? CopyString(WineServerSocketEnvironment)
+      : 0;
+  const uint64_t WinePreloadReserveEnvironmentAddress =
+    !WinePreloadReserveEnvironment.empty()
+      ? CopyString(WinePreloadReserveEnvironment)
+      : 0;
   const uint64_t PlatformAddress = CopyString(Platform);
   Cursor = (Cursor + 15) & ~uint64_t {15};
   const uint64_t RandomAddress = Cursor;
@@ -14918,6 +15549,12 @@ StackResult BuildRealInitialStack(
   }
   if (!CXAltLoaderEnvironment.empty()) {
     Words.push_back(CXAltLoaderEnvironmentAddress);
+  }
+  if (!WineServerSocketEnvironment.empty()) {
+    Words.push_back(WineServerSocketEnvironmentAddress);
+  }
+  if (!WinePreloadReserveEnvironment.empty()) {
+    Words.push_back(WinePreloadReserveEnvironmentAddress);
   }
   Words.push_back(0);
   Words.insert(Words.end(), {
@@ -15003,6 +15640,7 @@ const char* KnownSyscallName(uint64_t Number) {
   case 20: return "writev";
   case 21: return "access";
   case 32: return "dup";
+  case 33: return "dup2";
   case 39: return "getpid";
   case 41: return "socket";
   case 42: return "connect";
@@ -15035,6 +15673,7 @@ const char* KnownSyscallName(uint64_t Number) {
   case 96: return "gettimeofday";
   case 99: return "sysinfo";
   case 102: return "getuid";
+  case 112: return "setsid";
   case 138: return "fstatfs";
   case 140: return "getpriority";
   case 141: return "setpriority";
@@ -15113,6 +15752,7 @@ int RunRealRootFS(
   bool InitialWineCommandLine,
   bool WineArchWow64,
   const std::string& PrivateStderrOutput,
+  const std::string& PrivateReceiptOutput,
   const std::string& PrivateIRDumpDirectory,
   bool DisassembleHostBlocks,
   bool InstrumentLowPageAlias,
@@ -15127,6 +15767,8 @@ int RunRealRootFS(
   bool GuestBindNow,
   const std::string& CXAltLoaderSocket,
   const std::string& CXAltLoaderHostSocket,
+  int InheritedWineServerSocketFD,
+  const std::string& WinePreloadReserve,
   uint64_t DiagnosticPostSessionSyscallLimit) {
   if (!IsSafeGuestProgram(GuestProgram)) {
     std::cerr << "La ruta del ejecutable huésped no es absoluta y normalizada.\n";
@@ -15152,14 +15794,15 @@ int RunRealRootFS(
   }
   std::string CanonicalHostExecutablePath;
   if (InstrumentVForkParentProcessBridge
-      || InstrumentVForkParentWineServerBridge) {
+      || InstrumentVForkParentWineServerBridge
+      || ProtonWinePreloaderComponent) {
     std::array<char, 4096> CanonicalHostExecutableBuffer {};
     struct stat HostExecutableStat {};
     if (realpath(HostExecutablePath.c_str(), CanonicalHostExecutableBuffer.data()) == nullptr
         || lstat(CanonicalHostExecutableBuffer.data(), &HostExecutableStat) != 0
         || !S_ISREG(HostExecutableStat.st_mode)
         || (HostExecutableStat.st_mode & S_IXUSR) == 0) {
-      std::cerr << "El puente de proceso vfork exige el helper host regular y ejecutable.\n";
+      std::cerr << "La reentrada de proceso exige el helper host regular y ejecutable.\n";
       return 66;
     }
     CanonicalHostExecutablePath = CanonicalHostExecutableBuffer.data();
@@ -15187,7 +15830,8 @@ int RunRealRootFS(
     return 64;
   }
   if (ProtonWinePreloaderComponent
-      && GuestProgram != "/opt/proton/files/lib/wine/x86_64-unix/wine-preloader") {
+      && GuestProgram != "/opt/proton/files/lib/wine/x86_64-unix/wine-preloader"
+      && GuestProgram != "/opt/proton/files/lib/wine/x86_64-unix/wine64-preloader") {
     std::cerr << "El preloader Proton Wine64 no usa su ruta invitada canónica.\n";
     return 64;
   }
@@ -15212,6 +15856,30 @@ int RunRealRootFS(
   }
   if (CXAltLoaderSocket.empty() != CXAltLoaderHostSocket.empty()) {
     std::cerr << "El socket alternativo exige rutas huésped y host emparejadas.\n";
+    return 64;
+  }
+  if (InheritedWineServerSocketFD >= 0) {
+    struct stat WineServerSocketStat {};
+    if (!ProtonWinePreloaderComponent
+        || InheritedWineServerSocketFD <= STDERR_FILENO
+        || fcntl(InheritedWineServerSocketFD, F_GETFD) == -1
+        || fstat(InheritedWineServerSocketFD, &WineServerSocketStat) != 0
+        || !S_ISSOCK(WineServerSocketStat.st_mode)) {
+      std::cerr << "El socket heredado de wineserver no es un descriptor host válido.\n";
+      return 66;
+    }
+  }
+  if (!WinePreloadReserve.empty()
+      && (!ProtonWinePreloaderComponent
+          || InitialWineCommandLine
+          || InheritedWineServerSocketFD < 0
+          || !IsValidWinePreloadReserve(WinePreloadReserve))) {
+    std::cerr << "WINEPRELOADRESERVE exige la reentrada oficial confinada de Wine64.\n";
+    return 64;
+  }
+  if (GuestProgram == "/opt/proton/files/lib/wine/x86_64-unix/wine64-preloader"
+      && (WinePreloadReserve.empty() || InheritedWineServerSocketFD < 0)) {
+    std::cerr << "wine64-preloader exige reserva y socket heredados de la misma sesión.\n";
     return 64;
   }
   if (!CXAltLoaderSocket.empty()
@@ -15414,7 +16082,9 @@ int RunRealRootFS(
     IncludeWineLoaderNoExec,
     WineArchWow64,
     GuestBindNow,
-    CXAltLoaderSocket);
+    CXAltLoaderSocket,
+    InheritedWineServerSocketFD,
+    WinePreloadReserve);
   const uint64_t ProgramBreakLimit = StaticPIE
     ? GuestBase + RealMMapArenaOffset
     : InterpreterBase;
@@ -15470,6 +16140,7 @@ int RunRealRootFS(
     CanonicalWineServerBridgeDirectory,
     CXAltLoaderSocket,
     CanonicalCXAltLoaderHostSocket,
+    InheritedWineServerSocketFD,
     DiagnosticPostSessionSyscallLimit,
   };
   auto Context = FEXCore::Context::Context::CreateNewContext(Features);
@@ -15477,6 +16148,7 @@ int RunRealRootFS(
     std::cerr << "FEXCore no creó el contexto glibc real.\n";
     return 70;
   }
+  SyscallHandler.AttachForkContext(Context.get());
 #if defined(REGRESSION_FEXCORE_GUEST_MEMORY_BIAS)
   if (InstrumentLowMemoryBias) {
     Context->SetGuestMemoryAddressBias(
@@ -15552,6 +16224,57 @@ int RunRealRootFS(
     return 70;
   }
   Context->ExecuteThread(Thread);
+  if (SyscallHandler.NativeForkCloneChildProcess) {
+    const int ChildExitCode = SyscallHandler.ExitSeen
+      ? static_cast<int>(SyscallHandler.ExitCode & 0xff)
+      : 70;
+    dprintf(
+      STDERR_FILENO,
+      "TRACE native-fork-clone-child-stop pid=%lld exit=%d unsupported=%llu "
+      "clone-flags=%llu child-stack-class=%s parent-tid-class=%s "
+      "child-tid-class=%s tls-class=%s exec-kind=%s exec-exists=%d "
+      "exec-path-length=%llu exec-path-fingerprint=%llu exec-argc=%llu "
+      "exec-envc=%llu exec-env-unknown=%llu exec-lc-all-c=%d "
+      "exec-private-home=%d exec-wine-loader-noexec=%d "
+      "exec-wine-arch-wow64=%d exec-wineserver-socket=%d "
+      "exec-wine-preload-reserve=%d exec-reentry-attempted=%d "
+      "exec-reentry-validation-passed=%d exec-reentry-host-error=%lld "
+      "exec-parent-segment=%d "
+      "exec-normalized-confined=%d exec-normalized-length=%llu "
+      "exec-normalized-fingerprint=%llu\n",
+      static_cast<long long>(getpid()),
+      ChildExitCode,
+      static_cast<unsigned long long>(SyscallHandler.UnexpectedSyscall),
+      static_cast<unsigned long long>(SyscallHandler.UnsupportedCloneFlags),
+      SyscallHandler.UnsupportedCloneChildStackClass.c_str(),
+      SyscallHandler.UnsupportedCloneParentTIDClass.c_str(),
+      SyscallHandler.UnsupportedCloneChildTIDClass.c_str(),
+      SyscallHandler.UnsupportedCloneTLSClass.c_str(),
+      SyscallHandler.UnsupportedExecveTargetKind.c_str(),
+      SyscallHandler.UnsupportedExecveTargetExists ? 1 : 0,
+      static_cast<unsigned long long>(SyscallHandler.UnsupportedExecvePathLength),
+      static_cast<unsigned long long>(SyscallHandler.UnsupportedExecvePathFingerprint),
+      static_cast<unsigned long long>(SyscallHandler.UnsupportedExecveArgCount),
+      static_cast<unsigned long long>(SyscallHandler.UnsupportedExecveEnvCount),
+      static_cast<unsigned long long>(SyscallHandler.UnsupportedExecveEnvUnknownCount),
+      SyscallHandler.UnsupportedExecveEnvHasLCAllC ? 1 : 0,
+      SyscallHandler.UnsupportedExecveEnvHasPrivateHome ? 1 : 0,
+      SyscallHandler.UnsupportedExecveEnvHasWineLoaderNoExec ? 1 : 0,
+      SyscallHandler.UnsupportedExecveEnvHasWineArchWow64 ? 1 : 0,
+      SyscallHandler.UnsupportedExecveEnvHasWineServerSocket ? 1 : 0,
+      SyscallHandler.UnsupportedExecveEnvHasWinePreloadReserve ? 1 : 0,
+      SyscallHandler.OfficialProtonExecveReentryAttempted ? 1 : 0,
+      SyscallHandler.OfficialProtonExecveReentryValidationPassed ? 1 : 0,
+      static_cast<long long>(
+        SyscallHandler.OfficialProtonExecveReentryLastHostError),
+      SyscallHandler.UnsupportedExecveParentSegmentSeen ? 1 : 0,
+      SyscallHandler.UnsupportedExecveNormalizedPathConfined ? 1 : 0,
+      static_cast<unsigned long long>(
+        SyscallHandler.UnsupportedExecveNormalizedPathLength),
+      static_cast<unsigned long long>(
+        SyscallHandler.UnsupportedExecveNormalizedPathFingerprint));
+    _exit(ChildExitCode);
+  }
   const bool DiagnosticStopSignalTriggered = DiagnosticStopHandler.Triggered();
   DiagnosticStopHandler.Reset();
   const uint64_t UnalignedBackpatchCount = UnalignedHandler.Count();
@@ -15794,12 +16517,40 @@ int RunRealRootFS(
     }
   }
 
+  if (!PrivateReceiptOutput.empty()) {
+    struct stat ReceiptStat {};
+    const bool SafeReceiptPath = PrivateReceiptOutput.starts_with(PrivateDiagnosticPrefix)
+      && PrivateReceiptOutput.find("/../") == std::string::npos
+      && PrivateReceiptOutput.find("/./") == std::string::npos
+      && !PrivateReceiptOutput.ends_with('/')
+      && lstat(PrivateReceiptOutput.c_str(), &ReceiptStat) == 0
+      && S_ISREG(ReceiptStat.st_mode)
+      && ReceiptStat.st_uid == getuid()
+      && (ReceiptStat.st_mode & (S_IRWXG | S_IRWXO)) == 0;
+    const int ReceiptDescriptor = SafeReceiptPath
+      ? open(PrivateReceiptOutput.c_str(), O_WRONLY | O_TRUNC | O_CLOEXEC)
+      : -1;
+    std::cout.flush();
+    if (ReceiptDescriptor == -1
+        || dup2(ReceiptDescriptor, STDOUT_FILENO) == -1
+        || close(ReceiptDescriptor) != 0) {
+      if (ReceiptDescriptor >= 0) {
+        close(ReceiptDescriptor);
+      }
+      std::cerr << "No se pudo aislar el recibo privado del proceso huésped.\n";
+      return 70;
+    }
+    std::cout.clear();
+  }
+
   std::cout << "{\"schema\":1,\"host\":\"macos-arm64\",\"parser\":\"FEX-ELFParser\""
             << ",\"mode\":\""
             << (StaticPIE ? "real-static-pie-first-syscall" : "real-glibc-first-syscall")
             << "\""
             << ",\"main_elf\":\"" << GuestProgram << "\",\"main_elf_loaded\":true"
             << ",\"guest_arg_count\":" << GuestArguments.size()
+            << ",\"inherited_wineserver_socket_present\":"
+            << (InheritedWineServerSocketFD >= 0 ? "true" : "false")
             << ",\"guest_component_kind\":\"" << GuestComponentKind << "\""
             << ",\"pt_interp_resolved\":" << (StaticPIE ? "false" : "true")
             << ",\"interpreter_elf_loaded\":" << (StaticPIE ? "false" : "true")
@@ -16839,6 +17590,64 @@ int RunRealRootFS(
             << (SyscallHandler.VirtualVForkBridgeChildReaped ? "true" : "false")
             << ",\"virtual_vfork_bridge_last_host_error\":"
             << SyscallHandler.VirtualVForkBridgeLastHostError
+            << ",\"native_fork_clone_attempt_count\":"
+            << SyscallHandler.NativeForkCloneAttemptCount
+            << ",\"native_fork_clone_flags\":"
+            << SyscallHandler.NativeForkCloneFlags
+            << ",\"native_fork_clone_child_tid_class\":\""
+            << SyscallHandler.NativeForkCloneChildTIDClass << "\""
+            << ",\"native_fork_clone_parent_process\":"
+            << (SyscallHandler.NativeForkCloneParentProcess ? "true" : "false")
+            << ",\"native_fork_clone_child_process\":"
+            << (SyscallHandler.NativeForkCloneChildProcess ? "true" : "false")
+            << ",\"native_fork_clone_child_tid_written\":"
+            << (SyscallHandler.NativeForkCloneChildTIDWritten ? "true" : "false")
+            << ",\"native_fork_clone_process_id\":"
+            << SyscallHandler.NativeForkCloneProcessID
+            << ",\"native_fork_clone_process_id_positive\":"
+            << (SyscallHandler.NativeForkCloneProcessIDPositive ? "true" : "false")
+            << ",\"native_fork_clone_child_reaped\":"
+            << (SyscallHandler.NativeForkCloneChildReaped ? "true" : "false")
+            << ",\"native_fork_clone_host_wait_status\":"
+            << SyscallHandler.NativeForkCloneHostWaitStatus
+            << ",\"native_fork_clone_child_exited\":"
+            << (SyscallHandler.NativeForkCloneChildExited ? "true" : "false")
+            << ",\"native_fork_clone_child_exit_code\":"
+            << SyscallHandler.NativeForkCloneChildExitCode
+            << ",\"native_fork_clone_last_host_error\":"
+            << SyscallHandler.NativeForkCloneLastHostError
+            << ",\"native_fork_clone_context_attached\":"
+            << (SyscallHandler.NativeForkCloneContextAttached ? "true" : "false")
+            << ",\"native_fork_clone_lock_before_count\":"
+            << SyscallHandler.NativeForkCloneLockBeforeCount
+            << ",\"native_fork_clone_unlock_parent_count\":"
+            << SyscallHandler.NativeForkCloneUnlockParentCount
+            << ",\"native_fork_clone_unlock_child_count\":"
+            << SyscallHandler.NativeForkCloneUnlockChildCount
+            << ",\"setsid_seen\":"
+            << (SyscallHandler.SetSIDSeen ? "true" : "false")
+            << ",\"setsid_call_count\":"
+            << SyscallHandler.SetSIDCallCount
+            << ",\"setsid_success_count\":"
+            << SyscallHandler.SetSIDSuccessCount
+            << ",\"setsid_last_session_id\":"
+            << SyscallHandler.SetSIDLastSessionID
+            << ",\"setsid_last_host_error\":"
+            << SyscallHandler.SetSIDLastHostError
+            << ",\"dup2_seen\":"
+            << (SyscallHandler.Dup2Seen ? "true" : "false")
+            << ",\"dup2_call_count\":"
+            << SyscallHandler.Dup2CallCount
+            << ",\"dup2_success_count\":"
+            << SyscallHandler.Dup2SuccessCount
+            << ",\"dup2_last_source_descriptor\":"
+            << SyscallHandler.Dup2LastSourceDescriptor
+            << ",\"dup2_last_target_descriptor\":"
+            << SyscallHandler.Dup2LastTargetDescriptor
+            << ",\"dup2_last_source_owned\":"
+            << (SyscallHandler.Dup2LastSourceOwned ? "true" : "false")
+            << ",\"dup2_last_linux_error\":"
+            << SyscallHandler.Dup2LastLinuxError
             << ",\"virtual_vfork_wineserver_spawn_attempt_count\":"
             << SyscallHandler.VirtualVForkWineServerSpawnAttemptCount
             << ",\"virtual_vfork_wineserver_spawn_result\":"
@@ -17890,6 +18699,12 @@ int RunRealRootFS(
             << SyscallHandler.SendMsgStandardOutputSuccessCount
             << ",\"sendmsg_standard_output_failure_count\":"
             << SyscallHandler.SendMsgStandardOutputFailureCount
+            << ",\"sendmsg_alt_loader_candidate_count\":"
+            << SyscallHandler.SendMsgAltLoaderCandidateCount
+            << ",\"sendmsg_alt_loader_success_count\":"
+            << SyscallHandler.SendMsgAltLoaderSuccessCount
+            << ",\"sendmsg_alt_loader_failure_count\":"
+            << SyscallHandler.SendMsgAltLoaderFailureCount
             << ",\"sendmsg_last_byte_count\":"
             << SyscallHandler.SendMsgLastByteCount
             << ",\"sendmsg_last_host_control_length\":"
@@ -17934,6 +18749,8 @@ int RunRealRootFS(
             << SyscallHandler.SendMsgLastMessageFlags
             << ",\"sendmsg_last_transferred_descriptor\":"
             << SyscallHandler.SendMsgLastTransferredDescriptor
+            << ",\"sendmsg_last_transferred_descriptor_count\":"
+            << SyscallHandler.SendMsgLastTransferredDescriptorCount
             << ",\"sendmsg_last_transferred_descriptor_owned\":"
             << (SyscallHandler.SendMsgLastTransferredDescriptorOwned ? "true" : "false")
             << ",\"sendmsg_last_transferred_descriptor_standard\":"
@@ -18057,6 +18874,12 @@ int RunRealRootFS(
             << SyscallHandler.WriteVWineRequestSuccessCount
             << ",\"writev_wine_request_failure_count\":"
             << SyscallHandler.WriteVWineRequestFailureCount
+            << ",\"writev_wine_variable_request_candidate_count\":"
+            << SyscallHandler.WriteVWineVariableRequestCandidateCount
+            << ",\"writev_wine_variable_request_success_count\":"
+            << SyscallHandler.WriteVWineVariableRequestSuccessCount
+            << ",\"writev_wine_variable_request_failure_count\":"
+            << SyscallHandler.WriteVWineVariableRequestFailureCount
             << ",\"writev_wine_create_key_request_candidate_count\":"
             << SyscallHandler.WriteVWineCreateKeyRequestCandidateCount
             << ",\"writev_wine_create_key_request_success_count\":"
@@ -19279,6 +20102,16 @@ int RunRealRootFS(
             << (SyscallHandler.UnsupportedExecveEnvHasWineLoaderNoExec ? "true" : "false")
             << ",\"unsupported_execve_env_has_wine_arch_wow64\":"
             << (SyscallHandler.UnsupportedExecveEnvHasWineArchWow64 ? "true" : "false")
+            << ",\"unsupported_execve_env_has_wineserver_socket\":"
+            << (SyscallHandler.UnsupportedExecveEnvHasWineServerSocket ? "true" : "false")
+            << ",\"unsupported_execve_env_has_wine_preload_reserve\":"
+            << (SyscallHandler.UnsupportedExecveEnvHasWinePreloadReserve ? "true" : "false")
+            << ",\"official_proton_execve_reentry_attempted\":"
+            << (SyscallHandler.OfficialProtonExecveReentryAttempted ? "true" : "false")
+            << ",\"official_proton_execve_reentry_validation_passed\":"
+            << (SyscallHandler.OfficialProtonExecveReentryValidationPassed ? "true" : "false")
+            << ",\"official_proton_execve_reentry_last_host_error\":"
+            << SyscallHandler.OfficialProtonExecveReentryLastHostError
             << ",\"unsupported_execve_arg_lengths\":[";
   for (size_t Index = 0; Index < SyscallHandler.UnsupportedExecveArgLengths.size(); ++Index) {
     if (Index != 0) std::cout << ',';
@@ -19523,6 +20356,7 @@ int main(int argc, char** argv) {
     std::string_view GuestProgram = "/usr/bin/true";
     std::string_view GuestComponentKind = "generic";
     std::string PrivateStderrOutput;
+    std::string PrivateReceiptOutput;
     std::string PrivateIRDumpDirectory;
     bool DisassembleHostBlocks = false;
     bool InstrumentLowPageAlias = false;
@@ -19538,6 +20372,8 @@ int main(int argc, char** argv) {
     bool WineArchWow64 = false;
     std::string CXAltLoaderSocket;
     std::string CXAltLoaderHostSocket;
+    int InheritedWineServerSocketFD = -1;
+    std::string WinePreloadReserve;
     uint64_t DiagnosticPostSessionSyscallLimit = 0;
     std::vector<std::string> GuestArguments;
     for (int Index = 3; Index < argc;) {
@@ -19609,6 +20445,8 @@ int main(int argc, char** argv) {
         GuestComponentKind = argv[Index + 1];
       } else if (Option == "--private-stderr-output") {
         PrivateStderrOutput = argv[Index + 1];
+      } else if (Option == "--private-receipt-output") {
+        PrivateReceiptOutput = argv[Index + 1];
       } else if (Option == "--private-ir-dump-dir") {
         PrivateIRDumpDirectory = argv[Index + 1];
       } else if (Option == "--vfork-wineserver-bridge-dir") {
@@ -19617,6 +20455,22 @@ int main(int argc, char** argv) {
         CXAltLoaderSocket = argv[Index + 1];
       } else if (Option == "--cx-alt-loader-host-socket") {
         CXAltLoaderHostSocket = argv[Index + 1];
+      } else if (Option == "--inherited-wineserver-socket-fd") {
+        char* End = nullptr;
+        errno = 0;
+        const long Parsed = std::strtol(argv[Index + 1], &End, 10);
+        if (errno != 0 || End == argv[Index + 1] || *End != '\0'
+            || Parsed <= STDERR_FILENO || Parsed > 65'535) {
+          std::cerr << "El descriptor heredado de wineserver no es válido.\n";
+          return 64;
+        }
+        InheritedWineServerSocketFD = static_cast<int>(Parsed);
+      } else if (Option == "--wine-preload-reserve") {
+        WinePreloadReserve = argv[Index + 1];
+        if (!IsValidWinePreloadReserve(WinePreloadReserve)) {
+          std::cerr << "La reserva de memoria de Wine no es válida.\n";
+          return 64;
+        }
       } else if (Option == "--diagnostic-post-session-syscall-limit") {
         char* End = nullptr;
         errno = 0;
@@ -19641,6 +20495,7 @@ int main(int argc, char** argv) {
       InitialWineCommandLine,
       WineArchWow64,
       PrivateStderrOutput,
+      PrivateReceiptOutput,
       PrivateIRDumpDirectory,
       DisassembleHostBlocks,
       InstrumentLowPageAlias,
@@ -19655,11 +20510,14 @@ int main(int argc, char** argv) {
       GuestBindNow,
       CXAltLoaderSocket,
       CXAltLoaderHostSocket,
+      InheritedWineServerSocketFD,
+      WinePreloadReserve,
       DiagnosticPostSessionSyscallLimit);
   }
   std::cerr << "Uso: fli-fexcore-process-probe [--real-rootfs RUTA "
                "[--guest-program /RUTA] [--guest-arg VALOR]... "
                "[--guest-component-kind TIPO] [--private-stderr-output RUTA_PRIVADA] "
+               "[--private-receipt-output RUTA_PRIVADA] "
                "[--private-ir-dump-dir DIRECTORIO_PRIVADO] "
                "[--disassemble-host-blocks] "
                "[--instrument-low-page-alias|--instrument-low-memory-bias] "
@@ -19670,6 +20528,8 @@ int main(int argc, char** argv) {
                "[--vfork-wineserver-bridge-dir DIRECTORIO_PRIVADO] [--guest-bind-now] "
                "[--cx-alt-loader-socket /tmp/SOCKET] "
                "[--cx-alt-loader-host-socket /private/tmp/SOCKET] "
+               "[--inherited-wineserver-socket-fd FD] "
+               "[--wine-preload-reserve HEX-HEX] "
                "[--initial-wine-command-line] "
                "[--wine-arch-wow64] "
                "[--diagnostic-post-session-syscall-limit N]]\n";

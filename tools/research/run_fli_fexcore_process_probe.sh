@@ -34,6 +34,10 @@ INITIAL_WINE_COMMAND_LINE=0
 WINE_ARCH_WOW64=0
 CX_ALT_LOADER_SOCKET=""
 CX_ALT_LOADER_HOST_SOCKET=""
+INHERITED_WINESERVER_SOCKET_FD=-1
+GUEST_STDIN_FD=-1
+GUEST_STDOUT_FD=-1
+GUEST_STDERR_FD=-1
 REAL_ROOTFS_WINE_PREFIX_PRESENT_BEFORE=0
 
 usage() {
@@ -49,7 +53,9 @@ Uso: tools/research/run_fli_fexcore_process_probe.sh \
   [--instrument-high-memory-region] \
   [--instrument-vfork-child|--instrument-vfork-parent|--instrument-vfork-parent-process-bridge|--instrument-vfork-parent-wineserver-bridge] [--guest-bind-now] \
   [--initial-wine-command-line] [--wine-arch-wow64] \
-  [--cx-alt-loader-socket /tmp/SOCKET --cx-alt-loader-host-socket /private/tmp/SOCKET]]
+  [--cx-alt-loader-socket /tmp/SOCKET --cx-alt-loader-host-socket /private/tmp/SOCKET] \
+  [--inherited-wineserver-socket-fd FD] \
+  [--guest-stdin-fd FD --guest-stdout-fd FD --guest-stderr-fd FD]]
 
 Sin --real-rootfs ejecuta el par ELF controlado. Con --real-rootfs carga
 el ejecutable huésped solicitado y ld-linux x86-64 reales, y se detiene en la
@@ -177,6 +183,28 @@ while [[ $# -gt 0 ]]; do
       CX_ALT_LOADER_HOST_SOCKET="$2"
       shift 2
       ;;
+    --inherited-wineserver-socket-fd)
+      [[ $# -ge 2 ]] || { usage >&2; exit 64; }
+      [[ "$2" =~ ^[0-9]+$ && "$2" -gt 2 && "$2" -le 65535 ]] || {
+        echo "ERROR: el descriptor heredado de wineserver no es válido." >&2
+        exit 64
+      }
+      INHERITED_WINESERVER_SOCKET_FD="$2"
+      shift 2
+      ;;
+    --guest-stdin-fd|--guest-stdout-fd|--guest-stderr-fd)
+      [[ $# -ge 2 ]] || { usage >&2; exit 64; }
+      [[ "$2" =~ ^[0-9]+$ && "$2" -gt 2 && "$2" -le 65535 ]] || {
+        echo "ERROR: el descriptor estándar huésped no es válido." >&2
+        exit 64
+      }
+      case "$1" in
+        --guest-stdin-fd) GUEST_STDIN_FD="$2" ;;
+        --guest-stdout-fd) GUEST_STDOUT_FD="$2" ;;
+        --guest-stderr-fd) GUEST_STDERR_FD="$2" ;;
+      esac
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -211,6 +239,26 @@ ELF_CONTAINER_HEADER="$FEX_SOURCE/Source/Tools/CommonTools/Linux/Utils/ELFContai
   exit 66
 }
 if [[ -n "$REAL_ROOTFS" ]]; then
+  GUEST_STANDARD_FD_COUNT=0
+  [[ "$GUEST_STDIN_FD" -ge 0 ]] && GUEST_STANDARD_FD_COUNT=$((GUEST_STANDARD_FD_COUNT + 1))
+  [[ "$GUEST_STDOUT_FD" -ge 0 ]] && GUEST_STANDARD_FD_COUNT=$((GUEST_STANDARD_FD_COUNT + 1))
+  [[ "$GUEST_STDERR_FD" -ge 0 ]] && GUEST_STANDARD_FD_COUNT=$((GUEST_STANDARD_FD_COUNT + 1))
+  [[ "$GUEST_STANDARD_FD_COUNT" -eq 0 || "$GUEST_STANDARD_FD_COUNT" -eq 3 ]] || {
+    echo "ERROR: los tres descriptores estándar huéspedes deben proporcionarse juntos." >&2
+    exit 64
+  }
+  if [[ "$GUEST_STANDARD_FD_COUNT" -eq 3 ]]; then
+    [[ "$DISASSEMBLE_HOST_BLOCKS" -eq 0 ]] || {
+      echo "ERROR: la desensamblación host no admite descriptores estándar huéspedes externos." >&2
+      exit 64
+    }
+    for guest_standard_fd in "$GUEST_STDIN_FD" "$GUEST_STDOUT_FD" "$GUEST_STDERR_FD"; do
+      [[ -e "/dev/fd/$guest_standard_fd" ]] || {
+        echo "ERROR: un descriptor estándar huésped no está abierto." >&2
+        exit 66
+      }
+    done
+  fi
   [[ "$GUEST_COMPONENT_KIND" == "generic" \
     || "$GUEST_COMPONENT_KIND" == "official-proton-wine64" \
     || "$GUEST_COMPONENT_KIND" == "official-proton-wine64-preloader" \
@@ -224,7 +272,8 @@ if [[ -n "$REAL_ROOTFS" ]]; then
     exit 64
   fi
   if [[ "$GUEST_COMPONENT_KIND" == "official-proton-wine64-preloader" \
-    && "$GUEST_PROGRAM" != "/opt/proton/files/lib/wine/x86_64-unix/wine-preloader" ]]; then
+    && "$GUEST_PROGRAM" != "/opt/proton/files/lib/wine/x86_64-unix/wine-preloader" \
+    && "$GUEST_PROGRAM" != "/opt/proton/files/lib/wine/x86_64-unix/wine64-preloader" ]]; then
     echo "ERROR: el preloader Proton Wine64 exige su ruta invitada canónica." >&2
     exit 64
   fi
@@ -275,6 +324,13 @@ if [[ -n "$REAL_ROOTFS" ]]; then
       && ! -L "$REAL_ROOTFS${GUEST_ARGUMENTS[0]}" ]] || {
       echo "ERROR: WINEARCH=wow64 exige preloader, loader y programa oficiales." >&2
       exit 64
+    }
+  fi
+  if [[ "$INHERITED_WINESERVER_SOCKET_FD" -ge 0 ]]; then
+    [[ "$GUEST_COMPONENT_KIND" == "official-proton-wine64-preloader"
+      && -e "/dev/fd/$INHERITED_WINESERVER_SOCKET_FD" ]] || {
+      echo "ERROR: el socket heredado exige preloader oficial y un descriptor abierto." >&2
+      exit 66
     }
   fi
   [[ "$GUEST_PROGRAM" =~ ^/[A-Za-z0-9_+./-]+$ \
@@ -520,11 +576,13 @@ codesign --verify --strict "$PROBE"
 
 RECEIPT="$BUILD_DIRECTORY/process-probe.json"
 if [[ -n "$REAL_ROOTFS" ]]; then
+  install -m 0600 /dev/null "$RECEIPT"
   PROBE_ARGUMENTS=(
     --real-rootfs "$REAL_ROOTFS"
     --guest-program "$GUEST_PROGRAM"
     --guest-component-kind "$GUEST_COMPONENT_KIND"
     --private-stderr-output "$PRIVATE_GUEST_STDERR"
+    --private-receipt-output "$RECEIPT"
   )
   if [[ -n "$PRIVATE_IR_DUMP_DIRECTORY" ]]; then
     PROBE_ARGUMENTS+=(--private-ir-dump-dir "$PRIVATE_IR_DUMP_DIRECTORY")
@@ -576,15 +634,25 @@ if [[ -n "$REAL_ROOTFS" ]]; then
       --cx-alt-loader-host-socket "$CX_ALT_LOADER_HOST_SOCKET"
     )
   fi
+  if [[ "$INHERITED_WINESERVER_SOCKET_FD" -ge 0 ]]; then
+    PROBE_ARGUMENTS+=(
+      --inherited-wineserver-socket-fd "$INHERITED_WINESERVER_SOCKET_FD"
+    )
+  fi
   if [[ "$DISASSEMBLE_HOST_BLOCKS" -eq 1 ]]; then
-    "$PROBE" "${PROBE_ARGUMENTS[@]}" 2>"$PRIVATE_HOST_DISASSEMBLY" | tee "$RECEIPT"
+    "$PROBE" "${PROBE_ARGUMENTS[@]}" 2>"$PRIVATE_HOST_DISASSEMBLY"
     [[ -f "$PRIVATE_HOST_DISASSEMBLY" && ! -L "$PRIVATE_HOST_DISASSEMBLY" \
       && "$(stat -f '%z' "$PRIVATE_HOST_DISASSEMBLY")" -le 134217728 ]] || {
       echo "ERROR: la desensamblación host privada falta o supera 128 MiB." >&2
       exit 70
     }
   else
-    "$PROBE" "${PROBE_ARGUMENTS[@]}" | tee "$RECEIPT"
+    if [[ "$GUEST_STANDARD_FD_COUNT" -eq 3 ]]; then
+      "$PROBE" "${PROBE_ARGUMENTS[@]}" \
+        <&"$GUEST_STDIN_FD" >&"$GUEST_STDOUT_FD" 2>&"$GUEST_STDERR_FD"
+    else
+      "$PROBE" "${PROBE_ARGUMENTS[@]}"
+    fi
   fi
   [[ -f "$PRIVATE_GUEST_STDERR" && ! -L "$PRIVATE_GUEST_STDERR" \
     && "$(stat -f '%z' "$PRIVATE_GUEST_STDERR")" -le 1048576 ]] || {
@@ -877,10 +945,10 @@ if [[ -n "$REAL_ROOTFS" ]]; then
     ASSERTIONS+=('"private_guest_home_directory_present":false')
   fi
   if [[ "$REAL_ROOTFS_WINE_PREFIX_PRESENT_BEFORE" -eq 1 ]]; then
-    ASSERTIONS+=(
-      '"private_wine_prefix_directory_present":true'
-      '"chdir_syscall_seen":true'
-    )
+    ASSERTIONS+=('"private_wine_prefix_directory_present":true')
+    if [[ -z "$INHERITED_WINESERVER_SOCKET_FD" ]]; then
+      ASSERTIONS+=('"chdir_syscall_seen":true')
+    fi
   else
     ASSERTIONS+=('"private_wine_prefix_directory_present":false')
   fi
@@ -970,7 +1038,8 @@ if [[ "$INSTRUMENT_VFORK_PARENT_WINESERVER_BRIDGE" -eq 1 ]]; then
     }
   done
 fi
-if [[ "$REAL_ROOTFS_WINE_PREFIX_PRESENT_BEFORE" -eq 1 ]] \
+if [[ "$REAL_ROOTFS_WINE_PREFIX_PRESENT_BEFORE" -eq 1 \
+    && -z "$INHERITED_WINESERVER_SOCKET_FD" ]] \
   && ! grep -Eq '"chdir_success_count":[1-9][0-9]*' "$RECEIPT"; then
   echo "ERROR: el componente Wine no completó ningún chdir en el prefijo privado." >&2
   exit 70
@@ -1329,6 +1398,11 @@ fi
     printf 'guest_program=%s\n' "$GUEST_PROGRAM"
     printf 'guest_arg_count=%s\n' "$GUEST_ARGUMENT_COUNT"
     printf 'guest_component_kind=%s\n' "$GUEST_COMPONENT_KIND"
+    if [[ "$INHERITED_WINESERVER_SOCKET_FD" -ge 0 ]]; then
+      printf 'inherited_wineserver_socket=%s\n' 'present-open-host-descriptor'
+    else
+      printf 'inherited_wineserver_socket=%s\n' 'absent'
+    fi
     if [[ "$GUEST_BIND_NOW" -eq 1 ]]; then
       printf 'bind_now_environment=%s\n' 'enabled-diagnostic-only'
     else
