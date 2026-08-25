@@ -15,8 +15,16 @@ static uint32_t tipoMemoria(VkPhysicalDevice pd, uint32_t bits, VkMemoryProperty
 }
 
 int main(int argc, char** argv) {
-    int enlazarSet4 = (argc>1 && strcmp(argv[1],"--enlazar-set4")==0);
-    printf("caso: set 4 %s\n", enlazarSet4 ? "ENLAZADO" : "SIN ENLAZAR");
+    int enlazarSet4 = 0, rangoParcial = 0;
+    const char* spv = "probe.spv";
+    for (int i=1;i<argc;i++) {
+        if (!strcmp(argv[i],"--enlazar-set4")) enlazarSet4 = 1;
+        else if (!strcmp(argv[i],"--rango-parcial")) rangoParcial = 1;
+        else if (argv[i][0] != '-') spv = argv[i];
+    }
+    printf("caso: set alto %s, rango del descriptor %s\n",
+           enlazarSet4 ? "ENLAZADO" : "SIN ENLAZAR",
+           rangoParcial ? "PARCIAL (1/4 del buffer)" : "VK_WHOLE_SIZE");
 
     const char* extInst[] = { "VK_KHR_get_physical_device_properties2" };
     VkApplicationInfo ai = { .sType=VK_STRUCTURE_TYPE_APPLICATION_INFO, .apiVersion=VK_API_VERSION_1_2 };
@@ -48,10 +56,11 @@ int main(int argc, char** argv) {
     CHK(vkCreateDescriptorSetLayout(dev,&li,NULL,&dsl4));
     CHK(vkCreateDescriptorSetLayout(dev,&lv,NULL,&dslv));
     VkDescriptorSetLayout sets[5]={dsl0,dslv,dslv,dslv,dsl4};
+    if (strstr(argc>1?argv[argc-1]:"", "length") != NULL) sets[1]=dsl4;
     VkPipelineLayoutCreateInfo pli={ .sType=VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,.setLayoutCount=5,.pSetLayouts=sets };
     VkPipelineLayout pl; CHK(vkCreatePipelineLayout(dev,&pli,NULL,&pl));
 
-    FILE* f=fopen(argv[argc-1][0]=='/'?argv[argc-1]:"repro.spv","rb");
+    FILE* f=fopen(spv,"rb");
     if(!f){ printf("no se pudo abrir el SPIR-V\n"); return 2; }
     fseek(f,0,SEEK_END); long sz=ftell(f); fseek(f,0,SEEK_SET);
     uint32_t* code=malloc(sz); fread(code,1,sz,f); fclose(f);
@@ -81,7 +90,8 @@ int main(int argc, char** argv) {
     VkDescriptorSetAllocateInfo dsi={ .sType=VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,.descriptorPool=dp,.descriptorSetCount=2,.pSetLayouts=alloc };
     CHK(vkAllocateDescriptorSets(dev,&dsi,ds));
     for(int i=0;i<2;i++){
-        VkDescriptorBufferInfo dbi={ .buffer=buf[i],.offset=0,.range=VK_WHOLE_SIZE };
+        VkDescriptorBufferInfo dbi={ .buffer=buf[i],.offset=0,
+            .range=(i==1 && rangoParcial) ? 1024 : VK_WHOLE_SIZE };
         VkWriteDescriptorSet w={ .sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,.dstSet=ds[i],.dstBinding=0,
             .descriptorCount=1,.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,.pBufferInfo=&dbi };
         vkUpdateDescriptorSets(dev,1,&w,0,NULL);
@@ -95,7 +105,11 @@ int main(int argc, char** argv) {
     CHK(vkBeginCommandBuffer(cb,&bi));
     vkCmdBindPipeline(cb,VK_PIPELINE_BIND_POINT_COMPUTE,pipe);
     vkCmdBindDescriptorSets(cb,VK_PIPELINE_BIND_POINT_COMPUTE,pl,0,1,&ds[0],0,NULL);
-    if (enlazarSet4) vkCmdBindDescriptorSets(cb,VK_PIPELINE_BIND_POINT_COMPUTE,pl,4,1,&ds[1],0,NULL);
+    {
+        uint32_t destino = (strstr(spv,"length") != NULL) ? 1u : 4u;
+        if (enlazarSet4 || destino==1u)
+            vkCmdBindDescriptorSets(cb,VK_PIPELINE_BIND_POINT_COMPUTE,pl,destino,1,&ds[1],0,NULL);
+    }
     vkCmdDispatch(cb,64,1,1);
     CHK(vkEndCommandBuffer(cb));
 
@@ -106,5 +120,14 @@ int main(int argc, char** argv) {
     VkResult wr = vkWaitForFences(dev,1,&fence,VK_TRUE,5000000000ULL);
     printf("RESULTADO: vkWaitForFences -> %d %s\n", wr,
            wr==VK_ERROR_DEVICE_LOST ? "(VK_ERROR_DEVICE_LOST — REPRODUCIDO)" : wr==VK_SUCCESS ? "(sin fallo)" : "");
+    if (wr==VK_SUCCESS) {
+        void* p=NULL;
+        if (vkMapMemory(dev,mem[0],0,VK_WHOLE_SIZE,0,&p)==VK_SUCCESS) {
+            uint32_t* v=(uint32_t*)p;
+            printf("  el shader vio length() = %u  (el buffer tiene 4096 B = 1024 uint;"
+                   " con rango parcial deberían ser 256)\n", v[0]);
+            vkUnmapMemory(dev,mem[0]);
+        }
+    }
     return wr==VK_SUCCESS ? 0 : 1;
 }

@@ -1,0 +1,16 @@
+#version 450
+
+// Segundo patrón: un array de tamaño dinámico cuyo índice se deriva de length(). MoltenVK no puede
+// preguntarle el tamaño a Metal, así que lo publica en un buffer auxiliar; si ese tamaño no
+// coincide con el rango del descriptor, el shader indexa fuera y falla la dirección en la GPU.
+layout(local_size_x = 1) in;
+
+layout(set = 0, binding = 0) buffer Salida  { uint valores[]; } salida;
+layout(set = 1, binding = 0) readonly buffer Origen { uint datos[]; } origen;
+
+void main() {
+    uint n = origen.datos.length();
+    // Se guarda el tamaño que ve el shader y se lee el último elemento según ese tamaño.
+    salida.valores[0] = n;
+    salida.valores[1] = origen.datos[n - 1u];
+}

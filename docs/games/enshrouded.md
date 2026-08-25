@@ -220,6 +220,8 @@ a dereferenciar lo bastante lejos como para reventar.
 | Rellenar con memoria cero los sets sin enlazar | Sin efecto; se revirtió por no estar verificado |
 | Enlazar siempre el argument buffer del set enlazado | Sin efecto; se revirtió por lo mismo |
 | Que un set sin enlazar baste para provocarlo | **Reproductor propio** (`tools/research/moltenvk-probe/`): un shader de cómputo que declara y lee un `set = 4` que la aplicación no enlaza **no falla**. Los avisos `missing Buffer binding` son benignos |
+| Que subir `force_recompile_max_debug_iterations` cambiara un shader que ya funcionaba | Imposible por construcción: ese tope sólo **lanza** cuando se supera, así que un shader que convergía en ≤3 pasadas emite el mismo MSL con el tope en 32. Subirlo sólo rescata shaders que antes fallaban |
+| Que MoltenVK dimensione mal un buffer enlazado | Reproductor: `length()` de un array de tamaño dinámico devuelve **1024** con `VK_WHOLE_SIZE` y **256** con un rango de 1024 B. El buffer auxiliar de tamaños es correcto |
 
 ### Aviso de método
 
@@ -254,17 +256,16 @@ Dos trampas del propio build, las dos fijadas en el script:
 
 ## Pendiente antes de certificar
 
-1. **Cerrar el bloqueo 5.** Descartado ya que la causa sea el descriptor set sin enlazar, quedan dos
-   candidatos, y los dos se atacan con el reproductor antes que con el juego: que el shader lea
-   fuera de un buffer que sí está enlazado —MoltenVK dimensionándolo distinto de lo que el juego
-   espera, por ejemplo con `VK_WHOLE_SIZE` o con el buffer auxiliar de tamaños—, o que subir
-   `force_recompile_max_debug_iterations` a 32 haya cambiado el MSL de ese shader por uno que
-   indexa de más.
+1. **Cerrar el bloqueo 5.** Descartados ya el descriptor set sin enlazar, el tope de recompilación
+   y el dimensionado de buffers, lo que queda apunta a algo específico de la disposición de
+   descriptores de este juego: arrays *bindless* con `VARIABLE_DESCRIPTOR_COUNT`, `UPDATE_AFTER_BIND`
+   o indexación no uniforme. La vía es reproducir **eso** en el arnés, no volver a arrancar el juego.
 
    **La herramienta importa más que la hipótesis**: `bash tools/research/moltenvk-probe/run.sh`
    ejercita un patrón Vulkan contra el MoltenVK compilado sin Steam, sin Wine y sin juego. Cada
-   hipótesis pasó de costar diez minutos de arranque a costar un segundo, y fue la que descartó la
-   última. Ampliarlo caso a caso es la vía; volver a lanzar el juego, la última.
+   hipótesis pasó de costar diez minutos de arranque a costar un segundo, y ya ha descartado dos.
+   Ampliarlo caso a caso es la vía; lanzar el juego, la comprobación final.
+
 2. **Medir el coste de la sincronización de bloques.** Cada barrera que publica escrituras de shader
    sobre esa imagen copia el volumen entero (≈18,9 MB) de ida y vuelta. Falta saber con qué
    frecuencia ocurre y si conviene acotarlo con una marca de «sucio».

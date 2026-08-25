@@ -3,8 +3,10 @@
 # Steam, sin Wine y sin ningún juego. Nació para acotar el quinto bloqueo de Enshrouded, donde cada
 # hipótesis costaba diez minutos de arranque del juego; aquí cuesta un segundo.
 #
-#   bash tools/research/moltenvk-probe/run.sh            # el set alto NO se enlaza
+#   bash tools/research/moltenvk-probe/run.sh                      # el set alto NO se enlaza
 #   bash tools/research/moltenvk-probe/run.sh --enlazar-set4
+#   bash tools/research/moltenvk-probe/run.sh --length              # length() de un array dinámico
+#   bash tools/research/moltenvk-probe/run.sh --length --rango-parcial
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -17,11 +19,19 @@ HEADERS="$BUILD/moltenvk/External/Vulkan-Headers/include"
 WORK="$(mktemp -d /tmp/mvk-probe.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 
-"$PRODUCTS/MoltenVKShaderConverter" -gi "$HERE/descriptor_fault_probe.comp" -so "$WORK/probe.spv" >/dev/null
+# Dos patrones: el del descriptor set sin enlazar y el del length() de un array dinámico.
+SHADER="descriptor_fault_probe.comp"; SPV="probe.spv"; ARGS=()
+for a in "$@"; do
+    case "$a" in
+        --length) SHADER="buffer_length_probe.comp"; SPV="probe-length.spv" ;;
+        *) ARGS+=("$a") ;;
+    esac
+done
+"$PRODUCTS/MoltenVKShaderConverter" -gi "$HERE/$SHADER" -so "$WORK/$SPV" >/dev/null
 
 # El dylib se compila para x86_64 porque es el que carga Wine; la prueba lo acompaña.
 xcrun clang -arch x86_64 -O1 -o "$WORK/probe" "$HERE/descriptor_fault_probe.c" \
     -I"$HEADERS" "$PRODUCTS/libMoltenVK.dylib" -Wl,-rpath,"$PRODUCTS" \
     -framework Metal -framework Foundation -framework QuartzCore -framework IOSurface -framework IOKit
 
-cd "$WORK" && exec ./probe "$@"
+cd "$WORK" && exec ./probe ${ARGS[@]+"${ARGS[@]}"} "$SPV"
