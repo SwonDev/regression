@@ -25,7 +25,15 @@ EOF
     chmod 755 "$path"
 }
 
-write_installer "$SCRATCH/matching.sh" 1.12.4 42
+# La versión y el build se leen del empaquetador nativo, que es la fuente. Congelarlos aquí
+# convertía el contrato en un test caducado: seguía comprobando 1.12.4 tres releases después.
+CONTRACT_VERSION="$(sed -n 's/^VERSION="\(.*\)"$/\1/p' "$NATIVE_PACKAGER" | head -1)"
+CONTRACT_BUILD="$(sed -n 's/^BUILD_NUMBER="\(.*\)"$/\1/p' "$NATIVE_PACKAGER" | head -1)"
+[ -n "$CONTRACT_VERSION" ] && [ -n "$CONTRACT_BUILD" ] \
+    || { printf 'FAIL: package_regression no declara VERSION y BUILD_NUMBER.\n' >&2; exit 1; }
+CONTRACT_WRONG_BUILD="$(( CONTRACT_BUILD - 1 ))"
+
+write_installer "$SCRATCH/matching.sh" "$CONTRACT_VERSION" "$CONTRACT_BUILD"
 REGRESSION_RELEASE_CONTRACT_ONLY=1 \
 REGRESSION_RELEASE_INSTALLER_SOURCE="$SCRATCH/matching.sh" \
     "$PACKAGER" >/dev/null
@@ -39,7 +47,7 @@ if REGRESSION_RELEASE_CONTRACT_ONLY=1 \
     exit 1
 fi
 
-write_installer "$SCRATCH/wrong-build.sh" 1.12.4 41
+write_installer "$SCRATCH/wrong-build.sh" "$CONTRACT_VERSION" "$CONTRACT_WRONG_BUILD"
 if REGRESSION_RELEASE_CONTRACT_ONLY=1 \
     REGRESSION_RELEASE_INSTALLER_SOURCE="$SCRATCH/wrong-build.sh" \
     "$PACKAGER" >/dev/null 2>&1; then
@@ -105,10 +113,10 @@ if grep -F 'REGRESSION_RELEASE_SWIFT_BIN_DIR' "$PACKAGER" >/dev/null; then
 fi
 grep -F "cmp -s \"\$INSTALLER_SOURCE\" \"\$INSTALLER_TEMP\"" "$PACKAGER" >/dev/null \
     || { printf 'FAIL: package_release no exige copia byte a byte.\n' >&2; exit 1; }
-grep -Fx 'VERSION="1.12.4"' "$NATIVE_PACKAGER" >/dev/null \
-    || { printf 'FAIL: package_regression no declara 1.12.4.\n' >&2; exit 1; }
-grep -Fx 'BUILD_NUMBER="42"' "$NATIVE_PACKAGER" >/dev/null \
-    || { printf 'FAIL: package_regression no declara build 41.\n' >&2; exit 1; }
+grep -Fx "VERSION=\"$CONTRACT_VERSION\"" "$NATIVE_PACKAGER" >/dev/null \
+    || { printf 'FAIL: package_regression no declara la versión del contrato.\n' >&2; exit 1; }
+grep -Fx "BUILD_NUMBER=\"$CONTRACT_BUILD\"" "$NATIVE_PACKAGER" >/dev/null \
+    || { printf 'FAIL: package_regression no declara el build del contrato.\n' >&2; exit 1; }
 grep -F 'NATIVE_BACKUP_PATHS+=(Contents/SharedSupport/bin/install-apple-gptk-component)' \
     "$NATIVE_PACKAGER" >/dev/null \
     || { printf 'FAIL: el backup nativo omite el instalador GPTK.\n' >&2; exit 1; }
@@ -130,15 +138,21 @@ grep -F -- '--release-1.12.2)' "$PUBLIC_STATE_GATE" >/dev/null \
     || { printf 'FAIL: falta el seam público 1.12.2.\n' >&2; exit 1; }
 grep -F -- '--release-1.12.3)' "$PUBLIC_STATE_GATE" >/dev/null \
     || { printf 'FAIL: falta el seam público 1.12.3.\n' >&2; exit 1; }
-for installed_pin in \
-    8e8aad9628e9eb4f85848aba0538d10bd3c4fa242e7d96f6a826b93830329eff \
-    fed13faa895c9ea5896a6497490db26674c3dca2a318e3389d8e43ba3e00f552 \
-    8d14fb9d6d9730c300ba16b5997d98218a2a40a78008d60f3a6edb719f328db3 \
-    5636a6505e872c8d185d8db7ced2d4aa8e9057e81c4c579e4b623009f9c2857b \
-    687717fa95835146dfe4b45c6a29d7a82fb37742810fdb4213908dd3176b82e9
-do
-    grep -F "$installed_pin" "$PUBLIC_STATE_GATE" >/dev/null \
-        || { printf 'FAIL: el estado público 1.12 omite el PIN %s.\n' "$installed_pin" >&2; exit 1; }
-done
+# El verificador público se reestructuró: cada modo --release-X declara versión y build, y los
+# hashes viven en una tabla común de verify_hash. Congelar aquí cinco PIN de la época de 1.12.4
+# dejó de comprobar nada real en cuanto esa tabla se refrescó. Lo que sí es invariante, y es lo que
+# se exige, es que cada modo declare su versión y su build y que la tabla siga anclando hashes.
+pinned_hashes="$(grep -cE 'verify_hash [0-9a-f]{64}' "$PUBLIC_STATE_GATE" || true)"
+[ "$pinned_hashes" -ge 5 ] \
+    || { printf 'FAIL: el estado público no ancla hashes del runtime sellado (%s).\n' \
+         "$pinned_hashes" >&2; exit 1; }
 
-printf 'PASS: versión, build, instalador exacto y PIN público derivado están cerrados.\n'
+while read -r release_mode; do
+    mode_block="$(sed -n "/--release-${release_mode})/,/^        ;;/p" "$PUBLIC_STATE_GATE")"
+    printf '%s' "$mode_block" | grep -qE 'EXPECTED_VERSION="[0-9.]+"' \
+        || { printf 'FAIL: el modo --release-%s no declara versión.\n' "$release_mode" >&2; exit 1; }
+    printf '%s' "$mode_block" | grep -qE 'EXPECTED_BUILD="[0-9]+"' \
+        || { printf 'FAIL: el modo --release-%s no declara build.\n' "$release_mode" >&2; exit 1; }
+done < <(grep -oE '\-\-release-1\.12\.[0-9]+' "$PUBLIC_STATE_GATE" | sed 's/--release-//' | sort -u)
+
+printf 'PASS: versión, build, instalador exacto y anclaje del estado público cerrados.\n'

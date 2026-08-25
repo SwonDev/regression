@@ -8,7 +8,10 @@ CONTRACT="$ROOT/build/crossover-foss-26.3.0.contract"
 DEFAULT_ARCHIVE="$HOME/Library/Caches/Regression/FOSS/crossover-sources-26.3.0.tar.gz"
 [[ -f "$DEFAULT_ARCHIVE" ]] || DEFAULT_ARCHIVE="$ROOT/crossover-sources-26.3.0.tar.gz"
 ARCHIVE="${1:-${REGRESSION_CROSSOVER_FOSS_ARCHIVE:-$DEFAULT_ARCHIVE}}"
-REAL_WINE_SOURCE="${REGRESSION_WINE_SOURCE:-$ROOT/sources-26.3.0/wine}"
+# El árbol real se extrae del tar, nunca se toma de sources-26.3.0/ del checkout: ese árbol ya
+# lleva la serie aplicada a mano y con los parches regenerados deja de detectarse como aplicado y
+# de aplicarse limpiamente, así que el test fallaba sin que el build estuviera roto (regla 27).
+REAL_WINE_SOURCE="${REGRESSION_WINE_SOURCE:-}"
 TMP_ROOT="$(/usr/bin/mktemp -d /tmp/regression-wine-patch-gptk.XXXXXX)"
 trap '/usr/bin/find "$TMP_ROOT" -depth -delete' EXIT
 
@@ -52,6 +55,11 @@ apply_twice()
 
 [[ -f "$CONTRACT" ]] || fail "falta el contrato FOSS"
 [[ -f "$ARCHIVE" ]] || fail "falta el tar FOSS oficial: $ARCHIVE"
+if [[ -z "$REAL_WINE_SOURCE" ]]; then
+    REAL_WINE_SOURCE="$TMP_ROOT/real/wine"
+    /bin/mkdir -p "$TMP_ROOT/real"
+    /usr/bin/tar xzf "$ARCHIVE" -C "$TMP_ROOT/real" --strip-components=1 sources/wine
+fi
 [[ -d "$REAL_WINE_SOURCE" ]] || fail "falta el árbol Wine real: $REAL_WINE_SOURCE"
 
 expected_archive_hash="$(contract_value archive_sha256)"

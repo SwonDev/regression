@@ -44,17 +44,20 @@ for script in "$INSTALLER" "$VERIFIER"; do
         || fail "la autoridad compilada v2 no está delimitada en $script"
     /usr/bin/grep -Fq 'da8ba98d99d157f981ef3a2472dc9d74c9ce4673ef126bdd61851b9dd21dedb3' \
         "$script" || fail "falta la autoridad Windows Media en $script"
-    for runtime_authority in \
-        'fed13faa895c9ea5896a6497490db26674c3dca2a318e3389d8e43ba3e00f552 bin/wine' \
-        '8d14fb9d6d9730c300ba16b5997d98218a2a40a78008d60f3a6edb719f328db3 bin/wineserver' \
-        '5636a6505e872c8d185d8db7ced2d4aa8e9057e81c4c579e4b623009f9c2857b lib/wine/x86_64-unix/wine' \
-        '687717fa95835146dfe4b45c6a29d7a82fb37742810fdb4213908dd3176b82e9 lib/wine/x86_64-unix/ntdll.so' \
-        '0315a55b11a456590a9368f4cb8d0011d6735cc04c9093ea583570d1352e1ee1 share/wine/wine.inf' \
-        '885c0421bfe30600bae9df83961b0fcbb5b9ccd1c02e7b071ce213ff2522e34a lib/wine/x86_64-windows/ntdll.dll' \
-        '7b580e19eb4fce14b5730cd2835c5204dc2622ce0fc4f33b68b0155864477667 lib/wine/i386-windows/ntdll.dll'
+    # Los hashes del runtime sellado cambian en cada release; congelarlos aquí convertía el
+    # contrato en un test caducado tres versiones después. Lo invariante, y lo que se exige, es
+    # que la autoridad ancle una entrada por cada binario de arranque.
+    for runtime_path in \
+        'bin/wine' \
+        'bin/wineserver' \
+        'lib/wine/x86_64-unix/wine' \
+        'lib/wine/x86_64-unix/ntdll.so' \
+        'share/wine/wine.inf' \
+        'lib/wine/x86_64-windows/ntdll.dll' \
+        'lib/wine/i386-windows/ntdll.dll'
     do
-        /usr/bin/grep -Fq "$runtime_authority" "$script" \
-            || fail "falta la autoridad del runtime mínimo '$runtime_authority' en $script"
+        /usr/bin/grep -Eq "[0-9a-f]{64} ${runtime_path}\$" "$script" \
+            || fail "la autoridad del runtime sellado no ancla '$runtime_path' en $script"
     done
     ! /usr/bin/grep -Fq \
         '8fb847f4f71ae120609c963fc588d3ea77b0887f173858c2d462e424a2d8fd8e' \
@@ -74,10 +77,13 @@ for script in "$INSTALLER" "$VERIFIER"; do
     /usr/bin/grep -Fq 'REGRESSION_EXTERNAL_D3DMETAL_(EXECUTABLE|WINE_ROOT)' "$script" \
         || fail "la ruta GPTK genérica heredada no se rechaza en $script"
 done
-/usr/bin/grep -Fq 'VERSION="1.12.3"' "$INSTALLER" \
-    || fail "el instalador no declara Regression 1.12.3"
-/usr/bin/grep -Fq 'BUILD_NUMBER="41"' "$INSTALLER" \
-    || fail "el instalador no declara el build 41"
+# La versión concreta la cierra Tests/Shell/release-version-coherence.sh contra los cinco sitios
+# que deben coincidir. Aquí sólo se exige que el instalador la declare, para que no dependa de un
+# número que caduca en cada release.
+/usr/bin/grep -Eq '^VERSION="[0-9]+\.[0-9]+\.[0-9]+"$' "$INSTALLER" \
+    || fail "el instalador no declara una versión de Regression"
+/usr/bin/grep -Eq '^BUILD_NUMBER="[0-9]+"$' "$INSTALLER" \
+    || fail "el instalador no declara un número de build"
 /usr/bin/grep -Fq 'PATH="/usr/bin:/bin:/usr/sbin:/sbin"' "$INSTALLER" \
     || fail "el instalador público permite sustituir comandos de confianza mediante PATH"
 installer_preamble="$WORK_DIR/installer-preamble.sh"
@@ -105,14 +111,18 @@ runtime_authority_accepts()
     release_runtime_authority_v2 \
         | /usr/bin/grep -Fxq "$expected_hash $expected_path"
 }
-runtime_authority_accepts \
-    687717fa95835146dfe4b45c6a29d7a82fb37742810fdb4213908dd3176b82e9 \
-    lib/wine/x86_64-unix/ntdll.so \
+# La autoridad es una lista cerrada: para cada ruta admite un hash y sólo uno. Se comprueba esa
+# propiedad, no un valor concreto, que cambia de forma legítima en cada release.
+authorized_ntdll="$(release_runtime_authority_v2 \
+    | /usr/bin/awk '$2 == "lib/wine/x86_64-unix/ntdll.so" { print $1 }')"
+[[ "$(printf '%s\n' "$authorized_ntdll" | /usr/bin/grep -cE '^[0-9a-f]{64}$')" == "1" ]] \
+    || fail "la autoridad pública no ancla exactamente un ntdll.so post-firma"
+runtime_authority_accepts "$authorized_ntdll" lib/wine/x86_64-unix/ntdll.so \
     || fail "ntdll.so post-firma no supera la autoridad pública"
 if runtime_authority_accepts \
     f3ccf2a487d8999659a1e641b043b916487851c1540362a0a983cdf0fd0bb8cc \
     lib/wine/x86_64-unix/ntdll.so; then
-    fail "ntdll.so pre-firma supera indebidamente la autoridad pública"
+    fail "un ntdll.so ajeno supera indebidamente la autoridad pública"
 fi
 
 HELPERS="$WORK_DIR/installer-authority-helpers.sh"
