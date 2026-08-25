@@ -227,6 +227,7 @@ a dereferenciar lo bastante lejos como para reventar.
 | Que el array *bindless* de **texturas** fuera de rango lo provoque | Reproductor: array de texturas 3D con `PARTIALLY_BOUND`, cuatro escritas y muestreando la 3000, **no falla**. Es la forma que tienen de verdad los shaders del juego: su firma real declara `array<texture3d<float>, 32768>` |
 | Que el orden de vinculación lo provoque | Reproductor: enlazar los descriptor sets **antes** de la pipeline no falla |
 | Que un layout de pipeline compatible pero distinto invalide el set | Reproductor: enlazar los sets con un layout y la pipeline con otro compatible no falla |
+| Que `length()` sobre un elemento de array *bindless* lea fuera del inline de tamaños | Reproductor: `length()` sobre los elementos 4, 264, **529** y 1023 de un array bindless con 4 reservados **no falla**. Se probó el 529 porque el offset del fallo real, 2116, son 4 × 529 |
 
 ### El mecanismo, ya identificado
 
@@ -322,7 +323,7 @@ Dos trampas del propio build, las dos fijadas en el script:
 
 ## Pendiente antes de certificar
 
-1. **Cerrar el bloqueo 5.** Nueve hipótesis descartadas, ocho de ellas sin tocar el juego, y el
+1. **Cerrar el bloqueo 5.** Diez hipótesis descartadas, ocho de ellas sin tocar el juego, y el
    **mecanismo ya identificado** (arriba): un puntero nulo leído de un argument buffer sin enlazar.
    Lo que falta es la condición que lo deja sin enlazar. Lo que queda no se puede adivinar: hace falta **un dato concreto del juego**, y
    se obtiene con una sola ejecución.

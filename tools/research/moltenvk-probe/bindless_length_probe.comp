@@ -1,0 +1,19 @@
+#version 450
+#extension GL_EXT_nonuniform_qualifier : require
+
+// Quinto patrón: length() sobre un ELEMENTO de un array bindless de SSBO. MoltenVK publica los
+// tamaños en un buffer inline (spvBufferSizeConstants) indexado por descriptor; si sólo rellena
+// los enlazados, un índice alto lee más allá de ese inline —que Metal materializa como un buffer
+// diminuto— y sale exactamente "Out of bounds of user address space, length:1".
+layout(local_size_x = 1) in;
+
+layout(set = 0, binding = 0) buffer Salida { uint valores[]; } salida;
+layout(set = 1, binding = 0) readonly buffer Recurso { uint datos[]; } recursos[];
+
+layout(push_constant) uniform Empuje { uint indice; } empuje;
+
+void main() {
+    uint i = nonuniformEXT(empuje.indice);
+    salida.valores[0] = recursos[i].datos.length();
+    salida.valores[1] = recursos[i].datos[0];
+}
