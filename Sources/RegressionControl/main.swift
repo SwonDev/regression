@@ -85,6 +85,14 @@ enum RegressionControl {
                 print("\(route.bootstrapExecutable)\t\(route.shippingURL.path)")
             }
 
+        case "launcher-configuration-routes":
+            let routes = try LauncherConfigurationRouteDetector.routes(
+                in: installations.regression.steamRootURL
+            )
+            for route in routes {
+                print("\(route.launcherExecutable)\t\(route.targetURL.path)")
+            }
+
         case "d3d12-metal-routes":
             let routes = try D3D12MetalRouteDetector.routes(
                 in: installations.regression.steamRootURL
@@ -1310,7 +1318,7 @@ enum RegressionControl {
             print("Exportación guardada en", PrivacySanitizer.normalizedPath(path))
 
         default:
-            print("Uso: regressionctl [status | library-status | migrate-library --confirm-single-library --confirm-crossover-games-removed | validate-library APP_ID --run RUN_ID | rollback-library --confirm-rollback | unreal-bootstrap-routes | cloud-status APP_ID | preflight [APP_ID] [--backend regression] | launch APP_ID [--backend regression] | switch regression | runs | processes [RUN_ID] | profiles | engines | certifications | technologies | candidates | optimization | requirements | repair-receipts | research | research-protocol | research-open | research-hypothesis | research-stage | research-attach-run | research-gate | research-artifact | research-finish | research-pause | research-complete | database | verify RUN_ID perfect|playable|failed [--note TEXTO] | observe APP_ID perfect|playable|failed --backend regression --name NOMBRE [--note TEXTO] | observations | export RUTA]")
+            print("Uso: regressionctl [status | library-status | migrate-library --confirm-single-library --confirm-crossover-games-removed | validate-library APP_ID --run RUN_ID | rollback-library --confirm-rollback | unreal-bootstrap-routes | launcher-configuration-routes | cloud-status APP_ID | preflight [APP_ID] [--backend regression] | launch APP_ID [--backend regression] | switch regression | runs | processes [RUN_ID] | profiles | engines | certifications | technologies | candidates | optimization | requirements | repair-receipts | research | research-protocol | research-open | research-hypothesis | research-stage | research-attach-run | research-gate | research-artifact | research-finish | research-pause | research-complete | database | verify RUN_ID perfect|playable|failed [--note TEXTO] | observe APP_ID perfect|playable|failed --backend regression --name NOMBRE [--note TEXTO] | observations | export RUTA]")
             exit(64)
         }
     }

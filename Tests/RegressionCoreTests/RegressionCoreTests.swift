@@ -694,6 +694,7 @@ final class RegressionCoreTests: XCTestCase {
             "tq2-win64-shipping.exe",
             "borderlands4.exe",
             "dragonkinthebanished-win64-shipping.exe",
+            "witcher3.exe",
         ]
 
         let patchURL = repositoryRoot
@@ -731,10 +732,10 @@ final class RegressionCoreTests: XCTestCase {
             launcherContents.components(separatedBy: "$component/3.0/wine").count - 1,
             4
         )
-        // Tres rutas compiladas a 4.0b2 más la que emite el detector por evidencia.
+        // Cuatro rutas compiladas a 4.0b2 más la que emite el detector por evidencia.
         XCTAssertEqual(
             launcherContents.components(separatedBy: "$component/4.0b2/wine").count - 1,
-            4
+            5
         )
         // El detector solo puede añadir juegos nuevos: nunca reasigna una ruta compilada,
         // que es lo que mantiene a DragonSword en GPTK 3.0 y a los certificados intactos.

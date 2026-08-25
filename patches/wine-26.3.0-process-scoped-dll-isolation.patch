@@ -10,7 +10,7 @@ index 060c4484..7cdafe1b 100644
  #include <dirent.h>
  #include <errno.h>
  #include <fcntl.h>
-@@ -618,6 +619,259 @@ static void regression_force_builtin_load_order( const char *module )
+@@ -618,6 +619,273 @@ static void regression_force_builtin_load_order( const char *module )
      add_load_order_override( entry );
  }
  
@@ -210,6 +210,20 @@ index 060c4484..7cdafe1b 100644
 +    char executable_variable[96], dll_variable[96];
 +    const char *module;
 +    unsigned int i, count;
++
++    /* MoltenVK solo existe en 64 bits.  Un proceso i386 que cargue el d3d9 de DXVK no llega a
++     * crear instancia Vulkan —«Required Vulkan extension VK_KHR_surface not supported»—, DXVK
++     * lanza `dxvk::DxvkError`, nadie la captura y `terminate()` mata el proceso.  Le ocurre al
++     * launcher de The Witcher 3, que es Qt de 32 bits, y le ocurriría a cualquier otro proceso
++     * de 32 bits: el fallo es de la arquitectura, no del juego.  El d3d9 builtin de Wine sí
++     * funciona ahí, así que se prefiere por evidencia y sin lista de títulos.  Las demás APIs
++     * gráficas no dependen de Vulkan en este runtime (D3D11 va por DXMT), así que no se tocan. */
++    if (main_image_info.Machine == IMAGE_FILE_MACHINE_I386)
++    {
++        regression_force_builtin_load_order( "d3d9" );
++        fprintf( stderr,
++                 "Regression: 32-bit process uses the builtin d3d9; DXVK has no 32-bit Vulkan.\n" );
++    }
 +
 +    if (regression_executable_is( "rsdragonwilds-win64-shipping.exe" ))
 +    {

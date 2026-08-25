@@ -541,6 +541,23 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
     `build/release-runtime-pins.txt` se reescribe entero, así que saltarse la línea de un artefacto
     que el builder no acredita la eliminaba en silencio y dejaba sin acreditar algo que **no había
     cambiado**. La línea anterior se arrastra tal cual.
+72. **Un proceso de 32 bits no puede usar DXVK en este runtime.** MoltenVK solo existe en 64
+    bits, así que un i386 que cargue el `d3d9` de DXVK no crea instancia Vulkan
+    (`Required Vulkan extension VK_KHR_surface not supported`), DXVK lanza `dxvk::DxvkError` y
+    `terminate()` mata el proceso. Se le da el `d3d9` builtin de Wine **por arquitectura, no por
+    lista de títulos**. Las demás APIs no dependen de Vulkan aquí (D3D11 va por DXMT).
+73. **Una redirección de imagen no puede cruzar arquitecturas.** Sustituir el ejecutable de un
+    proceso de 32 bits por uno de 64 hace que la creación del proceso falle con
+    `ERROR_NOT_SUPPORTED` y Steam lo reporte como `AppError_46`. Se comprueba la máquina del PE
+    **antes** de proponer la ruta, no después de romper el arranque.
+74. **El argumento que se añade a una línea de comandos es una lista cerrada compilada en el
+    loader**, aplicada a un basename exacto y solo si no venía ya. Sirve para `-window-mode
+    borderless` (Unity) y `--launcher-skip` (REDengine). Ni el entorno ni la base de aprendizaje
+    pueden inyectar un argumento.
+75. **Un launcher de proveedor que falla no es el juego.** The Witcher 3 arrancaba perfecto por su
+    binario; lo que reventaba era la interfaz Chromium de su prelanzador. Antes de tocar el motor,
+    separa la cadena y comprueba **qué eslabón** falla: la ruta del proceso (`ps -o command`) dice
+    qué binario se está ejecutando de verdad.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 

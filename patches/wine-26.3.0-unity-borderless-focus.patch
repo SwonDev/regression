@@ -1,11 +1,12 @@
-diff --git a/dlls/ntdll/unix/env.c b/dlls/ntdll/unix/env.c
-index 0f46cc66..72202c7b 100644
 --- a/dlls/ntdll/unix/env.c
 +++ b/dlls/ntdll/unix/env.c
-@@ -2093,6 +2093,199 @@ static int regression_bootstrap_source_matches( const WCHAR *image, UINT image_l
- }
- 
- 
+@@ -2090,9 +2090,216 @@
+         }
+     }
+     return has_steam_common;
++}
++
++
 +static int regression_valid_activation_basename( const char *name )
 +{
 +    const unsigned char *cursor = (const unsigned char *)name;
@@ -163,9 +164,9 @@ index 0f46cc66..72202c7b 100644
 +invalid:
 +    fclose( file );
 +    return 0;
-+}
-+
-+
+ }
+ 
+ 
 +static int regression_command_line_contains_ascii( const WCHAR *command_line,
 +                                                   UINT command_line_len,
 +                                                   const char *needle )
@@ -199,25 +200,44 @@ index 0f46cc66..72202c7b 100644
 +}
 +
 +
++/* El prelanzador de REDengine abre una interfaz Qt WebEngine —Chromium embebido— que revienta
++ * bajo Wine y deja el arranque colgado en el depurador.  Su propio binario admite
++ * `--launcher-skip`, que es exactamente lo que hace un usuario que no quiere esa interfaz: se
++ * la salta y arranca el juego.  Se añade solo a ese proceso exacto y solo si no venía ya. */
++static int regression_force_prelauncher_skip( const WCHAR *image, UINT image_len,
++                                              const WCHAR *command_line,
++                                              UINT command_line_len )
++{
++    if (regression_command_line_contains_ascii( command_line, command_line_len,
++                                                "--launcher-skip" )) return 0;
++    return regression_bootstrap_source_matches( image, image_len, "redprelauncher.exe" );
++}
++
++
  static int regression_unix_target_is_safe( const char *target, const char *resolved_prefix )
  {
      static const char shared_root[] =
-@@ -2187,10 +2380,14 @@ static WCHAR *regression_shipping_image( const WCHAR *image, UINT image_len,
+@@ -2187,10 +2394,19 @@
   */
  void init_startup_info(void)
  {
 +    static const WCHAR borderlessW[] = {' ','-','w','i','n','d','o','w','-','m','o','d','e',' ',
 +                                         'b','o','r','d','e','r','l','e','s','s'};
++    static const WCHAR launcherSkipW[] = {' ','-','-','l','a','u','n','c','h','e','r','-',
++                                           's','k','i','p'};
      WCHAR *src, *dst, *env;
 +    WCHAR *startup_image, *startup_command_line;
      WCHAR *redirected_image = NULL;
      void *module = NULL;
      unsigned int status, redirected_image_len = 0;
-+    UINT borderless_len = 0;
++    /* Argumento compilado que se añade a la línea de comandos de un proceso exacto.  La lista es
++     * cerrada: un argumento no puede venir del entorno ni de la base de aprendizaje. */
++    const WCHAR *appended_arguments = NULL;
++    UINT appended_len = 0;
      SIZE_T size, info_size, env_size, env_pos;
      RTL_USER_PROCESS_PARAMETERS *params = NULL;
      struct startup_info_data *info;
-@@ -2219,6 +2416,12 @@ void init_startup_info(void)
+@@ -2219,6 +2435,22 @@
  
      src = (WCHAR *)(info + 1);
      src = (WCHAR *)((char *)src + info->curdir_len + info->dllpath_len);
@@ -226,35 +246,45 @@ index 0f46cc66..72202c7b 100644
 +    if (info->cmdline_len <= USHRT_MAX - sizeof(borderlessW) &&
 +        regression_force_unity_borderless( startup_image, info->imagepath_len,
 +                                           startup_command_line, info->cmdline_len ))
-+        borderless_len = sizeof(borderlessW);
++    {
++        appended_arguments = borderlessW;
++        appended_len = sizeof(borderlessW);
++    }
++    else if (info->cmdline_len <= USHRT_MAX - sizeof(launcherSkipW) &&
++             regression_force_prelauncher_skip( startup_image, info->imagepath_len,
++                                                startup_command_line, info->cmdline_len ))
++    {
++        appended_arguments = launcherSkipW;
++        appended_len = sizeof(launcherSkipW);
++    }
      redirected_image = regression_shipping_image( src, info->imagepath_len,
                                                     &redirected_image_len );
  
-@@ -2233,7 +2436,7 @@ void init_startup_info(void)
+@@ -2233,7 +2465,7 @@
              + MAX_PATH * sizeof(WCHAR)  /* curdir */
              + info->dllpath_len + sizeof(WCHAR)
              + (redirected_image ? redirected_image_len : info->imagepath_len) + sizeof(WCHAR)
 -            + info->cmdline_len + sizeof(WCHAR)
-+            + info->cmdline_len + borderless_len + sizeof(WCHAR)
++            + info->cmdline_len + appended_len + sizeof(WCHAR)
              + info->title_len + sizeof(WCHAR)
              + info->desktop_len + sizeof(WCHAR)
              + info->shellinfo_len + sizeof(WCHAR)
-@@ -2286,7 +2489,19 @@ void init_startup_info(void)
+@@ -2286,7 +2518,19 @@
      else
          copy_dos_path_string( &src, &dst, &params->ImagePathName, &nt_name,
                                info->imagepath_len );
 -    copy_unicode_string( &src, &dst, &params->CommandLine, info->cmdline_len );
-+    if (borderless_len)
++    if (appended_len)
 +    {
 +        params->CommandLine.Buffer = dst;
-+        params->CommandLine.Length = info->cmdline_len + borderless_len;
++        params->CommandLine.Length = info->cmdline_len + appended_len;
 +        params->CommandLine.MaximumLength = params->CommandLine.Length + sizeof(WCHAR);
 +        memcpy( dst, src, info->cmdline_len );
-+        memcpy( (char *)dst + info->cmdline_len, borderlessW, borderless_len );
++        memcpy( (char *)dst + info->cmdline_len, appended_arguments, appended_len );
 +        dst[params->CommandLine.Length / sizeof(WCHAR)] = 0;
 +        src += info->cmdline_len / sizeof(WCHAR);
 +        dst += params->CommandLine.Length / sizeof(WCHAR) + 1;
-+        MESSAGE( "Regression: forced borderless focus-safe Unity mode only for the exact process.\n" );
++        MESSAGE( "Regression: appended a compiled argument only to the exact matched process.\n" );
 +    }
 +    else copy_unicode_string( &src, &dst, &params->CommandLine, info->cmdline_len );
      copy_unicode_string( &src, &dst, &params->WindowTitle, info->title_len );

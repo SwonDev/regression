@@ -6,7 +6,12 @@ import XCTest
 /// sección y las dos tablas de importación. Sirve para probar el lector sin depender de binarios
 /// de juegos, que no se pueden versionar.
 enum MinimalPortableExecutable {
-    static func data(linked: [String], delayed: [String], magic: UInt16 = 0x20b) -> Data {
+    static func data(
+        linked: [String],
+        delayed: [String],
+        magic: UInt16 = 0x20b,
+        machine: UInt16 = 0x8664
+    ) -> Data {
         let sectionRVA: UInt32 = 0x1000
         let headerSize = 0x400
         var section = Data()
@@ -47,6 +52,7 @@ enum MinimalPortableExecutable {
         let peOffset = 0x80
         file.replaceSubrange(0x3C..<0x40, with: le32(UInt32(peOffset)))
         file.replaceSubrange(peOffset..<(peOffset + 4), with: Data("PE\0\0".utf8))
+        file.replaceSubrange((peOffset + 4)..<(peOffset + 6), with: le16(machine))
         file.replaceSubrange((peOffset + 6)..<(peOffset + 8), with: le16(1))               // 1 sección
         file.replaceSubrange((peOffset + 20)..<(peOffset + 22), with: le16(UInt16(optionalSize)))
 

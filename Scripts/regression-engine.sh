@@ -56,15 +56,22 @@ cleanup_controller_query_dir()
 trap cleanup_controller_query_dir EXIT
 trap 'exit 1' HUP INT TERM
 
-prepare_unreal_bootstrap_routes()
+# Publica redirecciones de arranque a partir de un detector del controlador. Las dos familias
+# —el bootstrap de Unreal y la configuración del prelanzador de REDengine— comparten el mismo
+# contrato indexado que consume Wine, así que se acumulan en un único contador.
+regression_bootstrap_redirect_count=0
+
+append_bootstrap_routes()
 {
+    local subcommand="$1" description="$2"
     local controller="$ROOT/Contents/SharedSupport/bin/regressionctl"
-    local routes source target count=0
+    local routes source target
     local shared_root="$WINEPREFIX/drive_c/Program Files (x86)/Steam/steamapps/common/"
 
     [[ -x "$controller" ]] || return 0
-    if ! routes="$("$controller" unreal-bootstrap-routes)"; then
-        printf 'Regression: no se pudo detectar de forma segura los bootstraps Unreal; se conserva Steam.\n' >&2
+    if ! routes="$("$controller" "$subcommand")"; then
+        printf 'Regression: no se pudo detectar de forma segura %s; se conserva Steam.\n' \
+            "$description" >&2
         return 0
     fi
     [[ -n "$routes" ]] || return 0
@@ -72,15 +79,30 @@ prepare_unreal_bootstrap_routes()
     while IFS=$'\t' read -r source target; do
         [[ "$source" =~ ^[A-Za-z0-9_-]+\.exe$ ]] || continue
         [[ "$target" == "$shared_root"* && -f "$target" && ! -L "$target" ]] || continue
-        (( count < 16 )) || break
-        export "REGRESSION_BOOTSTRAP_REDIRECT_${count}_EXECUTABLE=$source"
-        export "REGRESSION_BOOTSTRAP_REDIRECT_${count}_TARGET=$target"
-        count=$((count + 1))
+        (( regression_bootstrap_redirect_count < 16 )) || break
+        export "REGRESSION_BOOTSTRAP_REDIRECT_${regression_bootstrap_redirect_count}_EXECUTABLE=$source"
+        export "REGRESSION_BOOTSTRAP_REDIRECT_${regression_bootstrap_redirect_count}_TARGET=$target"
+        regression_bootstrap_redirect_count=$((regression_bootstrap_redirect_count + 1))
     done <<< "$routes"
 
-    if (( count > 0 )); then
-        export REGRESSION_BOOTSTRAP_REDIRECT_COUNT="$count"
+    if (( regression_bootstrap_redirect_count > 0 )); then
+        export REGRESSION_BOOTSTRAP_REDIRECT_COUNT="$regression_bootstrap_redirect_count"
     fi
+}
+
+prepare_unreal_bootstrap_routes()
+{
+    append_bootstrap_routes unreal-bootstrap-routes "los bootstraps Unreal"
+}
+
+# El prelanzador de REDengine abre una interfaz Chromium que revienta bajo Wine y, al caerse,
+# lanza la **primera** entrada de su configuración: la de DirectX 12. El juego responde entonces
+# «GPU does not meet minimal requirements. Support for DirectX 12 is required». Su binario
+# DirectX 11 funciona, así que se arranca ese directamente. Ver docs/games/the-witcher-3.md.
+prepare_launcher_configuration_routes()
+{
+    append_bootstrap_routes launcher-configuration-routes \
+        "la configuración de los prelanzadores"
 }
 
 prepare_external_apple_gptk_routes()
@@ -127,6 +149,12 @@ prepare_external_apple_gptk_routes()
         export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_WINE_ROOT=$component/4.0b2/wine"
         count=$((count + 1))
         export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_EXECUTABLE=Borderlands4.exe"
+        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_WINE_ROOT=$component/4.0b2/wine"
+        count=$((count + 1))
+        # The Witcher 3: su prelanzador siempre arranca el binario D3D12, así que sin esta ruta
+        # el juego responde «Support for DirectX 12 is required» y no abre. Ver
+        # docs/games/the-witcher-3.md.
+        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_EXECUTABLE=witcher3.exe"
         export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_WINE_ROOT=$component/4.0b2/wine"
         count=$((count + 1))
         # Dragonkin es UE5 con Agility SDK: sin ruta caía al d3d12 de Wine sobre
@@ -297,6 +325,7 @@ prepare_process_builtin_dll_routes()
 # bootstrap. El router sustituye la imagen estándar de Unreal por el Shipping
 # exacto; los títulos D3D12 validados añaden D3DMetal solo al proceso permitido.
 prepare_unreal_bootstrap_routes
+prepare_launcher_configuration_routes
 prepare_external_apple_gptk_routes
 windows_media_app_id=""
 if [[ "${1:-}" == "-applaunch" && "${2:-}" =~ ^[1-9][0-9]{0,9}$ ]]; then

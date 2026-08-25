@@ -34,11 +34,48 @@ public struct PortableExecutableImports: Equatable, Sendable {
     }
 }
 
+/// Arquitectura declarada en la cabecera COFF. Solo se distinguen las dos que este runtime
+/// ejecuta; cualquier otra se reporta como desconocida en vez de adivinarse.
+public enum PortableExecutableMachine: Equatable, Sendable {
+    case i386
+    case amd64
+    case other(UInt16)
+}
+
 public enum PortableExecutableReader {
     private static let maximumSections = 96
     private static let maximumDescriptors = 4_096
     private static let maximumNameBytes = 64
     private static let maximumHeaderBytes = 64 * 1024
+
+    /// Arquitectura del PE, leyendo solo la cabecera COFF.
+    ///
+    /// Hace falta porque una redirección de imagen **no puede cruzar arquitecturas**: sustituir
+    /// el ejecutable de un proceso de 32 bits por uno de 64 hace que Windows —y Wine— rechacen la
+    /// creación del proceso con `ERROR_NOT_SUPPORTED`, y desde fuera se ve como «el juego no
+    /// arranca». Se comprueba antes de proponer la ruta, no después de romperla.
+    public static func machine(at url: URL) throws -> PortableExecutableMachine? {
+        guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
+              values.isSymbolicLink != true,
+              values.isRegularFile == true else { return nil }
+
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+
+        guard let dos = try handle.read(upToCount: 0x40), dos.count == 0x40,
+              dos[0] == 0x4D, dos[1] == 0x5A else { return nil }
+        let peOffset = Int(read32(dos, at: 0x3C))
+        guard peOffset > 0, peOffset < maximumHeaderBytes else { return nil }
+
+        try handle.seek(toOffset: UInt64(peOffset))
+        guard let coff = try handle.read(upToCount: 6), coff.count == 6,
+              coff[0] == 0x50, coff[1] == 0x45, coff[2] == 0, coff[3] == 0 else { return nil }
+        switch read16(coff, at: 4) {
+        case 0x014c: return .i386
+        case 0x8664: return .amd64
+        case let value: return .other(value)
+        }
+    }
 
     /// Devuelve `nil` cuando el fichero no es un PE legible. La ausencia de tabla no es un error:
     /// un ejecutable puede no importar nada de forma estática.

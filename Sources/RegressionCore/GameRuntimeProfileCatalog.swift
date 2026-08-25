@@ -208,6 +208,34 @@ public enum GameRuntimeProfileCatalog {
                 "profile.router.contract": "compiled-exact-process-d3dmetal-v1"
             ]
         ),
+        // The Witcher 3 no deja elegir: su prelanzador siempre arranca el binario D3D12 aunque la
+        // configuración liste antes el de D3D11 —comprobado con la ruta del proceso—. Sin ruta a
+        // D3DMetal el juego responde «GPU does not meet minimal requirements. Support for DirectX
+        // 12 is required» y no abre. La interfaz Chromium del prelanzador se salta con su propio
+        // `--launcher-skip`, que añade el loader al proceso exacto.
+        CompiledGameRuntimeProfile(
+            appID: "292030",
+            identifier: "the-witcher-3.apple-gptk-4.0b2-next-gen",
+            revision: 1,
+            executable: "witcher3.exe",
+            requiresActiveSteamClient: true,
+            configurationValues: [
+                "profile.scope": "exact-app-process",
+                "profile.engine.family": "redengine",
+                "profile.graphics.api": "d3d12",
+                "profile.graphics.backend": "d3dmetal",
+                "profile.graphics.route": "complete",
+                "profile.runtime-root": "components/apple-gptk/4.0b2",
+                "profile.component": "apple-gptk",
+                "profile.component.version": "4.0b2",
+                "profile.component.repair": "manifest-verified",
+                "profile.component.distribution": "external-apple-authorized",
+                "profile.launch.arguments": "--launcher-skip",
+                "profile.launch.arguments.scope": "redprelauncher.exe",
+                "profile.launcher.entrypoints": "regression,steam",
+                "profile.router.contract": "compiled-exact-process-d3dmetal-v1"
+            ]
+        ),
         CompiledGameRuntimeProfile(
             appID: "1154030",
             identifier: "titan-quest-2.apple-gptk-4.0b2-steam-shipping",

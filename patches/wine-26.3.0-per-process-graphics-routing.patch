@@ -1,6 +1,6 @@
 --- a/dlls/ntdll/unix/loader.c
 +++ b/dlls/ntdll/unix/loader.c
-@@ -382,8 +382,347 @@
+@@ -382,8 +382,348 @@
      dll_paths = new_dll_paths;
      if (path_len > dll_path_maxlen)
          dll_path_maxlen = path_len;
@@ -85,7 +85,8 @@
 +           regression_executable_is( "fft_enhanced.exe" ) ||
 +           regression_executable_is( "tq2-win64-shipping.exe" ) ||
 +           regression_executable_is( "borderlands4.exe" ) ||
-+           regression_executable_is( "dragonkinthebanished-win64-shipping.exe" );
++           regression_executable_is( "dragonkinthebanished-win64-shipping.exe" ) ||
++           regression_executable_is( "witcher3.exe" );
 +}
 +
 +static const char *regression_external_d3dmetal_root(void)
