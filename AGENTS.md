@@ -558,6 +558,12 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
     binario; lo que reventaba era la interfaz Chromium de su prelanzador. Antes de tocar el motor,
     separa la cadena y comprueba **qué eslabón** falla: la ruta del proceso (`ps -o command`) dice
     qué binario se está ejecutando de verdad.
+76. **Conceder el foco de una ventana de Wine se hace en el acto; descartar sus eventos, no.**
+    Diferir el `makeKeyWindow` un turno del runloop pierde el foco —el juego ya lo movió—, pero
+    descartar los `WINDOW_LOST_FOCUS` pendientes dentro de la pila del ordenado **cuelga** a
+    algunos juegos antes siquiera de crear su ventana (reproducido con Runika, parado justo tras
+    inicializar su input). Las dos mitades se separan, y cada cambio de foco se valida contra
+    **ambos** casos: un juego que necesita el foco y otro que se colgaba.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 

@@ -1,6 +1,6 @@
 --- a/dlls/winemac.drv/cocoa_app.m
 +++ b/dlls/winemac.drv/cocoa_app.m
-@@ -2450,6 +2450,27 @@
+@@ -2450,6 +2450,45 @@
              [self unminimizeWindowIfNoneVisible];
          beenActive = TRUE;
  
@@ -25,30 +25,63 @@
 +                [windowToFocus makeKeyWindow];
 +        }
 +
++        // La ventana del juego puede no existir todavía en este instante: la activación se pide
++        // **antes** de ordenar la ventana en pantalla, así que el intento de arriba se queda sin
++        // candidata y después ya no hay otra oportunidad. Se reintenta un momento más tarde.
++        //
++        // El reintento va aquí y no en la ruta de ordenado: conceder el foco desde dentro del
++        // ordenado re-entra en AppKit y cuelga a algunos juegos antes siquiera de crear su
++        // ventana —reproducido con Runika, que se paraba tras inicializar su input—.
++        dispatch_after(dispatch_time( DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC) ),
++                       dispatch_get_main_queue(), ^{
++            WineWindow* windowToFocus;
++
++            if (![NSApp isActive]) return;
++            if ([[NSApp keyWindow] isKindOfClass:[WineWindow class]]) return;
++            windowToFocus = [self frontWineWindow];
++            if ([windowToFocus canBecomeKeyWindow])
++                [windowToFocus makeKeyWindow];
++        });
++
          // If a Wine process terminates abruptly while it has the display captured
          // and switched to a different resolution, Mac OS X will uncapture the
          // displays and switch their resolutions back.  However, the other Wine
 --- a/dlls/winemac.drv/cocoa_window.m
 +++ b/dlls/winemac.drv/cocoa_window.m
-@@ -1849,6 +1849,21 @@
+@@ -1849,6 +1849,36 @@
  
              if (![self isExcludedFromWindowsMenu])
                  [NSApp addWindowsItem:self title:[self title] filename:NO];
 +
 +            // La activación se pide **antes** de ordenar la ventana en pantalla, así que cuando
 +            // `applicationDidBecomeActive` se dispara todavía no hay ventana a la que dar el
-+            // foco.  Con la aplicación ya activa no vuelve a haber otra oportunidad: la ventana
-+            // entra visible y por delante, pero nunca llega a ser key, y el proceso no recibe
-+            // teclado hasta que el usuario hace clic dentro.  Se ve como un juego colgado en su
-+            // pantalla de título.
++            // foco, y después ya no vuelve a haber ocasión: la ventana entra visible y por
++            // delante, pero nunca llega a ser key, y el proceso no recibe teclado hasta que el
++            // usuario hace clic dentro.  Se ve como un juego colgado en su pantalla de título.
 +            //
-+            // Aquí la ventana ya está ordenada, así que se cierra ese hueco: si el lado Win32
-+            // pidió activación, la aplicación está activa y ninguna ventana de Wine es key, se
-+            // le concede el foco a esta.  Se reutiliza `makeFocused:` —sin volver a pedir la
-+            // activación de la app— para pasar por la misma ruta que ya emite WINDOW_GOT_FOCUS.
-+            if (activate && [NSApp isActive] &&
-+                ![[NSApp keyWindow] isKindOfClass:[WineWindow class]])
-+                [self makeFocused:NO];
++            // Aquí la ventana ya está ordenada, así que se cierra ese hueco.  Se concede el key
++            // directamente, **sin pasar por `makeFocused:`**: ese método además descarta eventos
++            // de la cola de Wine, y hacerlo en mitad del ordenado colgaba a algunos juegos antes
++            // siquiera de crear su ventana —reproducido con Runika, que se paraba justo tras
++            // inicializar su input—.  El lado Win32 sigue decidiendo: `windowDidBecomeKey`
++            // publica WINDOW_GOT_FOCUS y `can_window_become_foreground` puede rechazarlo.
++            if (activate && [NSApp isActive] && !self.disabled && !self.noForeground &&
++                ![[NSApp keyWindow] isKindOfClass:[WineWindow class]] &&
++                [self canBecomeKeyWindow])
++            {
++                // El key se concede **aquí mismo**: diferirlo un turno lo pierde, porque para
++                // entonces el propio juego ya ha movido el foco.
++                causing_becomeKeyWindow = self;
++                [self makeKeyWindow];
++                causing_becomeKeyWindow = nil;
++                // El descarte de los WINDOW_LOST_FOCUS pendientes sí se difiere: hacerlo dentro
++                // de la pila del ordenado colgaba a algunos juegos antes siquiera de crear su
++                // ventana —reproducido con Runika, que se paraba tras inicializar su input—.
++                dispatch_async(dispatch_get_main_queue(), ^{
++                    [queue discardEventsMatchingMask:event_mask_for_type(WINDOW_LOST_FOCUS)
++                                           forWindow:self];
++                });
++            }
          }
      }
  

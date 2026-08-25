@@ -64,8 +64,16 @@ Ambas partes son **generales**: benefician a cualquier juego, no solo a este.
    usuario acaba de interactuar con ella, así que macOS lo permite— y **cierra el popover**, que
    mientras seguía abierto retenía la ventana *key* y se quedaba las teclas del juego.
 2. **`wine-26.3.0-winemac-restore-focus-on-activate.patch`**, ya dentro de la serie, con dos hunks:
-   al recuperar la actividad se concede *key* a la ventana frontal si ninguna la tiene, y **una vez
-   ordenada la ventana en pantalla** se cierra el hueco de la carrera reutilizando `makeFocused:`.
+   al recuperar la actividad se concede *key* a la ventana frontal si ninguna la tiene, y —una vez
+   la ventana ya está ordenada en pantalla— se cierra el hueco de la carrera concediéndole el
+   *key* ahí mismo.
+
+   **El reparto entre lo síncrono y lo diferido no es un detalle de estilo, es el resultado de un
+   A/B.** Conceder el *key* hay que hacerlo en el acto: diferirlo un turno del runloop lo pierde,
+   porque para entonces el propio juego ya movió el foco. En cambio el descarte de los
+   `WINDOW_LOST_FOCUS` pendientes —que `makeFocused:` hace y sin el cual el lado Win32 vuelve a
+   soltar el foco justo después— **no** puede hacerse dentro de la pila del ordenado: colgaba a
+   Runika antes siquiera de crear su ventana, justo tras inicializar su input. Se difiere solo eso.
 
 ## Validación
 
