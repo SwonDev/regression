@@ -985,14 +985,29 @@ final class GameTechnologyEvidenceScannerTests: XCTestCase {
         )
         XCTAssertTrue(falsePositiveReport.runtimeComponents.isEmpty)
 
+        // Los archivos ocultos también consumen presupuesto. Se prueba el mecanismo con un
+        // límite explícito en vez de fabricar miles de archivos para chocar con el estándar: ese
+        // número tiene que poder subirse sin romper el test —y tuvo que subirse, porque 4096
+        // dejaba a Sonic Adventure 2 sin poder lanzarse por tener 4534 entradas—.
         let budgetRoot = try temporaryRoot("hidden-budget")
         defer { try? FileManager.default.removeItem(at: budgetRoot) }
-        for index in 0...4_096 {
+        for index in 0...8 {
             try Data().write(
                 to: budgetRoot.appendingPathComponent(".hidden-\(index)")
             )
         }
-        XCTAssertThrowsError(try GameTechnologyEvidenceScanner.scan(gameRootURL: budgetRoot))
+        XCTAssertThrowsError(
+            try GameTechnologyEvidenceScanner.scan(
+                gameRootURL: budgetRoot,
+                limits: GameTechnologyScanLimits(
+                    maximumDepth: 4,
+                    maximumEntries: 4,
+                    maximumMetadataBytes: 1_024
+                )
+            )
+        )
+        // Y con el presupuesto estándar, un juego con esos archivos se inventaría sin problema.
+        XCTAssertNoThrow(try GameTechnologyEvidenceScanner.scan(gameRootURL: budgetRoot))
     }
 
     func testEvidenceIsSanitizedSortedAndDeterministic() throws {

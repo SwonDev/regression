@@ -10,7 +10,7 @@ index 060c4484..7cdafe1b 100644
  #include <dirent.h>
  #include <errno.h>
  #include <fcntl.h>
-@@ -618,6 +619,237 @@ static void regression_force_builtin_load_order( const char *module )
+@@ -618,6 +619,259 @@ static void regression_force_builtin_load_order( const char *module )
      add_load_order_override( entry );
  }
  
@@ -242,6 +242,28 @@ index 060c4484..7cdafe1b 100644
 +        regression_force_disabled_load_order( module );
 +        fprintf( stderr, "Regression: disabled optional module %s only for matched process.\n",
 +                 module );
++    }
++
++    /* Route one exact process to the builtin Wine module instead of the bottle's PE
++     * override.  The action is deliberately narrow: only `d3d9` is accepted, and only as a
++     * preference for the builtin implementation, so a route can never select an arbitrary
++     * module or load mode.  DXVK's D3D9 declares the plain and the depth-compare sampler of
++     * a slot on the same binding; Metal cannot express two samplers at one index, so every
++     * graphics pipeline fails to compile and the game renders nothing while its audio keeps
++     * playing.  wined3d has native shadow samplers and renders it.  See
++     * docs/games/sonic-adventure-2.md. */
++    count = regression_route_count( "REGRESSION_PROCESS_BUILTIN_DLL_ROUTE_COUNT" );
++    for (i = 0; i < count; i++)
++    {
++        snprintf( executable_variable, sizeof(executable_variable),
++                  "REGRESSION_PROCESS_BUILTIN_DLL_ROUTE_%u_EXECUTABLE", i );
++        if (!regression_executable_matches_env( executable_variable )) continue;
++        snprintf( dll_variable, sizeof(dll_variable),
++                  "REGRESSION_PROCESS_BUILTIN_DLL_ROUTE_%u_DLL", i );
++        module = getenv( dll_variable );
++        if (!regression_valid_dll_name( module ) || strcasecmp( module, "d3d9" )) continue;
++        regression_force_builtin_load_order( module );
++        fprintf( stderr, "Regression: forced builtin %s only for matched process.\n", module );
 +    }
 +}
 +

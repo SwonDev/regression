@@ -39,6 +39,14 @@ public actor InstallationDiscovery {
         self.regressionComponentHealthProvider = regressionComponentHealthProvider
     }
 
+    /// Ruta de la botella propia. Es determinista, así que quien la necesite antes de terminar
+    /// un descubrimiento —la cesión de activación, sin ir más lejos— la pide aquí en vez de
+    /// repetir el literal.
+    public static func bottleURL(homeDirectoryURL: URL? = nil) -> URL {
+        (homeDirectoryURL ?? FileManager.default.homeDirectoryForCurrentUser)
+            .appendingPathComponent("Library/Application Support/Regression/Bottles/Steam", isDirectory: true)
+    }
+
     public func discover(regressionApplicationURL: URL? = nil) async -> InstallationSnapshot {
         let regression = discoverRegression(applicationURL: regressionApplicationURL)
         return InstallationSnapshot(
@@ -57,8 +65,7 @@ public actor InstallationDiscovery {
                 .appendingPathComponent("Regression.app", isDirectory: true)
         }
 
-        let bottle = homeDirectoryURL
-            .appendingPathComponent("Library/Application Support/Regression/Bottles/Steam", isDirectory: true)
+        let bottle = InstallationDiscovery.bottleURL(homeDirectoryURL: homeDirectoryURL)
         let steam = bottle.appendingPathComponent("drive_c/Program Files (x86)/Steam/Steam.exe")
         let modernLauncher = resolvedApplicationURL.appendingPathComponent("Contents/MacOS/regression-engine")
         let legacyLauncher = resolvedApplicationURL.appendingPathComponent("Contents/MacOS/regression")

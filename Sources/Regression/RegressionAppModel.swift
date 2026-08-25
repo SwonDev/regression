@@ -224,6 +224,12 @@ final class RegressionAppModel {
     var regressionReleaseStatus: RegressionReleaseUpdateStatus = .checking
     var failure: UserFacingFailure?
     var statusDetail = "Preparando el motor y la biblioteca de Steam…"
+
+    /// Lo instala el delegado, que es quien posee el popover. Mientras el popover sigue abierto
+    /// retiene la ventana key, así que el juego recién lanzado renderiza pero las teclas se las
+    /// queda el buscador de la lista. Se cierra al lanzar, que además es lo que espera cualquiera
+    /// después de pulsar «Jugar».
+    @ObservationIgnored var dismissPresentation: (@MainActor () -> Void)?
     var autoLaunchEnabled: Bool
     var automaticRegressionUpdatesEnabled: Bool
     private(set) var shutdownIsComplete = false
@@ -1908,6 +1914,14 @@ final class RegressionAppModel {
             launchEnvelopeID = envelope.id
             try await repository.authorizeLaunchEnvelopeSpawn(id: envelope.id)
             let spawnAuthority = try await repository.gameLaunchSpawnAuthority(for: envelope.id)
+            dismissPresentation?()
+            // macOS 14 dejó de permitir que una aplicación se ponga al frente por su cuenta:
+            // quien está activo tiene que cederle la activación. Regression es accesoria y no
+            // queda activa ni cuando se pulsa dentro de su popover, así que no había nadie que
+            // cediera y la ventana del juego salía delante pero **sin teclado ni ratón**.
+            // Activarse justo antes del `spawn` mete a Regression en el protocolo de Wine;
+            // `WineActivationYielder` le cede el paso al juego en cuanto este lo pide.
+            NSApplication.shared.activate()
             _ = try await coordinator.launchGame(
                 backend: selectedBackend,
                 installations: installations,

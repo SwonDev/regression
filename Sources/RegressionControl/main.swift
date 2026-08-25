@@ -618,11 +618,31 @@ enum RegressionControl {
             var launchSubmitted = false
             do {
                 try await repository.recordPreflight(report, forRunID: launchContext.id)
-                let requirementProjection = try await GameTechnologyEvidenceScanner.refreshProjection(
-                    appID: appID,
-                    steamRootURL: installations.regression.steamRootURL,
-                    repository: repository
-                )
+                // El inventario tecnológico es **evidencia de diagnóstico**, no una puerta de
+                // seguridad: que no se pueda completar no dice nada sobre si el juego puede
+                // arrancar. Abortar el lanzamiento por ello dejaba juegos inlanzables por tener
+                // muchos archivos —le pasó a Sonic Adventure 2—. La degradación no se oculta: se
+                // registra una proyección vacía y sin estado de escaneo, que es exactamente lo
+                // que la app muestra como «sin evidencia reciente».
+                let requirementProjection: GameTechnologyRequirementProjection
+                do {
+                    requirementProjection = try await GameTechnologyEvidenceScanner.refreshProjection(
+                        appID: appID,
+                        steamRootURL: installations.regression.steamRootURL,
+                        repository: repository
+                    )
+                } catch {
+                    fputs(
+                        "AVISO: no se pudo actualizar el inventario tecnológico del App ID "
+                            + "\(appID): \(error.localizedDescription). El lanzamiento continúa "
+                            + "sin proyección de requisitos.\n",
+                        stderr
+                    )
+                    requirementProjection = GameTechnologyRequirementProjection(
+                        scanState: nil,
+                        requirements: []
+                    )
+                }
                 let componentHealth = regressionLaunchComponentHealth(
                     installation: installations.regression,
                     applicationURL: applicationURL,

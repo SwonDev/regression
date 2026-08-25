@@ -1,5 +1,6 @@
 import AppKit
 import OSLog
+import RegressionCore
 import SwiftUI
 
 enum LifecycleDiagnostics {
@@ -31,6 +32,7 @@ final class RegressionAppDelegate: NSObject, NSApplicationDelegate {
     private var popover: NSPopover?
     private var statusItemPresenter: RegressionStatusItemPresenter?
     private var terminationTask: Task<Void, Never>?
+    private var activationYielder: WineActivationYielder?
     #if DEBUG
     private var visualFixtureWindow: NSWindow?
 
@@ -66,6 +68,12 @@ final class RegressionAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         LifecycleDiagnostics.write("RegressionAppDelegate.applicationDidFinishLaunching")
         NSApplication.shared.setActivationPolicy(.accessory)
+
+        // Se instala antes que nada: si Regression está al frente cuando arranca un juego y no
+        // le cede la activación, la ventana del juego sale delante pero sin teclado ni ratón.
+        let activationYielder = WineActivationYielder(bottle: InstallationDiscovery.bottleURL())
+        activationYielder.start()
+        self.activationYielder = activationYielder
 
         #if DEBUG
         RegressionVisualFixtureAppearance.applyRequested()
@@ -133,6 +141,10 @@ final class RegressionAppDelegate: NSObject, NSApplicationDelegate {
         self.statusItem = statusItem
         self.popover = popover
         statusItemPresenter = presenter
+        model.dismissPresentation = { [weak popover] in
+            guard let popover, popover.isShown else { return }
+            popover.performClose(nil)
+        }
 
         #if DEBUG
         if visualFixtureState != nil {

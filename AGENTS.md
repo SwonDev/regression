@@ -510,6 +510,37 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
     el juego pasara su comprobación y no pintara la geometría indirecta —un fallo silencioso, que
     es exactamente lo que este proyecto no produce—. Si una característica de MoltenVK falta, la
     salida es implementarla de verdad o declarar el título incompatible.
+66. **Un juego que renderiza negro con el audio sonando es un fallo de compilación de pipeline,
+    no un crash.** El log del propio juego lo dice en su primera línea de error
+    (`DxvkGraphicsPipeline: Failed to compile pipeline`), y el error real de Metal sale con
+    `MVK_CONFIG_LOG_LEVEL=4`. El `d3d9` de DXVK declara el sampler normal y el de comparación de
+    profundidad **sobre el mismo binding**; Metal no admite dos samplers en un índice, así que
+    cualquier juego D3D9 con *shadow mapping* por hardware pierde **todas** sus pipelines. La
+    salida es enrutar ese proceso —y solo ese— al `d3d9` builtin de Wine. Ver
+    `docs/games/sonic-adventure-2.md`.
+67. **La activación de una app no la decide la app: macOS 14 exige que se la cedan.** Wine tiene su
+    propio protocolo entre procesos del mismo prefijo (`WineAppWillActivateNotification` →
+    `yieldActivationToApplication:`). Regression **participa en él** desde `WineActivationHandoff`.
+    Si al lanzar hay delante una app que no es de Wine, nadie cede y el juego queda visible pero
+    **sin teclado ni ratón**: no es un juego colgado. Regression se activa al pulsar «Jugar» —el
+    usuario acaba de interactuar con ella— y cierra su popover, que si no retiene la ventana *key*
+    y se queda las teclas del juego.
+68. **Una ventana frontmost no es una ventana *key*, y `AXFocused` no los distingue.** Devuelve
+    `true` en los dos casos. Lo único que lo acredita es si las pulsaciones llegan a Wine
+    (`WINEDEBUG=+key` → `macdrv_ToUnicodeEx` / `WM_CHAR`). Además, `osascript … set frontmost of
+    process` **puede fallar en silencio** con un proceso de Wine: comprueba el frontmost después,
+    nunca lo des por hecho.
+69. **Antes de diagnosticar el foco, mira el orden de ventanas.** El diálogo de configuración de
+    Sonic Adventure 2 se abre detrás de la ventana de Steam, que ocupa la pantalla: los clics
+    aterrizaban en Steam y parecía que el juego no arrancaba. `screencapture -l` captura la ventana
+    aunque esté tapada, así que una captura correcta no prueba que la ventana reciba los clics.
+70. **El inventario tecnológico es evidencia, no una puerta.** Un inventario que excede su
+    presupuesto avisa y el lanzamiento continúa; rechazar el lanzamiento por ello impedía jugar a
+    un título por el mero tamaño de su carpeta.
+71. **Refrescar los PIN no puede borrar evidencia que no se ha podido rederivar.**
+    `build/release-runtime-pins.txt` se reescribe entero, así que saltarse la línea de un artefacto
+    que el builder no acredita la eliminaba en silencio y dejaba sin acreditar algo que **no había
+    cambiado**. La línea anterior se arrastra tal cual.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 

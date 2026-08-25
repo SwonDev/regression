@@ -226,7 +226,7 @@ verify_release_1_12_development_runtime_authority()
         "4e6822021df7a1147c109fd879c180049b2c1d7537d8eb7a11d379f6a72c0991:tools/wine/wine:bin/wine"
         "9e67095e59ff44d0a519d611037953de79d510b064bf79ea7d283d2251ae33a1:server/wineserver:bin/wineserver"
         "7954955be20e8b3ea7714ca62f3cd256ab867e43517b2edd6d96f2ec0b398bcc:loader/wine:lib/wine/x86_64-unix/wine"
-        "81e613bac1ce8292e81497d8c9b54be54c6d6551a9e651df7e75afd4b7c2bb04:dlls/ntdll/ntdll.so:lib/wine/x86_64-unix/ntdll.so"
+        "800ee007f1292ca2cb3cde9b9741082adea737de77abcb8228d27ba0ffce7ed5:dlls/ntdll/ntdll.so:lib/wine/x86_64-unix/ntdll.so"
     )
 
     # El árbol de compilación pesa gigabytes y nunca se versiona, así que acaba

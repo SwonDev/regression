@@ -289,7 +289,19 @@ screencapture -x -l <CGWindowID> /tmp/check.png   # capturar y MIRAR la imagen
     `remotecache.vdf` declara archivos sincronizados que no existen en la carpeta de guardado,
     Steam no los rebaja y el juego abandona. Se copian desde `userdata/<id>/<appid>/remote/` con
     `cp -p`. Ver `docs/games/core-keeper.md`.
-34. **Ante «me lo has roto», A/B de una variable antes que argumentar.** Los backups de
+34. **Negro con música = pipelines que no compilan, no un crash.** El `d3d9` de DXVK declara el
+    sampler normal y el de sombra sobre el mismo binding y Metal no admite dos samplers en un
+    índice: cualquier juego D3D9 con shadow mapping por hardware pierde todas sus pipelines. Se
+    enruta ese proceso —y solo ese— al `d3d9` builtin de Wine. Ver `docs/games/sonic-adventure-2.md`.
+35. **macOS 14 no deja que una app se ponga al frente sola: hay que cederle la activación.**
+    Regression participa en el protocolo de Wine (`WineActivationHandoff`), se activa al pulsar
+    «Jugar» y cierra su popover —que si no retiene la ventana *key*—. Sin eso, el juego sale
+    delante pero **sin teclado ni ratón**, y parece colgado. Ver `docs/games/critadel.md`.
+36. **Frontmost no es *key*, y `AXFocused` no los distingue.** Solo lo acredita si las teclas llegan
+    a Wine. Y `osascript … set frontmost` puede fallar en silencio con procesos de Wine: verifica
+    después. Antes de culpar al foco, mira el **orden de ventanas**: `screencapture -l` captura una
+    ventana tapada, así que una captura buena no prueba que reciba clics.
+37. **Ante «me lo has roto», A/B de una variable antes que argumentar.** Los backups de
     `install-runtime-canonical.sh` traen runtime, PIN, `ComponentHealth` y verificadores: revertir
     entero y reproducir es un experimento limpio. Razonar por qué algo «no puede» ser la causa no
     es evidencia.

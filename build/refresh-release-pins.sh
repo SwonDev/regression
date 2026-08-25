@@ -162,12 +162,30 @@ done
 # evidencia mínima sí cabe en el repositorio y es lo único que hace falta.
 PROTECTED="$ROOT/build/verify-protected-state.sh"
 builder_lines=()
+
+# Cuando un binario del builder no puede acreditar el runtime instalado, su PIN se conserva.
+# La evidencia tenía que conservarse igual: el fichero se reescribe entero al final, así que
+# saltarse la línea la borraba en silencio y dejaba sin acreditar un artefacto que no había
+# cambiado. Se arrastra la línea anterior, que sigue siendo la buena.
+preserved_evidence() {
+    [[ -f "$EVIDENCE" ]] || return 1
+    awk -v path="$1" '$1 !~ /^#/ && $4 == path { print; exit }' "$EVIDENCE"
+}
+
+keep_previous_evidence() {
+    local line
+    line="$(preserved_evidence "$1")" || return 0
+    [[ -n "$line" ]] || return 0
+    builder_lines+=("$line")
+    REPORT+=("      se conserva su evidencia anterior")
+}
 for entry in "${BUILDER_ENTRIES[@]}"; do
     build_relative="${entry%%:*}"
     app_relative="${entry##*:}"
     builder_file="$BUILDER/$build_relative"
     if [[ ! -f "$builder_file" ]]; then
         REPORT+=("  ! builder ausente para $build_relative (se conserva el PIN actual)")
+        keep_previous_evidence "$app_relative"
         continue
     fi
     # Un binario del builder solo puede acreditar el runtime instalado si ambos
@@ -178,11 +196,13 @@ for entry in "${BUILDER_ENTRIES[@]}"; do
     if ! builder_norm="$(normalized "$builder_file")" \
         || ! bundle_norm="$(normalized "$WINE_ROOT/$app_relative")"; then
         REPORT+=("  ! no se pudo normalizar $build_relative")
+        keep_previous_evidence "$app_relative"
         continue
     fi
     if [[ "$builder_norm" != "$bundle_norm" ]]; then
         REPORT+=("  ! $build_relative del builder NO corresponde al runtime instalado")
         REPORT+=("      se conserva su PIN actual; recompila e instala ese binario")
+        keep_previous_evidence "$app_relative"
         continue
     fi
     actual="$(sha "$builder_file")"

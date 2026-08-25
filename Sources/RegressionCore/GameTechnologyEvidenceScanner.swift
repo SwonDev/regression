@@ -125,10 +125,15 @@ public struct GameTechnologyEvidenceReport: Codable, Equatable, Sendable {
 }
 
 struct GameTechnologyScanLimits: Equatable, Sendable {
+    // El inventario sigue acotado, pero 4096 entradas no dan para un juego real: Sonic
+    // Adventure 2 tiene 4534 y **no se podía lanzar** —el escaneo excedía el presupuesto, la
+    // proyección fallaba y el error abortaba el arranque—. El inventario es evidencia de
+    // diagnóstico, no una puerta de seguridad, así que su presupuesto tiene que cubrir juegos
+    // normales en vez de convertirse en un veto por número de archivos.
     static let standard = Self(
         maximumDepth: 7,
-        maximumEntries: 4_096,
-        maximumMetadataBytes: 512 * 1_024
+        maximumEntries: 262_144,
+        maximumMetadataBytes: 8 * 1_024 * 1_024
     )
 
     let maximumDepth: Int

@@ -277,6 +277,21 @@ prepare_process_dll_isolation_routes()
     export REGRESSION_PROCESS_DLL_ISOLATION_ROUTE_2_DLL="EOSOVH-Win64-Shipping"
 }
 
+prepare_process_builtin_dll_routes()
+{
+    # La acción también es mínima y del signo contrario: preferir el módulo builtin de Wine
+    # dentro de un ejecutable exacto. Wine solo acepta `d3d9`, así que una ruta no puede
+    # seleccionar un módulo arbitrario ni un modo de carga.
+    #
+    # Sonic Adventure 2 renderizaba negro con música: el d3d9 de DXVK declara el sampler
+    # normal y el de comparación de profundidad en el mismo binding, Metal no admite dos
+    # samplers en un índice y **todas** las pipelines fallaban al compilar. wined3d tiene
+    # samplers de sombra nativos sobre OpenGL y el juego pinta. Ver docs/games/sonic-adventure-2.md.
+    export REGRESSION_PROCESS_BUILTIN_DLL_ROUTE_COUNT=1
+    export REGRESSION_PROCESS_BUILTIN_DLL_ROUTE_0_EXECUTABLE="sonic2app.exe"
+    export REGRESSION_PROCESS_BUILTIN_DLL_ROUTE_0_DLL="d3d9"
+}
+
 # Steam hereda únicamente rutas detectadas por una receta compilada y acotada.
 # Tanto el botón de Regression como «Jugar» dentro de Steam pasan por el mismo
 # bootstrap. El router sustituye la imagen estándar de Unreal por el Shipping
@@ -293,6 +308,7 @@ if ! prepare_windows_media_component "$windows_media_app_id"; then
 fi
 prepare_compiled_game_state_repairs "$windows_media_app_id"
 prepare_process_dll_isolation_routes
+prepare_process_builtin_dll_routes
 
 windows_media_runtime_lease_file="$CONTROLLER_QUERY_DIR/windows-media-runtime-lease"
 windows_media_runtime_lease_arguments=(acquire-windows-media-runtime-lease --owner-pid $$)
