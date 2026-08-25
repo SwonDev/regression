@@ -1,0 +1,56 @@
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.h
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.h
+@@ -150,6 +150,18 @@
+ 	/** Returns the number of descriptor sets in this pipeline layout. */
+ 	uint32_t getDescriptorSetCount() { return _descriptorSetCount; }
+ 
++	/**
++	 * Records that the argument buffer of a descriptor set was missing while encoding, and returns
++	 * whether this is the first time for that set. Lets the encoder report the degradation once
++	 * instead of on every encode, which would be thousands of lines.
++	 */
++	bool shouldReportMissingArgumentBuffer(uint32_t descSetIndex) {
++		uint32_t bit = 1u << (descSetIndex & 31u);
++		if (_reportedMissingArgumentBuffers & bit) { return false; }
++		_reportedMissingArgumentBuffers |= bit;
++		return true;
++	}
++
+ 	/** Returns the pipeline cache used by this pipeline. */
+ 	MVKPipelineCache* getPipelineCache() { return _pipelineCache; }
+ 
+@@ -191,6 +203,7 @@
+ 	VkPipelineCreateFlags _flags;
+ 	uint32_t _xfbBufferIndex;
+ 	uint32_t _descriptorSetCount;
++	uint32_t _reportedMissingArgumentBuffers = 0;
+ 	bool _stageUsesPushConstants[kMVKShaderStageCount];
+ 	bool _fullImageViewSwizzle;
+ 	bool _hasValidMTLPipelineStates = true;
+--- a/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm
++++ b/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm
+@@ -736,7 +736,23 @@
+ 	uint32_t dsCnt = pipeline->getDescriptorSetCount();
+ 	for (uint32_t dsIdx = 0; dsIdx < dsCnt; dsIdx++) {
+ 		auto* descSet = _boundDescriptorSets[dsIdx];
+-		if ( !(descSet && descSet->hasMetalArgumentBuffer()) ) { continue; }
++		if ( !(descSet && descSet->hasMetalArgumentBuffer()) ) {
++			// Saltarse la ranura no es neutro: el shader declara ese argument buffer y lee punteros
++			// de dentro, así que se queda con punteros nulos y la primera desreferencia tumba la
++			// GPU sin dejar diagnóstico -- a la aplicación sólo le llega VK_ERROR_DEVICE_LOST. No
++			// se corrige aquí, pero deja de ser silencioso: se reporta una vez por pipeline y set.
++			// Sólo se avisa si el shader usa de verdad ese set: un layout vacío que la aplicación
++			// nunca enlaza es correcto y no debe generar ruido.
++			auto& usoDelShader = pipeline->getDescriptorBindingUse(dsIdx, stage);
++			bool loUsaElShader = usoDelShader.getIndexOfFirstEnabledBit() < usoDelShader.size();
++			if (loUsaElShader && pipeline->shouldReportMissingArgumentBuffer(dsIdx)) {
++				reportWarning(VK_ERROR_INITIALIZATION_FAILED,
++							  "El descriptor set %u no tiene argument buffer al codificar la etapa %d. "
++							  "Si el shader lee punteros de ese set, obtendrá nulos y la GPU fallará "
++							  "la dirección.", dsIdx, (int)stage);
++			}
++			continue;
++		}
+ 
+ 		auto* dsLayout = descSet->getLayout();
+ 		auto& resourceUsageDirtyDescs = _metalUsageDirtyDescriptors[dsIdx];

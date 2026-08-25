@@ -261,6 +261,15 @@ Lo que sigue sin reproducirse en el arnés es **la condición que deja ese set s
 orden de vinculación (sets antes que la pipeline), ni un layout compatible pero distinto, ni un set
 sencillamente no enlazado bastan por sí solos.
 
+**Y ese salto ha dejado de ser silencioso.** `patches/moltenvk-26.3.0-report-missing-argument-buffer.patch`
+hace que MoltenVK avise, con el número de set y la etapa, cuando se salta un argument buffer que el
+shader **sí usa** —sin ruido para los layouts vacíos que la aplicación legítimamente no enlaza, y
+una sola vez por pipeline en vez de miles—. Verificado con el arnés: avisa nombrando el set 4 cuando
+el shader lo usa y no está enlazado, y calla cuando lo está. Es lo que exige la regla 21 del
+proyecto: una degradación se propaga como incidencia tipada, no se traga. La próxima vez que
+aparezca, en este juego o en otro, el log dirá **qué** set falta en lugar de un `VK_ERROR_DEVICE_LOST`
+sin contexto.
+
 ### Aviso de método
 
 **La validación de GPU de Metal tapa este fallo**: enlaza recursos de relleno en las ranuras
@@ -278,7 +287,7 @@ diferencia de código: es una carrera cuya ventana depende de detalles del binar
 bash build/build-moltenvk.sh
 ```
 
-Extrae MoltenVK del tar FOSS oficial, aplica los tres parches en orden y compila. **No se compila
+Extrae MoltenVK del tar FOSS oficial, aplica los cuatro parches en orden y compila. **No se compila
 desde `sources-26.3.0/moltenvk` del checkout**: ese árbol lleva el SPIRV-Cross upstream en vez del
 de CodeWeavers y produce un traductor que acepta los parámetros de MoltenVK y los ignora en
 silencio. Se distingue con `grep -c for_mesh_pipeline External/SPIRV-Cross/spirv_msl.cpp`: el del

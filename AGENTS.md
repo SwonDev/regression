@@ -645,6 +645,17 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
     un descriptor set sin enlazar baste para provocar el fallo de dirección de Enshrouded, algo que
     dos correcciones a ciegas no habían conseguido decidir. Se amplía caso a caso; lanzar el juego
     es la comprobación final, no la primera.
+91. **Un salto silencioso en el traductor es una degradación, y se propaga.** MoltenVK se saltaba
+    sin decir nada el argument buffer de un descriptor set no enlazado; el shader se quedaba con
+    punteros nulos y la GPU caía dejando sólo `VK_ERROR_DEVICE_LOST`. Ahora lo reporta con el set y
+    la etapa, sólo cuando el shader usa ese set y una vez por pipeline. Es la regla 21 aplicada al
+    runtime: lo que se degrada se dice. Verificado con el arnés, no supuesto.
+92. **Los shaders de un juego se pueden estudiar sin ejecutarlo.** Muchos motores guardan el SPIR-V
+    sin comprimir en sus paquetes: `tools/research/shader-extract/` lo localiza por número mágico y
+    lo convierte a MSL con las mismas opciones del runtime (`-mab`), así que la numeración de líneas
+    coincide con la que reporta `MTL_SHADER_VALIDATION`. De Enshrouded salieron 6 050 módulos y con
+    ellos la línea exacta que fallaba. Antes de pedir otra ejecución del juego, mira si el shader
+    está en disco.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 

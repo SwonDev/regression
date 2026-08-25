@@ -18,6 +18,7 @@ PATCHES=(
     moltenvk-26.3.0-draw-indirect-count.patch
     moltenvk-26.3.0-draw-index-builtin.patch
     moltenvk-26.3.0-block-texel-view.patch
+    moltenvk-26.3.0-report-missing-argument-buffer.patch
 )
 
 step() { printf '\n==> %s\n' "$1"; }
