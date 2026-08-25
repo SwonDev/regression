@@ -281,6 +281,28 @@ rango y estaba sin enlazar.
 Es decir: **el primer arranque del juego con este MoltenVK responde la pregunta que queda**, y la
 responde en una línea del log en vez de en horas de bisección.
 
+### Cómo retomarlo
+
+El expediente se cierra aquí por decisión del usuario, con el trabajo en un punto en el que
+continuar cuesta un arranque y no una investigación. Para retomarlo:
+
+1. Instalar el MoltenVK con los cuatro parches: `bash build/build-moltenvk.sh` y copiar el dylib
+   sobre `/Applications/Regression.app/Contents/SharedSupport/wine-root/lib/runtime/`, firmando
+   después con `Scripts/sign_regression.sh`. **Antes, respaldar el publicado**, que es el que hay
+   instalado hoy.
+2. Lanzar el juego una vez y buscar en el log del motor:
+
+   ```text
+   El descriptor set N no tiene argument buffer al codificar la etapa E
+   ```
+
+   Ese `N` es la respuesta. Si no aparece ningún aviso, el índice cae fuera de
+   `getDescriptorSetCount()` y la causa es la segunda de las dos: el layout de la pipeline declara
+   menos sets de los que el shader referencia.
+3. Reproducir esa forma concreta en `tools/research/moltenvk-probe/` —cinco patrones ya cubiertos—
+   y corregir sobre el reproductor, que tarda un segundo por intento.
+4. Solo entonces, matriz de validación completa y release.
+
 **Y ese salto ha dejado de ser silencioso.** `patches/moltenvk-26.3.0-report-missing-argument-buffer.patch`
 hace que MoltenVK avise, con el número de set y la etapa, cuando se salta un argument buffer que el
 shader **sí usa** —sin ruido para los layouts vacíos que la aplicación legítimamente no enlaza, y
