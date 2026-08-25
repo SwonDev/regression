@@ -564,6 +564,15 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
     algunos juegos antes siquiera de crear su ventana (reproducido con Runika, parado justo tras
     inicializar su input). Las dos mitades se separan, y cada cambio de foco se valida contra
     **ambos** casos: un juego que necesita el foco y otro que se colgaba.
+77. **El MoltenVK de este runtime es el fork de CodeWeavers y no se puede recompilar con el
+    SPIRV-Cross oficial.** MoltenVK **usa** `for_mesh_pipeline`, `input_primitive_type`,
+    `add_texture_buffer_offsets`, `texture_offset_buffer_index` y un `MSLShaderInterfaceVariable`
+    con `binding`, `offset`, `stride` y `normalized`; el `External/SPIRV-Cross` del árbol es el
+    upstream con esos campos añadidos **como stubs**, así que MoltenVK los rellena y el traductor
+    los ignora en silencio. Publicar ese binario pondría a **todos** los juegos D3D9 sobre un
+    traductor que descarta parámetros sin avisar. Antes de sustituir `libMoltenVK.dylib` hay que
+    acreditar que su SPIRV-Cross implementa de verdad lo que MoltenVK le pide. Ver
+    `docs/games/enshrouded.md`.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 

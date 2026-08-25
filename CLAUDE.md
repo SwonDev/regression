@@ -425,8 +425,17 @@ exacto que recibirá GitHub.** Actualizar también la nota de contrato en `READM
     notificación, en vez de una línea discreta que el usuario no llegaba a ver.
 - **Verificados en esta sesión sobre 1.12.7**: Sonic Adventure 2, Critadel, Wayfinder (pantalla de
   perfiles con partidas), Redfall, Beyond Contact, Runika, The Last Spell, Fields of Mistria,
-  The Witcher 3 y la tienda de Steam. **Enshrouded sigue siendo un límite real** de MoltenVK
-  (`drawIndirectCount`): responde «No compatible graphics device found» y no se maquilla.
+  The Witcher 3 y la tienda de Steam.
+- **Enshrouded: el bloqueo documentado está resuelto, pero no se puede publicar.**
+  `vkCmdDrawIndirectCount` y su variante indexada están **implementados** contra las fuentes FOSS
+  oficiales (`patches/moltenvk-26.3.0-draw-indirect-count.patch`): un kernel recorta los argumentos
+  indirectos con el contador de la GPU y anula los draws sobrantes. Con ese MoltenVK el juego pasa
+  de descartar el dispositivo a `Created Vulkan device!` y llega a compilar pipelines. **No se
+  publica** porque el MoltenVK de este runtime es el fork de CodeWeavers y usa campos que el
+  `External/SPIRV-Cross` del árbol solo tiene como *stubs*: publicarlo pondría a todos los juegos
+  D3D9 sobre un traductor que ignora parámetros en silencio (regla 77 de `AGENTS.md`). Después,
+  además, el juego topa con un bug de SPIRV-Cross al traducir un shader de cómputo. Ver
+  `docs/games/enshrouded.md`.
 - **27 certificaciones activas**, todas fijadas en el catálogo compilado (revisión `2026-08-19.2`).
   Con expediente público: Grim Dawn, Clair Obscur, DragonSword, Hell Clock, Heroes of Hammerwatch II,
   Secrets of Grindea, Fields of Mistria, Titan Quest II, Forsaken Isle, Dragonwilds, Tinkerlands,

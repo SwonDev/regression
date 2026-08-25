@@ -1,0 +1,410 @@
+--- a/MoltenVK/MoltenVK/Commands/MVKCmdDraw.h
++++ b/MoltenVK/MoltenVK/Commands/MVKCmdDraw.h
+@@ -142,6 +142,12 @@
+ 						uint32_t count,
+ 						uint32_t stride);
+ 
++	VkResult setContent(MVKCommandBuffer* cmdBuff,
++						id<MTLBuffer> indirectMTLBuff,
++						VkDeviceSize indirectMTLBuffOffset,
++						uint32_t count,
++						uint32_t stride);
++
+ 	void encode(MVKCommandEncoder* cmdEncoder) override;
+ 
+ protected:
+@@ -186,3 +192,68 @@
+ 	uint32_t _drawCount;
+ 	uint32_t _directCmdFirstInstance;
+ };
++
++
++#pragma mark -
++#pragma mark MVKCmdDrawIndirectCount
++
++/**
++ * Dibujo indirecto cuyo número de draws vive en un buffer de la GPU.
++ *
++ * Metal no sabe variar el número de draws de un render encoder, pero un draw con cero vértices
++ * no dibuja nada. Así que el contador se aplica antes: un kernel copia los argumentos de los
++ * primeros `*countBuffer` draws y pone a cero el resto, y después se encodean `maxDrawCount`
++ * draws indirectos sobre ese buffer recortado. El resultado es exactamente el de Vulkan.
++ */
++class MVKCmdDrawIndirectCount : public MVKCommand {
++
++public:
++	VkResult setContent(MVKCommandBuffer* cmdBuff,
++						VkBuffer buffer,
++						VkDeviceSize offset,
++						VkBuffer countBuffer,
++						VkDeviceSize countBufferOffset,
++						uint32_t maxDrawCount,
++						uint32_t stride);
++
++	void encode(MVKCommandEncoder* cmdEncoder) override;
++
++protected:
++	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
++
++	id<MTLBuffer> _mtlIndirectBuffer;
++	VkDeviceSize _mtlIndirectBufferOffset;
++	id<MTLBuffer> _mtlCountBuffer;
++	VkDeviceSize _mtlCountBufferOffset;
++	uint32_t _mtlIndirectBufferStride;
++	uint32_t _maxDrawCount;
++};
++
++
++#pragma mark -
++#pragma mark MVKCmdDrawIndexedIndirectCount
++
++/** Igual que MVKCmdDrawIndirectCount, con argumentos indexados. */
++class MVKCmdDrawIndexedIndirectCount : public MVKCommand {
++
++public:
++	VkResult setContent(MVKCommandBuffer* cmdBuff,
++						VkBuffer buffer,
++						VkDeviceSize offset,
++						VkBuffer countBuffer,
++						VkDeviceSize countBufferOffset,
++						uint32_t maxDrawCount,
++						uint32_t stride);
++
++	void encode(MVKCommandEncoder* cmdEncoder) override;
++
++protected:
++	MVKCommandTypePool<MVKCommand>* getTypePool(MVKCommandPool* cmdPool) override;
++
++	id<MTLBuffer> _mtlIndirectBuffer;
++	VkDeviceSize _mtlIndirectBufferOffset;
++	id<MTLBuffer> _mtlCountBuffer;
++	VkDeviceSize _mtlCountBufferOffset;
++	uint32_t _mtlIndirectBufferStride;
++	uint32_t _maxDrawCount;
++};
+--- a/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
++++ b/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
+@@ -666,6 +666,27 @@
+ }
+ 
+ // Populates and encodes a MVKCmdDrawIndexedIndirect command, after populating indexed indirect buffers.
++VkResult MVKCmdDrawIndirect::setContent(MVKCommandBuffer* cmdBuff,
++										id<MTLBuffer> indirectMTLBuff,
++										VkDeviceSize indirectMTLBuffOffset,
++										uint32_t count,
++										uint32_t stride) {
++	_mtlIndirectBuffer = indirectMTLBuff;
++	_mtlIndirectBufferOffset = indirectMTLBuffOffset;
++	_mtlIndirectBufferStride = stride;
++	_drawCount = count;
++
++	auto& mtlFeats = cmdBuff->getMetalFeatures();
++	if ( !mtlFeats.indirectDrawing ) {
++		return cmdBuff->reportError(VK_ERROR_FEATURE_NOT_PRESENT, "vkCmdDrawIndirect(): The current device does not support indirect drawing.");
++	}
++	if (cmdBuff->_lastTessellationPipeline && !mtlFeats.indirectTessellationDrawing) {
++		return cmdBuff->reportError(VK_ERROR_FEATURE_NOT_PRESENT, "vkCmdDrawIndirect(): The current device does not support indirect tessellated drawing.");
++	}
++
++	return VK_SUCCESS;
++}
++
+ void MVKCmdDrawIndirect::encodeIndexedIndirect(MVKCommandEncoder* cmdEncoder) {
+ 
+ 	// Create an indexed indirect buffer to be populated from the non-indexed indirect buffer.
+@@ -1425,5 +1446,141 @@
+             }
+         }
+     }
++}
++
++
++#pragma mark -
++#pragma mark MVKCmdDrawIndirectCount
++
++// El contador vive en la GPU y puede escribirse en el mismo command buffer, así que no se puede
++// leer desde la CPU al grabar. Se recorta en la GPU justo antes de dibujar: un kernel copia los
++// argumentos de los draws por debajo del contador y anula el resto poniendo su cuenta de vértices
++// (o de índices) a cero, que en Metal es un draw que no dibuja nada. Después se encodean
++// `maxDrawCount` draws indirectos sobre ese buffer ya recortado.
++template<typename CmdType>
++static void mvkEncodeIndirectCountDraw(MVKCommandEncoder* cmdEncoder,
++									   bool indexed,
++									   id<MTLBuffer> indirectBuff,
++									   VkDeviceSize indirectBuffOffset,
++									   uint32_t indirectBuffStride,
++									   id<MTLBuffer> countBuff,
++									   VkDeviceSize countBuffOffset,
++									   uint32_t maxDrawCount,
++									   uint32_t destStride,
++									   CmdType&& encodeDraw) {
++	if ( !maxDrawCount ) { return; }
++
++	cmdEncoder->restartMetalRenderPassIfNeeded();
++
++	auto* clampedBuff = cmdEncoder->getTempMTLBuffer(destStride * maxDrawCount, true);
++
++	cmdEncoder->encodeStoreActions(true);
++	id<MTLComputeCommandEncoder> mtlClampEncoder = cmdEncoder->getMTLComputeEncoder(kMVKCommandUseDrawIndirectConvertBuffers);
++	id<MTLComputePipelineState> mtlClampState = cmdEncoder->getCommandEncodingPool()->getCmdDrawIndirectClampCountMTLComputePipelineState(indexed);
++	[mtlClampEncoder setComputePipelineState: mtlClampState];
++	[mtlClampEncoder setBuffer: indirectBuff offset: indirectBuffOffset atIndex: 0];
++	[mtlClampEncoder setBuffer: clampedBuff->_mtlBuffer offset: clampedBuff->_offset atIndex: 1];
++	cmdEncoder->setComputeBytes(mtlClampEncoder, &indirectBuffStride, sizeof(indirectBuffStride), 2);
++	cmdEncoder->setComputeBytes(mtlClampEncoder, &maxDrawCount, sizeof(maxDrawCount), 3);
++	[mtlClampEncoder setBuffer: countBuff offset: countBuffOffset atIndex: 4];
++	if (cmdEncoder->getMetalFeatures().nonUniformThreadgroups) {
++#if MVK_MACOS_OR_IOS
++		[mtlClampEncoder dispatchThreads: MTLSizeMake(maxDrawCount, 1, 1)
++				   threadsPerThreadgroup: MTLSizeMake(mtlClampState.threadExecutionWidth, 1, 1)];
++#endif
++	} else {
++		[mtlClampEncoder dispatchThreadgroups: MTLSizeMake(mvkCeilingDivide<NSUInteger>(maxDrawCount, mtlClampState.threadExecutionWidth), 1, 1)
++						threadsPerThreadgroup: MTLSizeMake(mtlClampState.threadExecutionWidth, 1, 1)];
++	}
++
++	// Se vuelve a renderizar con el buffer ya recortado.
++	cmdEncoder->beginMetalRenderPass(kMVKCommandUseRestartSubpass);
++	encodeDraw(clampedBuff);
+ }
+ 
++VkResult MVKCmdDrawIndirectCount::setContent(MVKCommandBuffer* cmdBuff,
++											 VkBuffer buffer,
++											 VkDeviceSize offset,
++											 VkBuffer countBuffer,
++											 VkDeviceSize countBufferOffset,
++											 uint32_t maxDrawCount,
++											 uint32_t stride) {
++	auto* mvkBuff = (MVKBuffer*)buffer;
++	auto* mvkCountBuff = (MVKBuffer*)countBuffer;
++	_mtlIndirectBuffer = mvkBuff->getMTLBuffer();
++	_mtlIndirectBufferOffset = mvkBuff->getMTLBufferOffset() + offset;
++	_mtlCountBuffer = mvkCountBuff->getMTLBuffer();
++	_mtlCountBufferOffset = mvkCountBuff->getMTLBufferOffset() + countBufferOffset;
++	_mtlIndirectBufferStride = stride;
++	_maxDrawCount = maxDrawCount;
++
++	auto& mtlFeats = cmdBuff->getMetalFeatures();
++	if ( !mtlFeats.indirectDrawing ) {
++		return cmdBuff->reportError(VK_ERROR_FEATURE_NOT_PRESENT, "vkCmdDrawIndirectCount(): The current device does not support indirect drawing.");
++	}
++
++	return VK_SUCCESS;
++}
++
++void MVKCmdDrawIndirectCount::encode(MVKCommandEncoder* cmdEncoder) {
++	const uint32_t destStride = sizeof(MTLDrawPrimitivesIndirectArguments);
++	mvkEncodeIndirectCountDraw(cmdEncoder, false,
++							   _mtlIndirectBuffer, _mtlIndirectBufferOffset, _mtlIndirectBufferStride,
++							   _mtlCountBuffer, _mtlCountBufferOffset,
++							   _maxDrawCount, destStride,
++							   [&](const MVKMTLBufferAllocation* clampedBuff) {
++		MVKCmdDrawIndirect diCmd;
++		diCmd.setContent(cmdEncoder->_cmdBuffer,
++						 clampedBuff->_mtlBuffer,
++						 clampedBuff->_offset,
++						 _maxDrawCount,
++						 destStride);
++		diCmd.encode(cmdEncoder);
++	});
++}
++
++
++#pragma mark -
++#pragma mark MVKCmdDrawIndexedIndirectCount
++
++VkResult MVKCmdDrawIndexedIndirectCount::setContent(MVKCommandBuffer* cmdBuff,
++													VkBuffer buffer,
++													VkDeviceSize offset,
++													VkBuffer countBuffer,
++													VkDeviceSize countBufferOffset,
++													uint32_t maxDrawCount,
++													uint32_t stride) {
++	auto* mvkBuff = (MVKBuffer*)buffer;
++	auto* mvkCountBuff = (MVKBuffer*)countBuffer;
++	_mtlIndirectBuffer = mvkBuff->getMTLBuffer();
++	_mtlIndirectBufferOffset = mvkBuff->getMTLBufferOffset() + offset;
++	_mtlCountBuffer = mvkCountBuff->getMTLBuffer();
++	_mtlCountBufferOffset = mvkCountBuff->getMTLBufferOffset() + countBufferOffset;
++	_mtlIndirectBufferStride = stride;
++	_maxDrawCount = maxDrawCount;
++
++	auto& mtlFeats = cmdBuff->getMetalFeatures();
++	if ( !mtlFeats.indirectDrawing ) {
++		return cmdBuff->reportError(VK_ERROR_FEATURE_NOT_PRESENT, "vkCmdDrawIndexedIndirectCount(): The current device does not support indirect drawing.");
++	}
++
++	return VK_SUCCESS;
++}
++
++void MVKCmdDrawIndexedIndirectCount::encode(MVKCommandEncoder* cmdEncoder) {
++	const uint32_t destStride = sizeof(MTLDrawIndexedPrimitivesIndirectArguments);
++	mvkEncodeIndirectCountDraw(cmdEncoder, true,
++							   _mtlIndirectBuffer, _mtlIndirectBufferOffset, _mtlIndirectBufferStride,
++							   _mtlCountBuffer, _mtlCountBufferOffset,
++							   _maxDrawCount, destStride,
++							   [&](const MVKMTLBufferAllocation* clampedBuff) {
++		MVKCmdDrawIndexedIndirect diiCmd;
++		diiCmd.setContent(cmdEncoder->_cmdBuffer,
++						  clampedBuff->_mtlBuffer,
++						  clampedBuff->_offset,
++						  _maxDrawCount,
++						  destStride,
++						  0);
++		diiCmd.encode(cmdEncoder);
++	});
++}
+--- a/MoltenVK/MoltenVK/Commands/MVKCommandTypePools.def
++++ b/MoltenVK/MoltenVK/Commands/MVKCommandTypePools.def
+@@ -115,6 +115,8 @@
+ MVK_CMD_TYPE_POOL(DrawIndexed)
+ MVK_CMD_TYPE_POOL(DrawIndirect)
+ MVK_CMD_TYPE_POOL(DrawIndexedIndirect)
++MVK_CMD_TYPE_POOL(DrawIndirectCount)
++MVK_CMD_TYPE_POOL(DrawIndexedIndirectCount)
+ MVK_CMD_TYPE_POOLS_FROM_THRESHOLD(CopyImage, 1)
+ MVK_CMD_TYPE_POOLS_FROM_THRESHOLD(BlitImage, 1)
+ MVK_CMD_TYPE_POOLS_FROM_THRESHOLD(ResolveImage, 1)
+--- a/MoltenVK/MoltenVK/Commands/MVKCommandPipelineStateFactoryShaderSource.h
++++ b/MoltenVK/MoltenVK/Commands/MVKCommandPipelineStateFactoryShaderSource.h
+@@ -349,8 +349,45 @@
+     const device auto& src = *reinterpret_cast<const device MTLDrawPrimitivesIndirectArguments*>(srcBuff + idx * srcStride);\n\
+     destBuff[idx] = src;                                                                                        \n\
+     destBuff[idx].instanceCount *= viewCount;                                                                   \n\
++}                                                                                                               \n\
++                                                                                                                \n\
++kernel void cmdDrawIndirectClampCount(const device char* srcBuff [[buffer(0)]],                                 \n\
++                                      device MTLDrawPrimitivesIndirectArguments* destBuff [[buffer(1)]],        \n\
++                                      constant uint32_t& srcStride [[buffer(2)]],                               \n\
++                                      constant uint32_t& maxDrawCount [[buffer(3)]],                            \n\
++                                      const device uint32_t* countBuff [[buffer(4)]],                           \n\
++                                      uint idx [[thread_position_in_grid]]) {                                   \n\
++    if (idx >= maxDrawCount) { return; }                                                                        \n\
++    device auto& dst = destBuff[idx];                                                                           \n\
++    if (idx >= countBuff[0]) {                                                                                  \n\
++        dst.vertexCount = 0;                                                                                    \n\
++        dst.instanceCount = 0;                                                                                  \n\
++        dst.vertexStart = 0;                                                                                    \n\
++        dst.baseInstance = 0;                                                                                   \n\
++        return;                                                                                                 \n\
++    }                                                                                                           \n\
++    dst = *reinterpret_cast<const device MTLDrawPrimitivesIndirectArguments*>(srcBuff + idx * srcStride);       \n\
+ }                                                                                                               \n\
+                                                                                                                 \n\
++kernel void cmdDrawIndexedIndirectClampCount(const device char* srcBuff [[buffer(0)]],                          \n\
++                                             device MTLDrawIndexedPrimitivesIndirectArguments* destBuff [[buffer(1)]],\n\
++                                             constant uint32_t& srcStride [[buffer(2)]],                        \n\
++                                             constant uint32_t& maxDrawCount [[buffer(3)]],                     \n\
++                                             const device uint32_t* countBuff [[buffer(4)]],                    \n\
++                                             uint idx [[thread_position_in_grid]]) {                            \n\
++    if (idx >= maxDrawCount) { return; }                                                                        \n\
++    device auto& dst = destBuff[idx];                                                                           \n\
++    if (idx >= countBuff[0]) {                                                                                  \n\
++        dst.indexCount = 0;                                                                                     \n\
++        dst.instanceCount = 0;                                                                                  \n\
++        dst.indexStart = 0;                                                                                     \n\
++        dst.baseVertex = 0;                                                                                     \n\
++        dst.baseInstance = 0;                                                                                   \n\
++        return;                                                                                                 \n\
++    }                                                                                                           \n\
++    dst = *reinterpret_cast<const device MTLDrawIndexedPrimitivesIndirectArguments*>(srcBuff + idx * srcStride);\n\
++}                                                                                                               \n\
++                                                                                                                \n\
+ kernel void cmdDrawIndexedIndirectConvertBuffers(const device char* srcBuff [[buffer(0)]],                      \n\
+                                                  device MTLDrawIndexedPrimitivesIndirectArguments* destBuff [[buffer(1)]],\n\
+                                                  constant uint32_t& srcStride [[buffer(2)]],                    \n\
+--- a/MoltenVK/MoltenVK/Commands/MVKCommandResourceFactory.h
++++ b/MoltenVK/MoltenVK/Commands/MVKCommandResourceFactory.h
+@@ -468,6 +468,10 @@
+ 
+ 	/** Returns a new MTLComputePipelineState for populating an indirect index buffer from a non-indexed indirect buffer. */
+ 	id<MTLComputePipelineState> newCmdDrawIndirectPopulateIndexesMTLComputePipelineState(MVKVulkanAPIDeviceObject* owner);
++
++	/** Devuelve la pipeline que recorta los argumentos indirectos por un contador en la GPU. */
++	id<MTLComputePipelineState> newCmdDrawIndirectClampCountMTLComputePipelineState(bool indexed,
++																				   MVKVulkanAPIDeviceObject* owner);
+ 
+ 	/** Returns a new MTLComputePipelineState for converting the contents of an indirect buffer. */
+ 	id<MTLComputePipelineState> newCmdDrawIndirectConvertBuffersMTLComputePipelineState(bool indexed,
+--- a/MoltenVK/MoltenVK/Commands/MVKCommandResourceFactory.mm
++++ b/MoltenVK/MoltenVK/Commands/MVKCommandResourceFactory.mm
+@@ -592,6 +592,13 @@
+ 	return newMTLComputePipelineState("cmdDrawIndirectPopulateIndexes", owner);
+ }
+ 
++id<MTLComputePipelineState> MVKCommandResourceFactory::newCmdDrawIndirectClampCountMTLComputePipelineState(bool indexed,
++																										  MVKVulkanAPIDeviceObject* owner) {
++	return newMTLComputePipelineState(indexed
++									  ? "cmdDrawIndexedIndirectClampCount"
++									  : "cmdDrawIndirectClampCount", owner);
++}
++
+ id<MTLComputePipelineState> MVKCommandResourceFactory::newCmdDrawIndirectTessConvertBuffersMTLComputePipelineState(bool indexed,
+ 																												   MVKVulkanAPIDeviceObject* owner) {
+ 	return newMTLComputePipelineState(indexed
+--- a/MoltenVK/MoltenVK/Commands/MVKCommandEncodingPool.h
++++ b/MoltenVK/MoltenVK/Commands/MVKCommandEncodingPool.h
+@@ -121,6 +121,9 @@
+ 	/** Returns a MTLComputePipelineState for populating an indirect index buffer from a non-indexed indirect buffer. */
+ 	id<MTLComputePipelineState> getCmdDrawIndirectPopulateIndexesMTLComputePipelineState();
+ 
++	/** Pipeline que recorta los argumentos indirectos con el contador que vive en la GPU. */
++	id<MTLComputePipelineState> getCmdDrawIndirectClampCountMTLComputePipelineState(bool indexed);
++
+ 	/** Returns a MTLComputePipelineState for converting the contents of an indirect buffer. */
+ 	id<MTLComputePipelineState> getCmdDrawIndirectConvertBuffersMTLComputePipelineState(bool indexed);
+ 
+@@ -166,6 +169,7 @@
+     id<MTLComputePipelineState> _mtlCopyBufferBytesComputePipelineState = nil;
+ 	id<MTLComputePipelineState> _mtlFillBufferComputePipelineState = nil;
+ 	id<MTLComputePipelineState> _mtlDrawIndirectPopulateIndexesComputePipelineState = nil;
++	id<MTLComputePipelineState> _mtlDrawIndirectClampCountComputePipelineState[2] = { nil, nil };
+ 	// 6 slots, first 3 for non array textures, last 3 for array textures
+ 	static constexpr uint32_t kColorImageCount = 6u;
+ 	id<MTLComputePipelineState> _mtlClearColorImageComputePipelineState[kColorImageCount] = {nil, nil, nil, nil, nil, nil};
+--- a/MoltenVK/MoltenVK/Commands/MVKCommandEncodingPool.mm
++++ b/MoltenVK/MoltenVK/Commands/MVKCommandEncodingPool.mm
+@@ -145,6 +145,11 @@
+ 	MVK_ENC_REZ_ACCESS(_mtlDrawIndirectPopulateIndexesComputePipelineState, newCmdDrawIndirectPopulateIndexesMTLComputePipelineState(_commandPool));
+ }
+ 
++id<MTLComputePipelineState> MVKCommandEncodingPool::getCmdDrawIndirectClampCountMTLComputePipelineState(bool indexed) {
++	MVK_ENC_REZ_ACCESS(_mtlDrawIndirectClampCountComputePipelineState[indexed ? 1 : 0],
++					   newCmdDrawIndirectClampCountMTLComputePipelineState(indexed, _commandPool));
++}
++
+ id<MTLComputePipelineState> MVKCommandEncodingPool::getCmdDrawIndirectConvertBuffersMTLComputePipelineState(bool indexed) {
+ 	MVK_ENC_REZ_ACCESS(_mtlDrawIndirectConvertBuffersComputePipelineState[indexed ? 1 : 0], newCmdDrawIndirectConvertBuffersMTLComputePipelineState(indexed, _commandPool));
+ }
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm
+@@ -2628,7 +2628,10 @@
+ 	// Additional non-extension Vulkan 1.2 features.
+ 	mvkClear(&_vulkan12FeaturesNoExt);		// Start with everything cleared
+ 	_vulkan12FeaturesNoExt.samplerMirrorClampToEdge = _metalFeatures.samplerMirrorClampToEdge;
+-	_vulkan12FeaturesNoExt.drawIndirectCount = false;
++	// `vkCmdDrawIndirectCount` y su variante indexada están implementados: el contador de la GPU
++	// se aplica recortando los argumentos indirectos con un kernel antes de dibujar. Ver
++	// MVKCmdDrawIndirectCount en Commands/MVKCmdDraw.mm.
++	_vulkan12FeaturesNoExt.drawIndirectCount = true;
+ 	_vulkan12FeaturesNoExt.descriptorIndexing = _metalFeatures.arrayOfTextures && _metalFeatures.arrayOfSamplers;
+ 	_vulkan12FeaturesNoExt.samplerFilterMinmax = false;
+ 	_vulkan12FeaturesNoExt.shaderOutputViewportIndex = _features.multiViewport;
+--- a/MoltenVK/MoltenVK/Vulkan/vulkan.mm
++++ b/MoltenVK/MoltenVK/Vulkan/vulkan.mm
+@@ -2390,6 +2390,7 @@
+     uint32_t                                    stride) {
+ 
+ 	MVKTraceVulkanCallStart();
++	MVKAddCmd(DrawIndexedIndirectCount, commandBuffer, buffer, offset, countBuffer, countBufferOffset, maxDrawCount, stride);
+ 	MVKTraceVulkanCallEnd();
+ }
+ 
+@@ -2403,6 +2404,7 @@
+     uint32_t                                    stride) {
+ 
+ 	MVKTraceVulkanCallStart();
++	MVKAddCmd(DrawIndirectCount, commandBuffer, buffer, offset, countBuffer, countBufferOffset, maxDrawCount, stride);
+ 	MVKTraceVulkanCallEnd();
+ }
+ 
