@@ -542,6 +542,20 @@ struct MenuBarView: View {
     RegressionCard {
       DisclosureGroup(isExpanded: $gamesAreExpanded) {
         Group {
+          if let confirmation = model.shieldConfirmation {
+            HStack(alignment: .top, spacing: 8) {
+              Image(systemName: "checkmark.seal.fill")
+                .foregroundStyle(.green)
+                .accessibilityHidden(true)
+              Text(confirmation)
+                .regressionFont(.caption.weight(.medium))
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 10)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("regression.games.verification-confirmation")
+          }
           if model.games.isEmpty, model.operation == .discovering {
             HStack(alignment: .top, spacing: 9) {
               ProgressView()

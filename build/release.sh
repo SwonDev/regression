@@ -201,6 +201,40 @@ while read -r source destination actual; do
     reseal "$current" "$actual" "${PUBLIC_SITES[@]}"
 done <<< "$DERIVED"
 
+# El bloque de autoridad del instalador se sella además **por ruta**, no solo por valor
+# anterior. Sellarlo solo por valor lo dejaba atrás en silencio en cuanto una release previa
+# lo desincronizaba: el asset era válido, el instalador declaraba otro `ntdll` y el
+# redistribuible publicado rechazaba su propio runtime. Aquí no hay margen: cada línea del
+# ensemble se reescribe con el hash derivado de los artefactos reales.
+python3 - "$ROOT/Scripts/install_regression.sh" <<PY_INSTALLER
+import io, sys
+
+path = sys.argv[1]
+derived = {}
+for line in '''$DERIVED'''.splitlines():
+    parts = line.split()
+    if len(parts) == 3:
+        derived[parts[1]] = parts[2]
+
+text = io.open(path, encoding="utf-8").read()
+start = text.index("release_runtime_authority_v2()")
+begin = text.index("<<'EOF'", start) + len("<<'EOF'\n")
+end = text.index("EOF", begin)
+block = text[begin:end]
+
+out, changed = [], 0
+for line in block.split("\n"):
+    parts = line.split()
+    if len(parts) == 2 and parts[1] in derived and parts[0] != derived[parts[1]]:
+        out.append(derived[parts[1]] + " " + parts[1])
+        changed += 1
+    else:
+        out.append(line)
+if changed:
+    io.open(path, "w", encoding="utf-8").write(text[:begin] + "\n".join(out) + text[end:])
+    print("   autoridad del instalador resellada por ruta en %d línea(s)" % changed)
+PY_INSTALLER
+
 # --- juego 2: lanzador del bundle ------------------------------------------
 # `regression-engine` es un script: firmarlo no cambia sus bytes, así que su PIN
 # es el mismo en el repositorio, en el staging y dentro del asset.

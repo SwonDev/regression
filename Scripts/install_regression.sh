@@ -8,8 +8,8 @@ export PATH
 # Ningún smoke, wineboot, instalador ni wineserver puede heredar la sesión de otro runtime.
 unset WINESERVERSOCKET
 
-VERSION="1.12.6"
-BUILD_NUMBER="44"
+VERSION="1.12.7"
+BUILD_NUMBER="45"
 REPO="SwonDev/regression"
 ASSET_NAME="Regression-${VERSION}-macos-arm64.tar.gz"
 APP_NAME="Regression.app"
@@ -51,17 +51,17 @@ LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchS
 # REGRESSION_RELEASE_AUTHORITY_V2_BEGIN
 EXPECTED_MEDIA_MANIFEST_SHA256="da8ba98d99d157f981ef3a2472dc9d74c9ce4673ef126bdd61851b9dd21dedb3"
 EXPECTED_STEAM_BOTTLE_BASELINE_MANIFEST_SHA256="884912891b7a3f5440a46b30b9241aa604e248fbbe578498058658e2293b00f4"
-EXPECTED_ENGINE_SHA256="c50138d424af649291c7906725ec24c799ca67124c956fd4ea7ec570ba810b0a"
+EXPECTED_ENGINE_SHA256="52cc190e2fda3a6d295de70c38f876db6dc6a976167dc2a81ebf87a9b2f96749"
 EXPECTED_GPTK_INSTALLER_SHA256="f6bcd552320e3713693d0a0bbf1af4932b573fc35798282c1724f2b52a688660"
 # Hashes del ensemble público derivados del builder raw sellado mediante strip,
 # saneado literal y firma ad hoc del staging.
 release_runtime_authority_v2()
 {
     cat <<'EOF'
-276090bbf100ae02ad5bac5cd254dab1c105c3b44fd025b5ef205f3775463ea1 bin/wine
-e88c8c63e2a4cbfb8cacfb1b5c322ea166665575e5982ecd2ef6a831fde5212a bin/wineserver
-0bd32de30071bdedc05a40d5750a4603586e45a1a66be25aad7975366b81f620 lib/wine/x86_64-unix/wine
-047f1f18abc33084b2308b17f4db7204e835283e629552610008cd4a5482798d lib/wine/x86_64-unix/ntdll.so
+f438bf93dcb4f4728521978738b5b9d383c79fb0af3183f14348ec1e23527798 bin/wine
+f5b6b088220292d751d6b90d6857758ac2c76c00c7784e798259f0e825ebddcb bin/wineserver
+7909257efcb08a72b0fb3633878971205c9432f3557cf42a2c22324dc13c9762 lib/wine/x86_64-unix/wine
+d38e99ac312e3a404b663fdb1af476191ff2aa78fefe32846a6191cd4bf890ab lib/wine/x86_64-unix/ntdll.so
 0315a55b11a456590a9368f4cb8d0011d6735cc04c9093ea583570d1352e1ee1 share/wine/wine.inf
 885c0421bfe30600bae9df83961b0fcbb5b9ccd1c02e7b071ce213ff2522e34a lib/wine/x86_64-windows/ntdll.dll
 7b580e19eb4fce14b5730cd2835c5204dc2622ce0fc4f33b68b0155864477667 lib/wine/i386-windows/ntdll.dll

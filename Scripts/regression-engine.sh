@@ -151,16 +151,16 @@ prepare_external_apple_gptk_routes()
         export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_EXECUTABLE=Borderlands4.exe"
         export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_WINE_ROOT=$component/4.0b2/wine"
         count=$((count + 1))
-        # The Witcher 3: su prelanzador siempre arranca el binario D3D12, así que sin esta ruta
-        # el juego responde «Support for DirectX 12 is required» y no abre. Ver
-        # docs/games/the-witcher-3.md.
-        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_EXECUTABLE=witcher3.exe"
-        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_WINE_ROOT=$component/4.0b2/wine"
-        count=$((count + 1))
         # Dragonkin es UE5 con Agility SDK: sin ruta caía al d3d12 de Wine sobre
         # MoltenVK y perdía la geometría estática (edificios, props, decoración)
         # mientras personajes, terreno y partículas seguían pintando.
         export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_EXECUTABLE=DragonkinTheBanished-Win64-Shipping.exe"
+        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_WINE_ROOT=$component/4.0b2/wine"
+        count=$((count + 1))
+        # The Witcher 3: su prelanzador siempre arranca el binario D3D12, así que sin esta ruta
+        # el juego responde «Support for DirectX 12 is required» y no abre. Ver
+        # docs/games/the-witcher-3.md.
+        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_EXECUTABLE=witcher3.exe"
         export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_WINE_ROOT=$component/4.0b2/wine"
         count=$((count + 1))
     fi

@@ -80,6 +80,12 @@ case "$MODE" in
         [[ -d "$APP" && ! -L "$APP" ]] \
             || fail "la release pública debe ser un bundle físico"
         ;;
+    --release-1.12.7)
+        EXPECTED_VERSION="1.12.7"
+        EXPECTED_BUILD="45"
+        [[ -d "$APP" && ! -L "$APP" ]] \
+            || fail "la release pública debe ser un bundle físico"
+        ;;
     --candidate-1.12.1-before-runtime-join-fix)
         EXPECTED_VERSION="1.12.1"
         EXPECTED_BUILD="39"
@@ -87,7 +93,7 @@ case "$MODE" in
             || fail "el candidato público debe ser un bundle físico"
         ;;
     *)
-        fail "uso: $0 --baseline-1.10.0 | --release-1.10.1 | --release-1.11.0 | --release-1.12.0 | --release-1.12.1 | --release-1.12.2 | --release-1.12.3 | --release-1.12.4 | --release-1.12.5 | --release-1.12.6 | --candidate-1.12.1-before-runtime-join-fix"
+        fail "uso: $0 --baseline-1.10.0 | --release-1.10.1 | --release-1.11.0 | --release-1.12.0 | --release-1.12.1 | --release-1.12.2 | --release-1.12.3 | --release-1.12.4 | --release-1.12.5 | --release-1.12.6 | --release-1.12.7 | --candidate-1.12.1-before-runtime-join-fix"
         ;;
 esac
 codesign --verify --deep --strict "$APP"
@@ -104,7 +110,21 @@ fi
 [[ "$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")" == "$EXPECTED_BUILD" ]] \
     || fail "build público no soportado"
 
-if [[ "$MODE" == "--release-1.12.6" ]]; then
+if [[ "$MODE" == "--release-1.12.7" ]]; then
+    # 1.12.7 cede la activación a la app del juego y le concede el foco de ventana, enruta el
+    # `d3d9` de todo proceso de 32 bits al builtin de Wine y añade `--launcher-skip` al
+    # prelanzador de REDengine, así que cambian el lanzador y el `ntdll` público.
+    verify_hash 52cc190e2fda3a6d295de70c38f876db6dc6a976167dc2a81ebf87a9b2f96749 \
+        "$APP/Contents/MacOS/regression-engine"
+    verify_hash f438bf93dcb4f4728521978738b5b9d383c79fb0af3183f14348ec1e23527798 \
+        "$APP/Contents/SharedSupport/wine-root/bin/wine"
+    verify_hash f5b6b088220292d751d6b90d6857758ac2c76c00c7784e798259f0e825ebddcb \
+        "$APP/Contents/SharedSupport/wine-root/bin/wineserver"
+    verify_hash 7909257efcb08a72b0fb3633878971205c9432f3557cf42a2c22324dc13c9762 \
+        "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/wine"
+    verify_hash d38e99ac312e3a404b663fdb1af476191ff2aa78fefe32846a6191cd4bf890ab \
+        "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+elif [[ "$MODE" == "--release-1.12.6" ]]; then
     # 1.12.6 enruta a D3DMetal por la evidencia de delay-load del propio PE, así que el
     # lanzador cambia respecto a 1.12.5.
     verify_hash c50138d424af649291c7906725ec24c799ca67124c956fd4ea7ec570ba810b0a \

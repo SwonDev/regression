@@ -225,6 +225,15 @@ final class RegressionAppModel {
     var failure: UserFacingFailure?
     var statusDetail = "Preparando el motor y la biblioteca de Steam…"
 
+    /// Confirmación visible de que un blindado manual quedó guardado.
+    ///
+    /// El resultado se anunciaba solo en `statusDetail`, una línea discreta al principio del
+    /// popover —y el popover se ha cerrado mientras estaba el diálogo modal—. El usuario reportó
+    /// que blindaba un juego y **no percibía ninguna señal** de que hubiera entrado. Esto se
+    /// muestra junto a la lista de juegos, que es donde está mirando, y se retira solo.
+    var shieldConfirmation: String?
+    private var shieldConfirmationTask: Task<Void, Never>?
+
     /// Lo instala el delegado, que es quien posee el popover. Mientras el popover sigue abierto
     /// retiene la ventana key, así que el juego recién lanzado renderiza pero las teclas se las
     /// queda el buscador de la lista. Se cierra al lanzar, que además es lo que espera cualquiera
@@ -2502,9 +2511,41 @@ final class RegressionAppModel {
             statusDetail = verdict == .perfect
                 ? "\(run.gameName) quedó blindado de forma persistente con Regression."
                 : "La verificación de \(run.gameName) quedó guardada localmente."
+            announceVerification(run.gameName, verdict: verdict)
         } catch {
             present(error)
         }
+    }
+
+    /// Deja constancia visible de una verificación manual: un aviso junto a la lista de juegos y,
+    /// como el popover puede no estar delante, una notificación del sistema.
+    private func announceVerification(_ gameName: String, verdict: VerificationVerdict) {
+        let message: String
+        switch verdict {
+        case .perfect: message = "\(gameName) quedó blindado como perfecto."
+        case .playableWithIssues: message = "\(gameName) quedó anotado como jugable con incidencias."
+        case .failed: message = "\(gameName) quedó anotado como fallido."
+        case .invalidated: return
+        }
+        shieldConfirmation = message
+        shieldConfirmationTask?.cancel()
+        shieldConfirmationTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(12))
+            guard !Task.isCancelled else { return }
+            self?.shieldConfirmation = nil
+        }
+
+        let content = UNMutableNotificationContent()
+        content.title = "Regression"
+        content.body = message
+        content.sound = nil
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(
+                identifier: "regression.verification.\(gameName)",
+                content: content,
+                trigger: nil
+            )
+        )
     }
 
     func toggleAutoLaunch(_ enabled: Bool) {

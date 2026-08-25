@@ -223,9 +223,9 @@ verify_release_1_12_development_runtime_authority()
     local runtime_build="${REGRESSION_1_12_DEVELOPMENT_RUNTIME_BUILD:-$ROOT/build/release-1.12.0/wine64-public}"
     local build_relative app_relative expected expected_normalized actual_normalized
     local -a runtime_entries=(
-        "4e6822021df7a1147c109fd879c180049b2c1d7537d8eb7a11d379f6a72c0991:tools/wine/wine:bin/wine"
-        "9e67095e59ff44d0a519d611037953de79d510b064bf79ea7d283d2251ae33a1:server/wineserver:bin/wineserver"
-        "7954955be20e8b3ea7714ca62f3cd256ab867e43517b2edd6d96f2ec0b398bcc:loader/wine:lib/wine/x86_64-unix/wine"
+        "b1d413fdb57e84408a9d9b990570808d523eb5f90ce282e34255971bd9c86074:tools/wine/wine:bin/wine"
+        "2bfecf1bb9f75f8b2d1ff8251827b3b9dc110946739d0c747fe9a9f4347ed48e:server/wineserver:bin/wineserver"
+        "220650ffd61f9d612a391e9b5ab8be06d052cd85c0fb5586288737f522dcb06a:loader/wine:lib/wine/x86_64-unix/wine"
         "18d0f87b09e5735a7c819844488234f9a0f25c8dc1cc144e0be80733e1604cdc:dlls/ntdll/ntdll.so:lib/wine/x86_64-unix/ntdll.so"
     )
 
@@ -313,7 +313,7 @@ if $RELEASE_1_12_DEVELOPMENT_CANDIDATE || $CANDIDATE_1_12_2_BEFORE_RUNTIME_CONTR
     if $CANDIDATE_1_12_2_BEFORE_RUNTIME_CONTROL_FIX; then
         expected_engine_hash="38be0b5fd0bed42e5467f9a61c5c972733898523eeac3e34e83eb5317efb3edf"
     else
-        expected_engine_hash="c50138d424af649291c7906725ec24c799ca67124c956fd4ea7ec570ba810b0a"
+        expected_engine_hash="52cc190e2fda3a6d295de70c38f876db6dc6a976167dc2a81ebf87a9b2f96749"
     fi
     verify_hash "$expected_engine_hash" \
         "Contents/MacOS/regression-engine"
@@ -370,7 +370,7 @@ elif $BEFORE_THREE_GAMES_PROMOTION || $BEFORE_DD2_PROMOTION || \
     verify_hash 5d99cae95a60c84b8bc9759736ed9e9bec1dafe9b9af8a8190f26c232781ec60 \
         "Contents/MacOS/regression-engine"
 else
-    verify_hash c50138d424af649291c7906725ec24c799ca67124c956fd4ea7ec570ba810b0a \
+    verify_hash 52cc190e2fda3a6d295de70c38f876db6dc6a976167dc2a81ebf87a9b2f96749 \
         "Contents/MacOS/regression-engine"
 fi
 if $RELEASE_1_11_DEVELOPMENT_CANDIDATE; then

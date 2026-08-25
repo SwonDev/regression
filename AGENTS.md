@@ -675,7 +675,7 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
 ## Estado rápido (2026-08-14)
 
 - **Contrato de este corte**: el código fuente y los empaquetadores convergen en Regression
-  **1.12.6 (44)** y SQLite **v17**. **v1.12.6 (44)** es la release estable actual y
+  **1.12.7 (45)** y SQLite **v17**. **v1.12.7 (45)** es la release estable actual y
   **v1.11.0 (37)** el baseline histórico; sus verificadores `public-1.11` se conservan como
   gates de transición, no como versión vigente. Toda release futura debe verificar el asset
   exacto y completar su matriz antes de publicarse.

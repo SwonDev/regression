@@ -165,8 +165,8 @@ run_engine 1
     "el launcher heredó un basename GPTK genérico controlado por el entorno host"
 [[ "$(/usr/bin/grep '^legacy-root=' "$ENVIRONMENT_LOG")" == "legacy-root=unset" ]] || fail \
     "el launcher heredó una raíz GPTK genérica controlada por el entorno host"
-[[ "$(/usr/bin/grep '^route-count=' "$ENVIRONMENT_LOG")" == "route-count=7" ]] || fail \
-    "el launcher no publicó las siete rutas GPTK compiladas"
+[[ "$(/usr/bin/grep '^route-count=' "$ENVIRONMENT_LOG")" == "route-count=8" ]] || fail \
+    "el launcher no publicó las ocho rutas GPTK compiladas"
 [[ "$(/usr/bin/grep '^route-0-executable=' "$ENVIRONMENT_LOG")" == \
     "route-0-executable=Grim Dawn.exe" ]] || fail \
     "el índice GPTK 0 no conservó su executable compilado"
@@ -222,4 +222,4 @@ assert_external_routes_absent "verify/repair fallidos"
 run_engine 0
 [[ "$(/usr/bin/sed -n '1p' "$ARGUMENT_LOG")" == "--component 3.0 --verify-only" ]] || fail \
     "el launcher cambió la verificación 3.0 por otra generación"
-printf 'PASS: las siete rutas GPTK solo llegan al loader tras verificar su generación.\n'
+printf 'PASS: las ocho rutas GPTK solo llegan al loader tras verificar su generación.\n'

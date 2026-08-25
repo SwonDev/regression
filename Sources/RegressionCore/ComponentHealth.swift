@@ -120,8 +120,8 @@ public enum TrustedComponentCatalog {
   public static let windowsMediaComponentVersion = "1"
   public static let steamRuntimePrerequisitesComponentID = "steam-runtime-prerequisites"
   public static let steamRuntimePrerequisitesComponentVersion = "3"
-  public static let supportedApplicationVersion = "1.12.6"
-  public static let supportedBuildIdentifier = "44"
+  public static let supportedApplicationVersion = "1.12.7"
+  public static let supportedBuildIdentifier = "45"
 
   private static let windowsMediaDevelopmentManifestSHA256 =
     "ac662661fb3384c6ad100066391cab209f9de60b2e129fb92e07365ee6fe9bb1"
@@ -147,19 +147,19 @@ public enum TrustedComponentCatalog {
   private static let steamRuntimePublicCoreFiles: [TrustedComponentFile] = [
     TrustedComponentFile(
       relativePath: "bin/wine",
-      expectedSHA256: "276090bbf100ae02ad5bac5cd254dab1c105c3b44fd025b5ef205f3775463ea1"
+      expectedSHA256: "f438bf93dcb4f4728521978738b5b9d383c79fb0af3183f14348ec1e23527798"
     ),
     TrustedComponentFile(
       relativePath: "bin/wineserver",
-      expectedSHA256: "e88c8c63e2a4cbfb8cacfb1b5c322ea166665575e5982ecd2ef6a831fde5212a"
+      expectedSHA256: "f5b6b088220292d751d6b90d6857758ac2c76c00c7784e798259f0e825ebddcb"
     ),
     TrustedComponentFile(
       relativePath: "lib/wine/x86_64-unix/wine",
-      expectedSHA256: "0bd32de30071bdedc05a40d5750a4603586e45a1a66be25aad7975366b81f620"
+      expectedSHA256: "7909257efcb08a72b0fb3633878971205c9432f3557cf42a2c22324dc13c9762"
     ),
     TrustedComponentFile(
       relativePath: "lib/wine/x86_64-unix/ntdll.so",
-      expectedSHA256: "1452f2ada1871b2cc37eadcc04c6a91ffc1306c768d0efb787506ac0f7b7abd1"
+      expectedSHA256: "d38e99ac312e3a404b663fdb1af476191ff2aa78fefe32846a6191cd4bf890ab"
     ),
     TrustedComponentFile(
       relativePath: "share/wine/wine.inf",

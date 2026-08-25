@@ -13,7 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > Si algo de este archivo difiere de `AGENTS.md`, **manda `AGENTS.md`**. `README.md` es la portada
 > del producto y `docs/README.md` el índice técnico.
 
-> **Contrato del checkout:** Regression **1.12.6 (44)**, release estable publicada, y SQLite **v17**.
+> **Contrato del checkout:** Regression **1.12.7 (45)**, release estable publicada, y SQLite **v17**.
 > **v1.11.0 (37)** es el baseline histórico: conservar sus gates `public-1.11` de transición no
 > autoriza a saltarse la matriz global de futuras releases.
 
@@ -401,10 +401,32 @@ exacto que recibirá GitHub.** Actualizar también la nota de contrato en `READM
 
 ---
 
-## 7. Estado actual (2026-08-22)
+## 7. Estado actual (2026-08-25)
 
-- **Release estable**: v1.12.6 (44), instalada en `/Applications/Regression.app`. Baseline
-  histórico: v1.11.0 (37).
+- **Release estable**: v1.12.7 (45), instalada y verificada en `/Applications/Regression.app`
+  (`verify-public-installed-state.sh --release-1.12.7`). Baseline histórico: v1.11.0 (37).
+- **Lo que trae 1.12.7**, todo con corrección general y no receta por juego:
+  - **Un juego recién lanzado ya recibe teclado y ratón.** macOS 14 exige que la app activa
+    **ceda** la activación; Regression no participaba en el protocolo de Wine y, siendo accesoria,
+    nunca quedaba activa —ni pulsando dentro de su popover—. Ahora se activa al pulsar «Jugar»,
+    cierra el popover (que retenía la ventana *key*) y cede en cuanto el juego lo pide;
+    `winemac.drv` concede el foco a la ventana que acaba de entrar en pantalla. Ver
+    `docs/games/critadel.md`.
+  - **Sonic Adventure 2** dejaba de renderizar con la música sonando: el `d3d9` de DXVK declara el
+    sampler normal y el de sombra sobre el mismo binding y Metal no admite dos samplers en un
+    índice, así que **todas** las pipelines fallaban. Ese proceso va al `d3d9` builtin de Wine.
+    Ver `docs/games/sonic-adventure-2.md`.
+  - **Ningún proceso de 32 bits carga DXVK**: MoltenVK solo existe en 64, y ahí DXVK no logra
+    instancia Vulkan y `terminate()` mata el proceso.
+  - **The Witcher 3** arranca por primera vez: interfaz Chromium del prelanzador omitida con su
+    propio `--launcher-skip` y binario D3D12 enrutado a Apple GPTK 4.0b2. Ver
+    `docs/games/the-witcher-3.md`.
+  - **Aviso visible al blindar**: verificar un run muestra confirmación junto a la lista y una
+    notificación, en vez de una línea discreta que el usuario no llegaba a ver.
+- **Verificados en esta sesión sobre 1.12.7**: Sonic Adventure 2, Critadel, Wayfinder (pantalla de
+  perfiles con partidas), Redfall, Beyond Contact, Runika, The Last Spell, Fields of Mistria,
+  The Witcher 3 y la tienda de Steam. **Enshrouded sigue siendo un límite real** de MoltenVK
+  (`drawIndirectCount`): responde «No compatible graphics device found» y no se maquilla.
 - **27 certificaciones activas**, todas fijadas en el catálogo compilado (revisión `2026-08-19.2`).
   Con expediente público: Grim Dawn, Clair Obscur, DragonSword, Hell Clock, Heroes of Hammerwatch II,
   Secrets of Grindea, Fields of Mistria, Titan Quest II, Forsaken Isle, Dragonwilds, Tinkerlands,
