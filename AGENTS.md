@@ -575,6 +575,14 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
 78. **Sustituir `libMoltenVK.dylib` obliga a revalidar la fila D3D9 entera.** MoltenVK sirve a
     DXVK, así que afecta a **todos** los juegos D3D9, no solo al que motivó el cambio. Si no hay
     un juego D3D9 puro instalado con el que acreditarlo, el cambio no se publica.
+79. **Un proceso que muere «sin dejar rastro» durante la compilación de shaders suele estar
+    colgado, no crasheado.** La salvaguarda de SPIRV-Cross contra bucles de recompilación
+    —`Maximum compilation loops detected`— **solo salta si el compilador no declara progreso**
+    (`!is_force_recompile_forward_progress`), y su propio comentario admite que «in buggy
+    situations we will loop forever». Antes de buscar un crash que no existe, instrumenta la
+    cadena `vkCreate*Pipelines` → `getMTLFunction` → `SPIRVToMSLConverter::convert` →
+    `compile()` y cuenta entradas y salidas: si entran N y salen 0, es un cuelgue.
+    Ver `docs/games/enshrouded.md`.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 

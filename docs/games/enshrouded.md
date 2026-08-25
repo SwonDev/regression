@@ -82,31 +82,46 @@ funcionando con ese binario.
 
 Aun así **no se publica**, por dos motivos:
 
-1. **Enshrouded todavía no arranca con él, y no sé por qué.** Lo que sí está medido:
+1. **Enshrouded todavía no arranca con él, y ya se sabe exactamente dónde se queda.**
 
-   - Acepta la GPU: `drawIndirectCount=VK_TRUE`, `maxDrawIndirectCount=1.073.741.824`,
-     `Created Vulkan device!` con seis extensiones.
-   - Inicializa todo lo demás sin una queja: caché de pipelines, sonido WASAPI, animación, P2P.
-   - Crea su cola de compilación de pipelines con **14 hilos de trabajo**.
-   - Escribe `[app] start creation step WaitForGpcLoaderReady` y **el proceso desaparece a los
-     3 segundos** (Steam: `Game process removed`).
+   Instrumentando MoltenVK paso a paso —creación de pipelines, `getMTLFunction`, y la conversión
+   SPIR-V → MSL— el balance de una ejecución es este:
 
-   Y lo que se descartó buscándolo:
+   | Marca | Veces |
+   |---|---|
+   | `vkCreateComputePipelines` entra | 12 |
+   | Constructor `MVKComputePipeline` | 12 |
+   | Llega a `getMTLFunction` | 12 |
+   | Llega a `MVKShaderModule::getMTLFunction` | 12 |
+   | Llega a `pMSLCompiler->compile()` | **3** |
+   | **Vuelve de `compile()`** | **0** |
+   | `vkCreateComputePipelines` retorna | **0** |
 
-   - **No es un crash**: no hay informe en `~/Library/Logs/DiagnosticReports`, ni minidump de
-     breakpad en `Steam/dumps` (sí los hay de otros procesos esa misma noche, así que el
-     mecanismo funciona).
-   - **No es una excepción de Windows**: con `WINEDEBUG=+seh` las únicas `c0000005` del log
-     pertenecen al dispositivo Vulkan 1.0 de Steam, no al 1.2 del juego.
-   - **No es un error de MoltenVK**: su log llega hasta la creación del `VkDevice` del juego y no
-     emite un solo `[mvk-error]` después. Con el build contaminado sí lo emitía —
-     `VK_ERROR_INVALID_SHADER_NV` en `VolumetricFog3ViewVolumeIntegrate`—, así que el canal
-     funciona y aquí simplemente no hay error que contar.
-   - **No es falta de tiempo**: el proceso no está compilando, ha terminado.
+   Es decir: tres hilos entran en el compilador de SPIRV-Cross y **ninguno sale**; los otros nueve
+   se quedan esperando detrás. El juego escribe `start creation step WaitForGpcLoaderReady`, su
+   cargador de pipelines nunca queda listo y el proceso termina.
 
-   Sale limpio, sin decir nada, justo al empezar a cargar pipelines. Sin un rastro nuevo, seguir
-   probando sería dar palos de ciego; hace falta instrumentar la creación de pipelines dentro de
-   MoltenVK y ver qué hilo se va.
+   **No es una excepción no capturada**: `libMoltenVKShaderConverter.a` se compila con excepciones
+   —255 símbolos `__gxx_personality`— y el `catch (CompilerError&)` de `SPIRVToMSLConverter::convert`
+   está instrumentado y no se dispara nunca.
+
+   **Es un bucle sin salida en el backend MSL de SPIRV-Cross.** `CompilerGLSL::reset()` tiene una
+   salvaguarda —`Maximum compilation loops detected and no forward progress was made`— pero **solo
+   salta si el compilador no declara progreso**:
+
+   ```cpp
+   if (iteration_count >= options.force_recompile_max_debug_iterations && !is_force_recompile_forward_progress)
+       SPIRV_CROSS_THROW("Maximum compilation loops detected ...");
+   ```
+
+   El propio comentario del código lo anticipa: «In buggy situations we will loop forever, or loop
+   for an unbounded number of iterations». Con uno de los shaders de cómputo de Enshrouded se da
+   justo ese caso: cada vuelta pide recompilar declarando progreso, así que la salvaguarda nunca
+   salta y `compile()` gira indefinidamente.
+
+   Con el SPIRV-Cross contaminado del árbol de trabajo **sí** saltaba —de ahí el
+   `VK_ERROR_INVALID_SHADER_NV` en `VolumetricFog3ViewVolumeIntegrate` que se vio al principio—.
+   Con el bueno, no salta y se cuelga. Es un defecto de SPIRV-Cross, no de este proyecto.
 
 2. **Publicar `libMoltenVK.dylib` obliga a revalidar toda la fila D3D9 de la matriz**, y no hay
    ningún juego D3D9 puro instalado con el que hacerlo: Sonic Adventure 2 va por `wined3d` desde
@@ -117,10 +132,15 @@ El binario publicado se restauró y el estado instalado vuelve a verificar como 
 
 ## Qué haría falta para cerrarlo
 
-1. Averiguar por qué el proceso muere en `WaitForGpcLoaderReady` sin dejar rastro. La vía es
-   instrumentar la compilación de pipelines de MoltenVK, no el juego.
-2. Instalar un juego D3D9 puro para poder acreditar la fila D3D9 de la matriz con el MoltenVK nuevo.
-3. Solo entonces, cortar una release con él.
+1. **Encontrar qué construcción del shader hace que SPIRV-Cross pida recompilar sin parar.** La
+   vía es instrumentar `CompilerGLSL::force_recompile()` para volcar quién la llama en cada vuelta
+   y con qué motivo; el bucle está en `CompilerGLSL::compile()` y la cuenta en
+   `CompilerGLSL::reset(iteration_count)`.
+2. Corregirlo en SPIRV-Cross —o, como mínimo, hacer que la salvaguarda salte también con progreso
+   declarado, para que un shader así **falle limpio** en vez de colgar al compilador de pipelines:
+   un error es peor que un cuelgue solo si oculta información, y aquí la ocultaría menos.
+3. Instalar un juego D3D9 puro para poder acreditar la fila D3D9 de la matriz con el MoltenVK nuevo.
+4. Solo entonces, cortar una release con él.
 
 ## Lo que no se hace
 
