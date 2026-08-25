@@ -639,6 +639,12 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
     los 27 juegos certificados, una hipótesis fallida se revierte, no se acumula «por si acaso».
     En el bloqueo 5 de Enshrouded se probaron y revirtieron dos: rellenar con memoria cero los
     descriptor sets sin enlazar, y enlazar siempre el argument buffer del set enlazado.
+90. **Una hipótesis sobre MoltenVK se prueba con el reproductor, no arrancando el juego.**
+    `tools/research/moltenvk-probe/run.sh` ejercita un patrón Vulkan contra el dylib compilado sin
+    Steam, sin Wine y sin juego: de diez minutos por intento a un segundo. Fue el que descartó que
+    un descriptor set sin enlazar baste para provocar el fallo de dirección de Enshrouded, algo que
+    dos correcciones a ciegas no habían conseguido decidir. Se amplía caso a caso; lanzar el juego
+    es la comprobación final, no la primera.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 

@@ -1,0 +1,15 @@
+#version 450
+
+// Reproduce el patrón de Enshrouded: el shader declara recursos en un descriptor set alto,
+// los lee a un offset grande, y la aplicación no enlaza ese set antes del dispatch.
+layout(local_size_x = 1) in;
+
+layout(set = 0, binding = 0) buffer Salida { uint valores[]; } salida;
+
+// Set 4: lo declara el shader y lo lee de verdad. La aplicación no lo va a enlazar.
+layout(set = 4, binding = 0) readonly buffer Lejano { uint datos[1024]; } lejano;
+
+void main() {
+    // Offset grande, como el 2116 del fallo real.
+    salida.valores[gl_GlobalInvocationID.x] = lejano.datos[529];
+}

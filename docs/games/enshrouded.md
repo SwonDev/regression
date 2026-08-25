@@ -219,6 +219,7 @@ a dereferenciar lo bastante lejos como para reventar.
 | Desactivar los argument buffers de Metal | Quita el fallo, **pero** las pipelines *bindless* no compilan y el juego muere al arrancar |
 | Rellenar con memoria cero los sets sin enlazar | Sin efecto; se revirtió por no estar verificado |
 | Enlazar siempre el argument buffer del set enlazado | Sin efecto; se revirtió por lo mismo |
+| Que un set sin enlazar baste para provocarlo | **Reproductor propio** (`tools/research/moltenvk-probe/`): un shader de cómputo que declara y lee un `set = 4` que la aplicación no enlaza **no falla**. Los avisos `missing Buffer binding` son benignos |
 
 ### Aviso de método
 
@@ -253,8 +254,17 @@ Dos trampas del propio build, las dos fijadas en el script:
 
 ## Pendiente antes de certificar
 
-1. **Cerrar el bloqueo 5.** Hay que averiguar por qué MoltenVK no enlaza ese argument buffer y
-   corregirlo de raíz, no taparlo con relleno. Es un hueco general del traductor, no de este juego.
+1. **Cerrar el bloqueo 5.** Descartado ya que la causa sea el descriptor set sin enlazar, quedan dos
+   candidatos, y los dos se atacan con el reproductor antes que con el juego: que el shader lea
+   fuera de un buffer que sí está enlazado —MoltenVK dimensionándolo distinto de lo que el juego
+   espera, por ejemplo con `VK_WHOLE_SIZE` o con el buffer auxiliar de tamaños—, o que subir
+   `force_recompile_max_debug_iterations` a 32 haya cambiado el MSL de ese shader por uno que
+   indexa de más.
+
+   **La herramienta importa más que la hipótesis**: `bash tools/research/moltenvk-probe/run.sh`
+   ejercita un patrón Vulkan contra el MoltenVK compilado sin Steam, sin Wine y sin juego. Cada
+   hipótesis pasó de costar diez minutos de arranque a costar un segundo, y fue la que descartó la
+   última. Ampliarlo caso a caso es la vía; volver a lanzar el juego, la última.
 2. **Medir el coste de la sincronización de bloques.** Cada barrera que publica escrituras de shader
    sobre esa imagen copia el volumen entero (≈18,9 MB) de ida y vuelta. Falta saber con qué
    frecuencia ocurre y si conviene acotarlo con una marca de «sucio».
