@@ -224,6 +224,7 @@ a dereferenciar lo bastante lejos como para reventar.
 | Que MoltenVK dimensione mal un buffer enlazado | Reproductor: `length()` de un array de tamaño dinámico devuelve **1024** con `VK_WHOLE_SIZE` y **256** con un rango de 1024 B. El buffer auxiliar de tamaños es correcto |
 | Que un array *bindless* indexado fuera de los descriptores reservados lo provoque | Reproductor: con `VARIABLE_DESCRIPTOR_COUNT` y `PARTIALLY_BOUND`, reservando 0 ó 4 descriptores e indexando el 264 o el 1023, **no falla**. MoltenVK dimensiona por la cuenta declarada, no por la reservada |
 | Que el buffer implícito de tamaños se enlace vacío al cambiar de pipeline | Reproductor: tres dispatches con un cambio de pipeline en medio y sin re-enlazar los descriptor sets dan `length()` = 1024 en los tres |
+| Que el array *bindless* de **texturas** fuera de rango lo provoque | Reproductor: array de texturas 3D con `PARTIALLY_BOUND`, cuatro escritas y muestreando la 3000, **no falla**. Es la forma que tienen de verdad los shaders del juego: su firma real declara `array<texture3d<float>, 32768>` |
 
 ### Aviso de método
 
@@ -258,7 +259,7 @@ Dos trampas del propio build, las dos fijadas en el script:
 
 ## Pendiente antes de certificar
 
-1. **Cerrar el bloqueo 5.** Seis hipótesis descartadas, cinco de ellas con el reproductor y sin
+1. **Cerrar el bloqueo 5.** Siete hipótesis descartadas, seis de ellas con el reproductor y sin
    tocar el juego. Lo que queda no se puede adivinar: hace falta **un dato concreto del juego**, y
    se obtiene con una sola ejecución.
 

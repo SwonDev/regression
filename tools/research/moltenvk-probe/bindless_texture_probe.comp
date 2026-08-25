@@ -1,0 +1,19 @@
+#version 450
+#extension GL_EXT_nonuniform_qualifier : require
+
+// Cuarto patrón, tomado de la firma real de los shaders de Enshrouded: un array bindless de
+// texturas 3D —el juego declara 32 768— muestreado con índice no uniforme. En un argument buffer
+// de Metal cada textura es un MTLResourceID dentro del propio buffer, así que un índice más allá
+// de lo que MoltenVK reservó lee un identificador inválido.
+layout(local_size_x = 1) in;
+
+layout(set = 0, binding = 0) buffer Salida { uint valores[]; } salida;
+layout(set = 1, binding = 0) uniform texture3D texturas[];
+layout(set = 1, binding = 1) uniform sampler muestreador;
+
+layout(push_constant) uniform Empuje { uint indice; } empuje;
+
+void main() {
+    vec4 c = texture(sampler3D(texturas[nonuniformEXT(empuje.indice)], muestreador), vec3(0.5));
+    salida.valores[0] = uint(c.r * 255.0) | 0xC0DE0000u;
+}

@@ -26,6 +26,7 @@ for a in "$@"; do
     case "$a" in
         --length)   SHADER="buffer_length_probe.comp"; SPV="probe-length.spv" ;;
         --bindless) SHADER="bindless_probe.comp"; SPV="probe-bindless.spv"; FUENTE="bindless_probe.c" ;;
+        --bindless-tex) SHADER="bindless_texture_probe.comp"; SPV="probe-bindless-tex.spv"; FUENTE="bindless_texture_probe.c" ;;
         *) ARGS+=("$a") ;;
     esac
 done
