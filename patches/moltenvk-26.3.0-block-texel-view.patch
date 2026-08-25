@@ -1,0 +1,322 @@
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKImage.h
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKImage.h
+@@ -30,6 +30,7 @@
+ 
+ class MVKImage;
+ class MVKImageView;
++class MVKImageViewPlane;
+ class MVKSwapchain;
+ class MVKQueue;
+ class MVKCommandEncoder;
+@@ -253,6 +254,17 @@
+ 								 MVKCommandEncoder* cmdEncoder,
+ 								 MVKCommandUse cmdUse);
+ 
++	/**
++	 * Registers an uncompressed view of this compressed image, created under
++	 * VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT. Metal cannot alias such a view onto the
++	 * compressed texture, so the view owns separate storage and its content is synchronized
++	 * with this image at the pipeline barriers that make the writes visible.
++	 */
++	void addBlockTexelView(MVKImageViewPlane* viewPlane);
++
++	/** Unregisters a view previously added by addBlockTexelView(). */
++	void removeBlockTexelView(MVKImageViewPlane* viewPlane);
++
+     /** Flush underlying buffer memory into the image if necessary */
+     void flushToDevice(VkDeviceSize offset, VkDeviceSize size);
+ 
+@@ -359,9 +371,11 @@
+ 	bool getIsValidViewFormat(VkFormat viewFormat);
+ 	VkImageUsageFlags getCombinedUsage() { return _usage | _stencilUsage; }
+ 	MTLTextureUsage getMTLTextureUsage(MTLPixelFormat mtlPixFmt);
++	MVKSmallVector<MVKImageViewPlane*, 1> _blockTexelViews;
+ 	uint8_t getMemoryBindingCount() const { return (uint8_t)_memoryBindings.size(); }
+ 	uint8_t getMemoryBindingIndex(uint8_t planeIndex) const;
+ 	MVKImageMemoryBinding* getMemoryBinding(uint8_t planeIndex);
++	void syncBlockTexelViews(MVKPipelineBarrier& barrier, MVKCommandEncoder* cmdEncoder, MVKCommandUse cmdUse);
+ 	template<typename CopyInfo> VkResult copyContent(const CopyInfo* pCopyInfo);
+ 	VkResult copyContent(id<MTLTexture> mtlTex,
+ 						 VkMemoryToImageCopyEXT imgRgn, uint32_t mipLevel, uint32_t slice,
+@@ -545,6 +559,17 @@
+ 
+     void releaseMTLTexture();
+ 
++	/**
++	 * Copies the content of this uncompressed block view into the compressed image, or back,
++	 * through a temporary buffer. Metal defines the buffer layout of both textures as linear
++	 * blocks in raster order, which is exactly the mapping Vulkan requires between a compressed
++	 * image and an uncompressed view of its blocks.
++	 */
++	void syncBlockTexelContent(MVKCommandEncoder* cmdEncoder, MVKCommandUse cmdUse, bool viewToImage);
++
++	/** Returns whether this view is an uncompressed view of a compressed image. */
++	bool isBlockTexelView() { return _isBlockTexelView; }
++
+ 	/** Returns the packed component swizzle of this image view. */
+ 	uint32_t getPackedSwizzle() { return _useShaderSwizzle ? mvkPackSwizzle(_componentSwizzle) : 0; }
+ 
+@@ -566,6 +591,7 @@
+     bool _useMTLTextureView;
+ 	bool _useNativeSwizzle;
+ 	bool _useShaderSwizzle;
++	bool _isBlockTexelView = false;
+ };
+ 
+ 
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKImage.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKImage.mm
+@@ -31,6 +31,9 @@
+ #import "CAMetalLayer+MoltenVK.h"
+ 
+ using namespace std;
++
++bool mvkRegressionBlockTexelViewEnabled();
++bool mvkRegressionBlockTexelSyncEnabled();
+ using namespace SPIRV_CROSS_NAMESPACE;
+ 
+ #pragma mark -
+@@ -840,8 +843,42 @@
+ 
+ MVKImageMemoryBinding* MVKImage::getMemoryBinding(uint8_t planeIndex) {
+ 	return _memoryBindings[getMemoryBindingIndex(planeIndex)];
++}
++
++void MVKImage::addBlockTexelView(MVKImageViewPlane* viewPlane) {
++	for (auto* vp : _blockTexelViews) { if (vp == viewPlane) { return; } }
++	_blockTexelViews.push_back(viewPlane);
+ }
+ 
++void MVKImage::removeBlockTexelView(MVKImageViewPlane* viewPlane) {
++	for (size_t i = 0; i < _blockTexelViews.size(); i++) {
++		if (_blockTexelViews[i] == viewPlane) {
++			_blockTexelViews[i] = _blockTexelViews[_blockTexelViews.size() - 1];
++			_blockTexelViews.pop_back();
++			return;
++		}
++	}
++}
++
++// Metal cannot alias an uncompressed view onto a compressed texture, so each such view owns
++// separate storage. The two are reconciled here, at the barrier that publishes the writes:
++// shader writes travel from the view into the compressed image, and transfer writes travel back.
++void MVKImage::syncBlockTexelViews(MVKPipelineBarrier& barrier,
++								   MVKCommandEncoder* cmdEncoder,
++								   MVKCommandUse cmdUse) {
++	if (_blockTexelViews.empty() || !cmdEncoder) { return; }
++
++	if ( !mvkRegressionBlockTexelSyncEnabled() ) { return; }
++
++	bool viewToImage = mvkIsAnyFlagEnabled(barrier.srcAccessMask, VK_ACCESS_SHADER_WRITE_BIT);
++	bool imageToView = mvkIsAnyFlagEnabled(barrier.srcAccessMask, VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_HOST_WRITE_BIT);
++	if ( !viewToImage && !imageToView ) { return; }
++
++	for (auto* viewPlane : _blockTexelViews) {
++		viewPlane->syncBlockTexelContent(cmdEncoder, cmdUse, viewToImage);
++	}
++}
++
+ void MVKImage::applyImageMemoryBarrier(MVKPipelineBarrier& barrier,
+ 									   MVKCommandEncoder* cmdEncoder,
+ 									   MVKCommandUse cmdUse) {
+@@ -851,6 +888,7 @@
+ 			_planes[planeIndex]->applyImageMemoryBarrier(barrier, cmdEncoder, cmdUse);
+ 		}
+     }
++	syncBlockTexelViews(barrier, cmdEncoder, cmdUse);
+ }
+ 
+ VkResult MVKImage::getMemoryRequirements(VkMemoryRequirements* pMemoryRequirements, uint8_t planeIndex) {
+@@ -1283,8 +1321,33 @@
+ 	}
+ 
+ 	return validSamples;
++}
++
++// VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT is emulated: Metal refuses an uncompressed
++// view of a compressed texture, and aliasing both onto one heap allocation does not work either
++// -- their internal layouts differ, measurably. So the view owns separate storage and the image
++// reconciles it at the barriers. Set REGRESSION_MVK_BLOCK_TEXEL_VIEW=0 to restore the plain
++// rejection, which is how the emulation is A/B tested.
++// Aislar la reconciliación de contenido sin recompilar: REGRESSION_MVK_BLOCK_TEXEL_SYNC=0 deja la
++// emulación en pie pero no copia nada, que es como se acota si un fallo viene de las copias.
++bool mvkRegressionBlockTexelSyncEnabled() {
++	static int enabled = -1;
++	if (enabled < 0) {
++		const char* v = getenv("REGRESSION_MVK_BLOCK_TEXEL_SYNC");
++		enabled = (v && v[0] == '0') ? 0 : 1;
++	}
++	return enabled == 1;
+ }
+ 
++bool mvkRegressionBlockTexelViewEnabled() {
++	static int enabled = -1;
++	if (enabled < 0) {
++		const char* v = getenv("REGRESSION_MVK_BLOCK_TEXEL_VIEW");
++		enabled = (v && v[0] == '0') ? 0 : 1;
++	}
++	return enabled == 1;
++}
++
+ void MVKImage::validateConfig(const VkImageCreateInfo* pCreateInfo, bool isAttachment) {
+ 	MVKPixelFormats* pixFmts = getPixelFormats();
+ 
+@@ -1306,7 +1369,8 @@
+ 	if (isAttachment && (getImageType() == VK_IMAGE_TYPE_1D)) {
+ 		setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT, "vkCreateImage() : Metal does not support rendering to native 1D attachments. Consider enabling MVK_CONFIG_TEXTURE_1D_AS_2D."));
+ 	}
+-	if (mvkIsAnyFlagEnabled(pCreateInfo->flags, VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT)) {
++	if (mvkIsAnyFlagEnabled(pCreateInfo->flags, VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT) &&
++	    !mvkRegressionBlockTexelViewEnabled()) {
+ 		setConfigurationResult(reportError(VK_ERROR_FEATURE_NOT_PRESENT, "vkCreateImage() : Metal does not allow uncompressed views of compressed images."));
+ 	}
+ 	if (mvkIsAnyFlagEnabled(pCreateInfo->flags, VK_IMAGE_CREATE_SPLIT_INSTANCE_BIND_REGIONS_BIT)) {
+@@ -1806,6 +1870,31 @@
+         sliceRange = NSMakeRange(0, 1);
+     }
+     id<MTLTexture> mtlTex = _imageView->_image->getMTLTexture(_planeIndex);
++
++    // Vista sin comprimir de una imagen comprimida: Metal rechaza newTextureViewWithPixelFormat,
++    // asi que se crea una textura independiente con la extension medida en bloques.
++    MVKPixelFormats* pixFmts = getPixelFormats();
++    VkExtent2D blockSize = pixFmts->getBlockTexelSize(mtlTex.pixelFormat);
++    if (_isBlockTexelView) {
++        VkExtent3D extent = _imageView->_image->getExtent3D(_planeIndex, _imageView->_subresourceRange.baseMipLevel);
++        MTLTextureDescriptor* td = [[MTLTextureDescriptor new] autorelease];
++        td.textureType = mtlTextureType;
++        td.pixelFormat = _mtlPixFmt;
++        td.width = mvkCeilingDivide<uint32_t>(extent.width, blockSize.width);
++        td.height = mvkCeilingDivide<uint32_t>(extent.height, blockSize.height);
++        td.depth = extent.depth;
++        td.mipmapLevelCount = 1;
++        td.arrayLength = (mtlTextureType == MTLTextureType3D) ? 1 : sliceRange.length;
++        // El uso se calcula con el formato de la VISTA, no con el de la imagen: Metal no concede
++        // MTLTextureUsageShaderWrite a un formato comprimido, asi que copiar el uso de la textura
++        // BC dejaba la vista sin permiso de escritura. El shader escribia igual, y eso no da error:
++        // falla la direccion en la GPU y la aplicacion solo ve VK_ERROR_DEVICE_LOST.
++        td.usage = _imageView->_image->getMTLTextureUsage(_mtlPixFmt);
++        td.storageMode = mtlTex.storageMode;
++        td.cpuCacheMode = mtlTex.cpuCacheMode;
++        return [_imageView->getMTLDevice() newTextureWithDescriptor: td];    // retained
++    }
++
+     if (_useNativeSwizzle) {
+         return [mtlTex newTextureViewWithPixelFormat: _mtlPixFmt
+                                          textureType: mtlTextureType
+@@ -1818,6 +1907,76 @@
+                                               levels: NSMakeRange(_imageView->_subresourceRange.baseMipLevel, _imageView->_subresourceRange.levelCount)
+                                               slices: sliceRange];    // retained
+     }
++}
++
++
++void MVKImageViewPlane::syncBlockTexelContent(MVKCommandEncoder* cmdEncoder,
++											  MVKCommandUse cmdUse,
++											  bool viewToImage) {
++	id<MTLTexture> mtlView = getMTLTexture();
++	id<MTLTexture> mtlImage = _imageView->_image->getMTLTexture(_planeIndex);
++	if ( !mtlView || !mtlImage ) { return; }
++
++	NSUInteger blockBytes = getPixelFormats()->getBytesPerBlock(_mtlPixFmt);
++	NSUInteger bytesPerRow = mtlView.width * blockBytes;
++	NSUInteger bytesPerImage = bytesPerRow * mtlView.height;
++	NSUInteger sliceCount = (mtlView.textureType == MTLTextureType3D) ? 1 : mtlView.arrayLength;
++	NSUInteger depth = (mtlView.textureType == MTLTextureType3D) ? mtlView.depth : 1;
++
++	// Dedicated: a pooled allocation would start at an arbitrary offset inside a shared buffer, and
++	// a blit whose offset is not aligned to the block size does not fail -- it faults the GPU, and
++	// the game only sees VK_ERROR_DEVICE_LOST. A dedicated buffer always starts at offset zero.
++	const MVKMTLBufferAllocation* tempBuff = cmdEncoder->getTempMTLBuffer(bytesPerImage * depth * sliceCount, true, true);
++	id<MTLBlitCommandEncoder> mtlBlitEnc = cmdEncoder->getMTLBlitEncoder(cmdUse);
++
++	// The compressed image is addressed in texels and the view in blocks; both describe the same
++	// block grid, so the buffer round trip carries the content across unchanged.
++	MTLSize viewSize = MTLSizeMake(mtlView.width, mtlView.height, depth);
++	MTLSize imageSize = MTLSizeMake(mtlImage.width, mtlImage.height, depth);
++	MTLOrigin origin = MTLOriginMake(0, 0, 0);
++
++	for (NSUInteger slice = 0; slice < sliceCount; slice++) {
++		NSUInteger offset = tempBuff->_offset + (bytesPerImage * depth * slice);
++		if (viewToImage) {
++			[mtlBlitEnc copyFromTexture: mtlView
++							sourceSlice: slice
++							sourceLevel: 0
++						   sourceOrigin: origin
++							 sourceSize: viewSize
++							   toBuffer: tempBuff->_mtlBuffer
++					  destinationOffset: offset
++				 destinationBytesPerRow: bytesPerRow
++			   destinationBytesPerImage: bytesPerImage];
++			[mtlBlitEnc copyFromBuffer: tempBuff->_mtlBuffer
++						  sourceOffset: offset
++					 sourceBytesPerRow: bytesPerRow
++				   sourceBytesPerImage: bytesPerImage
++							sourceSize: imageSize
++							 toTexture: mtlImage
++					  destinationSlice: slice
++					  destinationLevel: 0
++					 destinationOrigin: origin];
++		} else {
++			[mtlBlitEnc copyFromTexture: mtlImage
++							sourceSlice: slice
++							sourceLevel: 0
++						   sourceOrigin: origin
++							 sourceSize: imageSize
++							   toBuffer: tempBuff->_mtlBuffer
++					  destinationOffset: offset
++				 destinationBytesPerRow: bytesPerRow
++			   destinationBytesPerImage: bytesPerImage];
++			[mtlBlitEnc copyFromBuffer: tempBuff->_mtlBuffer
++						  sourceOffset: offset
++					 sourceBytesPerRow: bytesPerRow
++				   sourceBytesPerImage: bytesPerImage
++							sourceSize: viewSize
++							 toTexture: mtlView
++					  destinationSlice: slice
++					  destinationLevel: 0
++					 destinationOrigin: origin];
++		}
++	}
+ }
+ 
+ 
+@@ -1837,6 +1996,15 @@
+     // Determine whether this image view should use a Metal texture view,
+     // and set the _useMTLTextureView variable appropriately.
+     if ( _imageView->_image ) {
++        // An uncompressed view of a compressed image cannot be a Metal texture view; it owns
++        // separate storage that the image reconciles at its barriers.
++        MVKPixelFormats* pixFmts = getPixelFormats();
++        MTLPixelFormat imgFmt = _imageView->_image->getMTLPixelFormat(planeIndex);
++        VkExtent2D imgBlock = pixFmts->getBlockTexelSize(imgFmt);
++        _isBlockTexelView = ((imgBlock.width > 1 || imgBlock.height > 1) &&
++                             pixFmts->getBlockTexelSize(_mtlPixFmt).width == 1);
++        if (_isBlockTexelView) { _imageView->_image->addBlockTexelView(this); }
++
+         _useMTLTextureView = _imageView->_image->_canSupportMTLTextureView;
+         bool is3D = _imageView->_image->_mtlTextureType == MTLTextureType3D;
+         // If the view is identical to underlying image, don't bother using a Metal view
+@@ -2138,6 +2306,9 @@
+ }
+ 
+ MVKImageViewPlane::~MVKImageViewPlane() {
++	if (_isBlockTexelView && _imageView && _imageView->_image) {
++		_imageView->_image->removeBlockTexelView(this);
++	}
+     [_mtlTexture release];
+ }
+ 
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm
+@@ -1070,7 +1070,10 @@
+ 
+ 	// Metal does not support creating uncompressed views of compressed formats.
+ 	// Metal does not support split-instance images.
+-	if (mvkIsAnyFlagEnabled(flags, VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT | VK_IMAGE_CREATE_SPLIT_INSTANCE_BIND_REGIONS_BIT)) {
++	extern bool mvkRegressionBlockTexelViewEnabled();
++	VkImageCreateFlags unsupportedFlags = VK_IMAGE_CREATE_SPLIT_INSTANCE_BIND_REGIONS_BIT;
++	if ( !mvkRegressionBlockTexelViewEnabled() ) { unsupportedFlags |= VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT; }
++	if (mvkIsAnyFlagEnabled(flags, unsupportedFlags)) {
+ 		return VK_ERROR_FORMAT_NOT_SUPPORTED;
+ 	}
+ 

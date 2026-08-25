@@ -5,9 +5,12 @@
 - **Steam App ID:** `1203620`
 - **Ejecutable:** `Enshrouded/enshrouded.exe`
 - **Tecnología:** **Vulkan puro** (no llama a Direct3D en ningún punto)
-- **Estado:** **no funciona todavía, pero el motivo cambió.** El bloqueo que se documentaba —
-  `drawIndirectCount` sin implementar— **está resuelto y demostrado**. Lo que impide publicarlo
-  es otra cosa, y está medida más abajo.
+- **Perfil compilado:** **ninguno, y es deliberado.** Las cinco correcciones son del traductor
+  Vulkan→Metal y benefician a cualquier juego que use las mismas funciones.
+- **Estado:** **no se publica todavía, pero llegó a jugarse.** Con los tres parches puestos, el juego
+  arranca, carga la partida y muestra mundo, HUD, misiones e inventario. Lo que impide publicarlo
+  es un quinto bloqueo, medido y **no introducido por estos parches**: el juego lee un descriptor
+  set sin enlazar desde sus shaders de cómputo y eso falla la dirección en la GPU. Detalle abajo.
 
 ## Síntoma original
 
@@ -26,12 +29,14 @@ log (`enshrouded.log`):
 [graphics] No usable Vulkan device found!
 ```
 
-## Lo que se implementó, y funciona
+Detrás de ese primer rechazo había una **cadena de cinco bloqueos**, cada uno oculto por el
+anterior. Ninguno se descubrió razonando: cada uno apareció al quitar el de delante.
+
+## Bloqueo 1 — `drawIndirectCount` no estaba implementado
 
 MoltenVK declaraba `_vulkan12FeaturesNoExt.drawIndirectCount = false` porque
 `vkCmdDrawIndirectCount` y `vkCmdDrawIndexedIndirectCount` eran **puntos de entrada vacíos**.
 
-Se implementaron de verdad, contra las fuentes FOSS oficiales del tar:
 `patches/moltenvk-26.3.0-draw-indirect-count.patch`.
 
 La idea es la única que Metal admite. Metal no sabe variar el número de draws de un render
@@ -49,103 +54,216 @@ El patrón —conmutar a un encoder de cómputo en mitad de un draw y volver— 
 exactamente lo que `MVKCmdDrawIndirect::encodeIndexedIndirect` ya hacía para los abanicos de
 triángulos.
 
-**Resultado medido.** Con ese MoltenVK instalado, el log del juego pasa de descartar el
-dispositivo a esto:
+Con eso el juego acepta la GPU:
 
 ```text
 [graphics] Created Vulkan device!
-[graphics] Device supports BC texture compression!
-[graphics] Supported vulkan device formats:
 [options] using default render settings for graphics device 'Apple M5 Pro'
 ```
 
-El juego acepta la GPU y avanza hasta compilar sus pipelines. El bloqueo documentado ya no existe.
+## Bloqueo 2 — un shader de cómputo no convergía
 
-## Por qué no se publica todavía
+`VolumetricFog3ViewVolumeIntegrate` fallaba con:
 
-**Corrección de un diagnóstico anterior.** Se llegó a escribir aquí que el SPIRV-Cross que este
-MoltenVK necesita «no viaja en el tar FOSS». **Es falso, y conviene que quede dicho.** El tar sí lo
-trae: `sources/moltenvk/External/SPIRV-Cross` es la versión de CodeWeavers, con
-`for_mesh_pipeline` (31 usos en `spirv_msl.cpp`), `input_primitive_type`,
-`add_texture_buffer_offsets`, `texture_offset_buffer_index` y el `MSLShaderInterfaceVariable`
-extendido con `binding`, `offset`, `stride` y `normalized`, **implementados de verdad**.
+```text
+[mvk-error] SPIR-V to MSL conversion error: Maximum compilation loops detected and no forward
+            progress was made. Must be a SPIRV-Cross bug!
+```
 
-Lo que estaba contaminado era el **árbol de trabajo**: su `External/SPIRV-Cross` es el upstream
-oficial con esos campos añadidos a mano como *stubs*, mil líneas más corto. Compilar MoltenVK desde
-ahí produce un traductor que acepta esos parámetros y los ignora en silencio. Es exactamente el
-mismo error que la regla del runtime de Wine ya prohíbe: **se compila desde el tar oficial, nunca
-desde el árbol de trabajo tal como esté**.
+Instrumentando `Compiler::force_recompile()` con `backtrace`, el causante dominante es
+`CompilerGLSL::track_expression_read()` a través de `to_expression()`: cada pasada fuerza
+temporales nuevos y SPIRV-Cross agota su tope de **3** pasadas de emisión. Ese tope es una opción
+documentada —«Debug option, can be increased in an attempt to workaround SPIRV-Cross bugs
+temporarily»—, así que se sube a 32 en `SPIRVToMSLConverter::convert`. Con eso el shader converge,
+los 70 shaders del arranque compilan y **no queda ni un solo bucle agotado**.
 
-Compilado desde el tar, con el SPIRV-Cross correcto y el parche encima, MoltenVK sale limpio.
-Wayfinder y Redfall —los dos títulos instalados que tocan DXVK D3D9 al arrancar— siguen
-funcionando con ese binario.
+## Bloqueo 3 — `gl_DrawID` no existía en el backend MSL
 
-Aun así **no se publica**, por dos motivos:
+`patches/moltenvk-26.3.0-draw-index-builtin.patch`.
 
-1. **Enshrouded avanza mucho más, pero todavía no arranca. La cadena de bloqueos está medida.**
+El juego pasa a fallar en pipelines gráficas con:
 
-   Primero, una corrección: hubo dos diagnósticos intermedios equivocados —«muere sin dejar
-   rastro» y «bucle infinito que nunca lanza»— y los dos eran **artefactos de builds
-   inconsistentes**. MoltenVK aquí enlaza un `libSPIRVCross.a` prefabricado que vive en
-   `External/build/Release` y dentro de `SPIRVCross.xcframework`; reconstruir solo el conversor o
-   solo el dylib mezcla dos versiones distintas y produce síntomas que no son reales. **Se
-   construye con `MoltenVKPackaging.xcodeproj`, esquema «MoltenVK Package (macOS only)»**, y si se
-   toca SPIRV-Cross hay que rehacer también su `.a` y la slice del xcframework.
+```text
+[mvk-error] SPIR-V to MSL conversion error: DrawIndex is not supported in MSL.
+```
 
-   Con un build coherente, la cadena real es esta:
+Es el builtin `BuiltInDrawIndex` de SPIR-V, y **el juego lo usa precisamente porque ahora tiene
+`drawIndirectCount`**: dibuja en lotes y necesita saber qué draw es cada uno. Metal no lo expone y
+SPIRV-Cross lo rechazaba en tres sitios de `spirv_msl.cpp`.
 
-   **Bloqueo 1 — `drawIndirectCount` (resuelto).** Implementado; el juego acepta la GPU.
+Se implementa como buffer implícito, al estilo del `spvIndirectParams` que ya existía para
+teselación:
 
-   **Bloqueo 2 — un shader de cómputo no convergía (resuelto).**
-   `VolumetricFog3ViewVolumeIntegrate` fallaba con:
+- **SPIRV-Cross** declara `spvDrawIndex` con `build_constant_uint_array_pointer()` cuando el
+  builtin está activo, y emite las lecturas como `spvDrawIndex[0]`.
+- **MoltenVK** reserva el índice de buffer implícito, propaga `needsDrawIndexBuffer` desde el
+  conversor hasta `MVKGraphicsPipeline`, y escribe el índice con `setVertexBytes` antes de cada
+  draw de los bucles de `MVKCmdDraw`.
 
-   ```text
-   [mvk-error] SPIR-V to MSL conversion error: Maximum compilation loops detected and no forward
-               progress was made. Must be a SPIRV-Cross bug!
-   ```
+**El detalle que costó dos iteraciones**: no basta con emitir la lectura. `BuiltInDrawIndex` seguía
+entrando además por el camino normal de builtins del entry point, y Metal recibía esto:
 
-   Instrumentando `Compiler::force_recompile()` con `backtrace`, el causante dominante es
-   `CompilerGLSL::track_expression_read()` a través de `to_expression()`: cada pasada fuerza
-   temporales nuevos y SPIRV-Cross agota su tope de **3** pasadas de emisión. Ese tope es una
-   opción documentada —«Debug option, can be increased in an attempt to workaround SPIRV-Cross
-   bugs temporarily»—, así que se sube a 32 en `SPIRVToMSLConverter::convert`. Con eso el shader
-   converge, los 70 shaders del arranque compilan y **no queda ni un solo bucle agotado**.
+```text
+constant uint* spvDrawIndex [[buffer(22)]],   ← el buffer implícito, correcto
+…
+uint spvDrawIndex[0] [[spvDrawIndex]]          ← el builtin, emitido ADEMÁS como argumento
+```
 
-   **Bloqueo 3 — `gl_DrawID` (abierto).** El juego pasa a fallar en pipelines gráficas
-   —`BillboardModelChunk_*`, `Terrain_Visibility_Chunklets`— con:
+con dos errores encadenados: `redefinition of parameter 'spvDrawIndex'` y `zero-length arrays are
+not permitted in C++`. La corrección es declararlo **no directo** en `is_direct_input_builtin()`,
+que es exactamente donde ya está `BuiltInViewIndex` por el mismo motivo.
 
-   ```text
-   [mvk-error] SPIR-V to MSL conversion error: DrawIndex is not supported in MSL.
-   ```
+## Bloqueo 4 — `VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT`
 
-   Es el builtin `BuiltInDrawIndex` de SPIR-V. Metal no lo expone, y SPIRV-Cross lo rechaza en
-   tres sitios de `spirv_msl.cpp`. **El juego lo usa precisamente porque ahora tiene
-   `drawIndirectCount`**: dibuja en lotes y necesita saber qué draw es cada uno.
+`patches/moltenvk-26.3.0-block-texel-view.patch`.
 
-2. **Publicar `libMoltenVK.dylib` obliga a revalidar toda la fila D3D9 de la matriz**, y no hay
-   ningún juego D3D9 puro instalado con el que hacerlo: Sonic Adventure 2 va por `wined3d` desde
-   1.12.7 y el resto son D3D11/D3D12. Sustituir el traductor de shaders de todos los juegos D3D9
-   sin una sola prueba D3D9 real, y sin que arregle nada visible hoy, es riesgo sin beneficio.
+El juego arrancaba, abría ventana y moría con un diálogo que **engaña**:
 
-El binario publicado se restauró y el estado instalado vuelve a verificar como 1.12.7 (45).
+```text
+The graphics memory is too small.
+```
 
-## Qué haría falta para cerrarlo
+No falta memoria: el heap que reporta MoltenVK son **25,7 GB**. El juego traduce cualquier fallo de
+`createTexture` a `Graphics_NotEnoughDeviceMemory`. La causa real está una línea antes en su log:
 
-1. **Implementar `gl_DrawID` en el backend MSL.** Es abordable porque en la ruta indirecta el
-   índice del draw **se conoce al codificar**: MoltenVK ya encodea un draw de Metal por cada draw
-   de Vulkan, así que basta con pasarlo. El diseño sería:
-   - SPIRV-Cross: declarar un buffer implícito —al estilo del `spvIndirectParams` que ya existe
-     para teselación— y emitir `BuiltInDrawIndex` como lectura de él, en lugar de los tres
-     `SPIRV_CROSS_THROW` de `spirv_msl.cpp`; y reportarlo en los resultados de conversión.
-   - MoltenVK: reservar el índice de buffer implícito, propagar `needsDrawIndexBuffer` y escribir
-     el índice antes de cada draw en los cuatro caminos indirectos —`MVKCmdDrawIndirect`,
-     `MVKCmdDrawIndexedIndirect` y sus variantes con contador—.
-   No es un parche pequeño: toca el manejo de builtins de SPIRV-Cross, que afecta a **todos** los
-   shaders de **todos** los juegos. Va con su propia validación.
-2. Comprobar si detrás de `gl_DrawID` aparece un cuarto bloqueo. El juego usa un renderizador con
-   muchas características modernas y la cadena podría no terminar ahí.
-3. Instalar un juego D3D9 puro para poder acreditar la fila D3D9 de la matriz con el MoltenVK nuevo.
-4. Solo entonces, cortar una release con él.
+```text
+[graphics] vkCreateImage failed with error 'VK_ERROR_FEATURE_NOT_PRESENT'
+```
+
+Y en el log de MoltenVK:
+
+```text
+[mvk-error] VK_ERROR_FEATURE_NOT_PRESENT: vkCreateImage() : Metal does not allow uncompressed
+            views of compressed images.
+```
+
+Instrumentando el punto del rechazo, es **una sola imagen** en todo el arranque:
+
+```text
+fmt=BC5_UNORM  type=3D  extent=384x384x256  mips=1  layers=1  samples=1
+tiling=OPTIMAL usage=SAMPLED|STORAGE  flags=MUTABLE_FORMAT|BLOCK_TEXEL_VIEW_COMPATIBLE|EXTENDED_USAGE
+```
+
+El volumen de terreno con normales comprimidas, escrito por cómputo a través de una vista sin
+comprimir (`RG32_UINT`, 64 bits = un bloque BC5) y muestreado después como BC5.
+
+**Antes de escribir nada se midieron las dos vías alternativas, y las dos están descartadas con
+evidencia, no con argumentos:**
+
+1. **Vista de Metal.** `newTextureViewWithPixelFormat:` de BC5 a `RG32Uint` no devuelve error: lanza
+   una **aserción dura** que aborta el proceso (`source texture pixelFormat
+   (MTLPixelFormatBC5_RGUnorm) not compatible with texture view pixelFormat (MTLPixelFormatRG32Uint)`).
+   El mensaje de MoltenVK era correcto, no conservador.
+2. **Aliasing en un `MTLHeap` de tipo `placement`.** Metal *sí* deja crear las dos texturas en el
+   mismo offset. Pero no comparten disposición: para un mismo contenido de 16 384 B, la BC5 pide
+   32 768 B de heap y la `RG32Uint` 17 408 B. Escribiendo un patrón conocido por la vista y leyendo
+   la comprimida por blit, **15 440 de 16 384 bytes salen distintos**. El aliasing no preserva el
+   mapeo que Vulkan define.
+
+Así que la vista tiene **almacenamiento propio**, y la imagen la reconcilia en sus barreras: la
+copia va por un buffer temporal, porque `copyFromTexture:toBuffer:` y `copyFromBuffer:toTexture:`
+sí definen la disposición como bloques lineales en orden raster —justo el mapeo que Vulkan exige—.
+Las escrituras de shader viajan de la vista a la imagen; las de transferencia, al revés.
+
+`REGRESSION_MVK_BLOCK_TEXEL_VIEW=0` restaura el rechazo, para poder hacer A/B.
+
+## Bloqueo 5 — lectura de un descriptor set sin enlazar (abierto)
+
+Con los cuatro anteriores resueltos el juego llega al menú, carga la partida y se juega. Pero
+termina cayendo con:
+
+```text
+[graphics] vkWaitForFences failed with error 'VK_ERROR_DEVICE_LOST'
+```
+
+y en el traductor:
+
+```text
+[mvk-error] VK_ERROR_OUT_OF_DEVICE_MEMORY: MTLCommandBuffer execution failed (code 3):
+            Caused GPU Address Fault Error (kIOGPUCommandBufferCallbackErrorPageFault)
+```
+
+La validación de shaders de Metal (`MTL_SHADER_VALIDATION=1`) lo localiza sin ambigüedad:
+
+```text
+Invalid device load at offset 2116, executing kernel function: "cs_main"
+buffer: Out of bounds of user address space, length:1, resident:Read Write
+encoder: "vkCmdDispatch ComputeEncoder", dispatch: 12
+```
+
+y la capa de depuración de Metal nombra el hueco:
+
+```text
+Compute Function(cs_main): missing Buffer binding at index 4 for spvDescriptorSet4[0]
+```
+
+Un shader de cómputo **del juego** lee el argument buffer de un descriptor set que no está
+enlazado. SPIRV-Cross lo declara como parámetro del entry point, MoltenVK no enlaza nada en esa
+ranura, y en Metal eso no es memoria vacía: **no hay memoria**, así que la primera lectura falla la
+dirección. Un controlador Vulkan real devuelve basura y el juego sigue.
+
+**No lo introducen estos parches, y está comprobado**: el binario anterior a todos ellos produce
+**861 cargas inválidas idénticas** bajo la misma validación. Lo que cambia es si la ejecución llega
+a dereferenciar lo bastante lejos como para reventar.
+
+### Lo que se descartó, con evidencia
+
+| Hipótesis | Cómo se descartó |
+|---|---|
+| El buffer de `gl_DrawID` | Emitiendo `gl_DrawID` como constante cero, **sin buffer**: sigue fallando |
+| La sincronización del volumen BC5 | `REGRESSION_MVK_BLOCK_TEXEL_SYNC=0`: sigue fallando |
+| La emulación de bloques en general | La imagen se crea en el segundo 51 y el fallo llega en el 8 |
+| Offset no alineado del buffer temporal | Buffer dedicado (offset cero): sigue fallando |
+| `spvDrawIndex` sin enlazar en teselación/malla | Se enlaza ya en las tres etapas por el estado del encoder: sigue fallando |
+| Los avisos `missing Buffer binding` como causa | Salen **4 322 veces** en un binario que no falla |
+| Desactivar los argument buffers de Metal | Quita el fallo, **pero** las pipelines *bindless* no compilan y el juego muere al arrancar |
+| Rellenar con memoria cero los sets sin enlazar | Sin efecto; se revirtió por no estar verificado |
+| Enlazar siempre el argument buffer del set enlazado | Sin efecto; se revirtió por lo mismo |
+
+### Aviso de método
+
+**La validación de GPU de Metal tapa este fallo**: enlaza recursos de relleno en las ranuras
+vacías, así que con `MTL_DEBUG_LAYER=1` o `MTL_SHADER_VALIDATION=1` el juego no cae. Por eso hubo
+una sesión en la que pareció estable: no lo era.
+
+Del mismo modo, **un binario compilado de forma incremental llegó a jugarse cinco minutos** y uno
+limpio de las **mismas fuentes —comprobadas byte a byte—** cae a los ocho segundos. No es una
+diferencia de código: es una carrera cuya ventana depende de detalles del binario. El binario
+"bueno" enseñaba las mismas 861 cargas inválidas.
+
+## Cómo se reconstruye
+
+```bash
+bash build/build-moltenvk.sh
+```
+
+Extrae MoltenVK del tar FOSS oficial, aplica los tres parches en orden y compila. **No se compila
+desde `sources-26.3.0/moltenvk` del checkout**: ese árbol lleva el SPIRV-Cross upstream en vez del
+de CodeWeavers y produce un traductor que acepta los parámetros de MoltenVK y los ignora en
+silencio. Se distingue con `grep -c for_mesh_pipeline External/SPIRV-Cross/spirv_msl.cpp`: el del
+tar da **31**, el contaminado da **0**. El script lo comprueba y aborta si no cuadra.
+
+Dos trampas del propio build, las dos fijadas en el script:
+
+- **MoltenVK no compila SPIRV-Cross: lo copia** desde `${BUILT_PRODUCTS_DIR}/libSPIRVCross.a`. Si
+  cada proyecto usa su propio `-derivedDataPath`, el paquete enlaza un `.a` viejo y los cambios del
+  traductor no llegan al dylib **sin dar ningún error**.
+- Xcode **no rastrea ese `.a` copiado como entrada**, así que un `.a` nuevo no basta para que
+  re-enlace. Hay que retirar el `libMoltenVK.dylib` del directorio de productos para forzarlo.
+
+## Pendiente antes de certificar
+
+1. **Cerrar el bloqueo 5.** Hay que averiguar por qué MoltenVK no enlaza ese argument buffer y
+   corregirlo de raíz, no taparlo con relleno. Es un hueco general del traductor, no de este juego.
+2. **Medir el coste de la sincronización de bloques.** Cada barrera que publica escrituras de shader
+   sobre esa imagen copia el volumen entero (≈18,9 MB) de ida y vuelta. Falta saber con qué
+   frecuencia ocurre y si conviene acotarlo con una marca de «sucio».
+3. **Matriz de validación completa**, incluida una fila D3D9 real: publicar `libMoltenVK.dylib`
+   cambia el traductor de shaders de **todos** los juegos Vulkan y de la ruta DXVK.
+
+Mientras tanto, **la app instalada lleva el `libMoltenVK.dylib` publicado de 1.12.7**, verificado con
+`build/verify-public-installed-state.sh --release-1.12.7`. El experimental se reconstruye con un
+comando (`bash build/build-moltenvk.sh`) y se instala copiándolo sobre esa ruta.
 
 ## Lo que no se hace
 

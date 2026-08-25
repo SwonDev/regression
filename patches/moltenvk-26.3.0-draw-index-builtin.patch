@@ -1,0 +1,325 @@
+--- a/External/SPIRV-Cross/spirv_msl.hpp
++++ b/External/SPIRV-Cross/spirv_msl.hpp
+@@ -327,6 +327,9 @@
+ 		uint32_t shader_tess_factor_buffer_index = 26;
+ 		uint32_t buffer_size_buffer_index = 25;
+ 		uint32_t view_mask_buffer_index = 24;
++		// Índice del buffer implícito por el que se alimenta gl_DrawID. Metal no expone el
++		// índice del draw, pero en la ruta indirecta la API lo conoce al codificar cada draw.
++		uint32_t draw_index_buffer_index = 23;
+ 		uint32_t dynamic_offsets_buffer_index = 23;
+ 		uint32_t shader_input_buffer_index = 22;
+ 		uint32_t shader_index_buffer_index = 21;
+@@ -646,6 +649,12 @@
+ 	bool needs_view_mask_buffer() const
+ 	{
+ 		return msl_options.multiview && !msl_options.view_index_from_device_index;
++	}
++
++	// Indica a la API que este shader lee gl_DrawID y necesita que se le pase el índice del draw.
++	bool needs_draw_index_buffer() const
++	{
++		return draw_index_buffer_id != 0;
+ 	}
+ 
+ 	bool needs_xfb_buffer() const
+@@ -1170,6 +1179,7 @@
+ 	uint32_t buffer_size_buffer_id = 0;
+ 	uint32_t texture_offset_buffer_id = 0;
+ 	uint32_t view_mask_buffer_id = 0;
++	uint32_t draw_index_buffer_id = 0;
+ 	uint32_t dynamic_offsets_buffer_id = 0;
+ 	uint32_t xfb_buffer_id = 0;
+ 	uint32_t uint_type_id = 0;
+--- a/External/SPIRV-Cross/spirv_msl.cpp
++++ b/External/SPIRV-Cross/spirv_msl.cpp
+@@ -995,6 +995,19 @@
+ 		set_decoration(var_id, DecorationBinding, msl_options.buffer_size_buffer_index);
+ 		set_extended_decoration(var_id, SPIRVCrossDecorationResourceIndexPrimary, msl_options.buffer_size_buffer_index);
+ 		buffer_size_buffer_id = var_id;
++	}
++
++	if (active_input_builtins.get(BuiltInDrawIndex))
++	{
++		// Metal no expone el índice del draw. Se recibe por un buffer implícito que la API
++		// rellena antes de cada draw; en la ruta indirecta lo conoce al codificar.
++		uint32_t var_id = build_constant_uint_array_pointer();
++		set_name(var_id, "spvDrawIndex");
++		// This should never match anything.
++		set_decoration(var_id, DecorationDescriptorSet, ~(5u));
++		set_decoration(var_id, DecorationBinding, msl_options.draw_index_buffer_index);
++		set_extended_decoration(var_id, SPIRVCrossDecorationResourceIndexPrimary, msl_options.draw_index_buffer_index);
++		draw_index_buffer_id = var_id;
+ 	}
+ 
+ 	if (needs_view_mask_buffer())
+@@ -2162,6 +2175,9 @@
+ 		add_active_interface_variable(texture_offset_buffer_id);
+ 	if (view_mask_buffer_id)
+ 		add_active_interface_variable(view_mask_buffer_id);
++
++	if (draw_index_buffer_id)
++		add_active_interface_variable(draw_index_buffer_id);
+ 	if (dynamic_offsets_buffer_id)
+ 		add_active_interface_variable(dynamic_offsets_buffer_id);
+ 	if (builtin_layer_id)
+@@ -13399,7 +13415,8 @@
+ 				return string(" [[") + builtin_qualifier(builtin) + "]]";
+ 
+ 			case BuiltInDrawIndex:
+-				SPIRV_CROSS_THROW("DrawIndex is not supported in MSL.");
++				// Llega por buffer implícito, no por atributo de Metal.
++				return "";
+ 
+ 			default:
+ 				return "";
+@@ -14186,6 +14203,9 @@
+ 	case BuiltInViewIndex:
+ 		return get_execution_model() == ExecutionModelFragment && msl_options.multiview &&
+ 		       msl_options.multiview_layered_rendering;
++	// MSL has no draw-index attribute; it arrives through the spvDrawIndex buffer.
++	case BuiltInDrawIndex:
++		return false;
+ 	// Compute function in
+ 	case BuiltInSubgroupId:
+ 	case BuiltInNumSubgroups:
+@@ -17474,7 +17494,7 @@
+ 			SPIRV_CROSS_THROW("BaseInstance requires Metal 1.1 and Mac or Apple A9+ hardware.");
+ 		}
+ 	case BuiltInDrawIndex:
+-		SPIRV_CROSS_THROW("DrawIndex is not supported in MSL.");
++		return "spvDrawIndex[0]";
+ 
+ 	// When used in the entry function, output builtins are qualified with output struct name.
+ 	// Test storage class as NOT Input, as output builtins might be part of generic type.
+@@ -17595,7 +17615,7 @@
+ 	case BuiltInBaseInstance:
+ 		return "base_instance";
+ 	case BuiltInDrawIndex:
+-		SPIRV_CROSS_THROW("DrawIndex is not supported in MSL.");
++		return "spvDrawIndex";
+ 
+ 	// Vertex function out
+ 	case BuiltInClipDistance:
+@@ -17812,7 +17832,7 @@
+ 	case BuiltInBaseInstance:
+ 		return "uint";
+ 	case BuiltInDrawIndex:
+-		SPIRV_CROSS_THROW("DrawIndex is not supported in MSL.");
++		return "uint";
+ 
+ 	// Vertex function out
+ 	case BuiltInClipDistance:
+--- a/MoltenVKShaderConverter/MoltenVKShaderConverter/SPIRVToMSLConverter.h
++++ b/MoltenVKShaderConverter/MoltenVKShaderConverter/SPIRVToMSLConverter.h
+@@ -245,6 +245,7 @@
+ 		bool needsInputThreadgroupMem = false;
+ 		bool needsDispatchBaseBuffer = false;
+ 		bool needsViewRangeBuffer = false;
++		bool needsDrawIndexBuffer = false;
+ 		bool needsXfbBuffer = false;
+ 		bool usesPhysicalStorageBufferAddressesCapability = false;
+ 
+--- a/MoltenVKShaderConverter/MoltenVKShaderConverter/SPIRVToMSLConverter.cpp
++++ b/MoltenVKShaderConverter/MoltenVKShaderConverter/SPIRVToMSLConverter.cpp
+@@ -375,6 +375,7 @@
+ 	conversionResult.resultInfo.needsInputThreadgroupMem = pMSLCompiler && pMSLCompiler->needs_input_threadgroup_mem();
+ 	conversionResult.resultInfo.needsDispatchBaseBuffer = pMSLCompiler && pMSLCompiler->needs_dispatch_base_buffer();
+ 	conversionResult.resultInfo.needsViewRangeBuffer = pMSLCompiler && pMSLCompiler->needs_view_mask_buffer();
++	conversionResult.resultInfo.needsDrawIndexBuffer = pMSLCompiler && pMSLCompiler->needs_draw_index_buffer();
+ 	conversionResult.resultInfo.needsXfbBuffer = pMSLCompiler && pMSLCompiler->needs_xfb_buffer();
+ 	conversionResult.resultInfo.usesPhysicalStorageBufferAddressesCapability = usesPhysicalStorageBufferAddressesCapability(pMSLCompiler);
+ 
+--- a/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.h
++++ b/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.h
+@@ -491,6 +491,7 @@
+ 		MVKMTLBufferBinding dynamicOffsetBufferBinding = { .isInline = true };
+ 		MVKMTLBufferBinding textureOffsetBufferBinding = { .isInline = true };
+ 		MVKMTLBufferBinding viewRangeBufferBinding = { .isInline = true };
++		MVKMTLBufferBinding drawIndexBufferBinding = { .isInline = true };
+ 
+ 		bool areBufferBindingsDirty = false;
+ 		bool areTextureBindingsDirty = false;
+@@ -499,6 +500,8 @@
+ 		bool needsSwizzle = false;
+ 	};
+ 
++	uint32_t _drawIndex = 0;
++	bool _needsDrawIndexBuffer = false;
+ 	VkPipelineBindPoint _bindPoint;
+ 	MVKDescriptorSet* _boundDescriptorSets[kMVKMaxDescriptorSetCount];
+ 	MVKBitArray _metalUsageDirtyDescriptors[kMVKMaxDescriptorSetCount];
+@@ -568,7 +571,18 @@
+     void bindViewRangeBuffer(const MVKShaderImplicitRezBinding& binding,
+                              bool needVertexViewBuffer,
+                              bool needFragmentViewBuffer);
++
++	/**
++	 * Binds the implicit buffer that carries gl_DrawID. It travels through the encoder state, not
++	 * through a direct setVertexBytes:, because the same vertex stage is encoded on a render, a
++	 * compute or a mesh encoder depending on whether the pipeline is tessellated, and only the
++	 * state knows which one is in play.
++	 */
++	void bindDrawIndexBuffer(const MVKShaderImplicitRezBinding& binding, bool needDrawIndexBuffer);
+ 
++	/** Sets the value of gl_DrawID for the draws that follow. */
++	void setDrawIndex(uint32_t drawIndex);
++
+     void encodeBindings(MVKShaderStage stage,
+                         const char* pStageName,
+                         bool fullImageViewSwizzle,
+--- a/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm
++++ b/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm
+@@ -888,6 +888,23 @@
+     _shaderStageResourceBindings[kMVKShaderStageFragment].viewRangeBufferBinding.isDirty = needFragmentViewBuffer;
+ }
+ 
++void MVKGraphicsResourcesCommandEncoderState::bindDrawIndexBuffer(const MVKShaderImplicitRezBinding& binding,
++																  bool needDrawIndexBuffer) {
++	for (uint32_t i = kMVKShaderStageVertex; i <= kMVKShaderStageFragment; i++) {
++		_shaderStageResourceBindings[i].drawIndexBufferBinding.index = binding.stages[i];
++		_shaderStageResourceBindings[i].drawIndexBufferBinding.isDirty = false;
++	}
++	_needsDrawIndexBuffer = needDrawIndexBuffer;
++	_drawIndex = 0;
++	_shaderStageResourceBindings[kMVKShaderStageVertex].drawIndexBufferBinding.isDirty = needDrawIndexBuffer;
++}
++
++void MVKGraphicsResourcesCommandEncoderState::setDrawIndex(uint32_t drawIndex) {
++	if ( !_needsDrawIndexBuffer ) { return; }
++	_drawIndex = drawIndex;
++	_shaderStageResourceBindings[kMVKShaderStageVertex].drawIndexBufferBinding.isDirty = true;
++}
++
+ void MVKGraphicsResourcesCommandEncoderState::encodeBindings(MVKShaderStage stage,
+                                                              const char* pStageName,
+                                                              bool fullImageViewSwizzle,
+@@ -930,6 +947,10 @@
+ 		}
+ 
+ 		bindImplicitBuffer(_cmdEncoder, shaderStage.textureOffsetBufferBinding, shaderStage.textureOffsets.contents());
++	}
++
++	if (shaderStage.drawIndexBufferBinding.isDirty) {
++		bindImplicitBuffer(_cmdEncoder, shaderStage.drawIndexBufferBinding, MVKArrayRef<const uint32_t>(&_drawIndex, 1));
+ 	}
+ 
+     if (shaderStage.viewRangeBufferBinding.isDirty) {
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.h
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.h
+@@ -316,6 +316,12 @@
+ 	id<MTLComputePipelineState> getTessControlStageState() { return _mtlTessControlStageState; }
+ 
+ 	/** Returns true if the vertex shader needs a buffer to store its output. */
++	/** Este shader lee gl_DrawID y necesita que se le pase el índice del draw. */
++	bool needsDrawIndexBuffer() { return _needsVertexDrawIndexBuffer; }
++
++	/** Índice del buffer implícito por el que se pasa gl_DrawID a la etapa de vértices. */
++	uint32_t getDrawIndexBufferIndex() { return _drawIndexBufferIndex.stages[kMVKShaderStageVertex]; }
++
+ 	bool needsVertexOutputBuffer() { return _needsVertexOutputBuffer; }
+ 
+ 	/** Returns true if the tessellation control shader needs a buffer to store its per-vertex output. */
+@@ -436,6 +442,7 @@
+ 	MVKColor32 _blendConstants = { 0.0, 0.0, 0.0, 1.0 };
+ 	MVKShaderImplicitRezBinding _reservedVertexAttributeBufferCount;
+ 	MVKShaderImplicitRezBinding _viewRangeBufferIndex;
++	MVKShaderImplicitRezBinding _drawIndexBufferIndex;
+ 	MVKShaderImplicitRezBinding _outputBufferIndex;
+ 	VkPrimitiveTopology _vkPrimitiveTopology;
+ 	uint32_t _outputControlPointCount;
+@@ -452,6 +459,7 @@
+ 	bool _needsVertexDynamicOffsetBuffer = false;
+ 	bool _needsVertexTextureOffsetBuffer = false;
+ 	bool _needsVertexViewRangeBuffer = false;
++	bool _needsVertexDrawIndexBuffer = false;
+ 	bool _needsVertexOutputBuffer = false;
+ 	bool _needsTessCtlSwizzleBuffer = false;
+ 	bool _needsTessCtlBufferSizeBuffer = false;
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
+@@ -346,6 +346,15 @@
+ 	cmdEncoder->_graphicsResourcesState.bindDynamicOffsetBuffer(_dynamicOffsetBufferIndex, _needsVertexDynamicOffsetBuffer, _needsTessCtlDynamicOffsetBuffer, _needsTessEvalDynamicOffsetBuffer, _needsFragmentDynamicOffsetBuffer);
+ 	cmdEncoder->_graphicsResourcesState.bindTextureOffsetBuffer(_textureOffsetBufferIndex, _needsVertexTextureOffsetBuffer, _needsTessCtlTextureOffsetBuffer, _needsTessEvalTextureOffsetBuffer, _needsFragmentTextureOffsetBuffer);
+     cmdEncoder->_graphicsResourcesState.bindViewRangeBuffer(_viewRangeBufferIndex, _needsVertexViewRangeBuffer, _needsFragmentViewRangeBuffer);
++
++	// gl_DrawID viaja por el estado del encoder, no con un setVertexBytes: directo. La etapa de
++	// vertices se codifica sobre un encoder de render, de computo o de malla segun este teselada
++	// la pipeline, y solo el estado sabe cual esta activo. Enlazarlo aqui garantiza ademas que el
++	// buffer existe en TODOS los caminos de dibujo con su valor por defecto, cero, que es el que
++	// gl_DrawID tiene en un dibujo no indirecto. Dejarlo solo en los encoders indirectos dejaba el
++	// buffer sin enlazar en 18 de las 34 pipelines de Enshrouded, y el shader fallaba la direccion
++	// en la GPU: a la aplicacion le llega unicamente como VK_ERROR_DEVICE_LOST.
++	cmdEncoder->_graphicsResourcesState.bindDrawIndexBuffer(_drawIndexBufferIndex, _needsVertexDrawIndexBuffer);
+ }
+ 
+ static const char vtxCompilerType[] = "Vertex stage pipeline for tessellation";
+@@ -1199,6 +1208,7 @@
+ 	shaderConfig.options.mslOptions.dynamic_offsets_buffer_index = _dynamicOffsetBufferIndex.stages[kMVKShaderStageVertex];
+ 	shaderConfig.options.mslOptions.texture_offset_buffer_index = _textureOffsetBufferIndex.stages[kMVKShaderStageVertex];
+ 	shaderConfig.options.mslOptions.view_mask_buffer_index = _viewRangeBufferIndex.stages[kMVKShaderStageVertex];
++	shaderConfig.options.mslOptions.draw_index_buffer_index = _drawIndexBufferIndex.stages[kMVKShaderStageVertex];
+ 	shaderConfig.options.mslOptions.capture_output_to_buffer = false;
+ 	shaderConfig.options.mslOptions.disable_rasterization = !_isRasterizing;
+     addVertexInputToShaderConversionConfig(shaderConfig, pCreateInfo);
+@@ -1215,6 +1225,7 @@
+ 	_needsVertexDynamicOffsetBuffer = funcRslts.needsDynamicOffsetBuffer;
+ 	_needsVertexTextureOffsetBuffer = funcRslts.needsTextureOffsetBuffer;
+ 	_needsVertexViewRangeBuffer = funcRslts.needsViewRangeBuffer;
++	_needsVertexDrawIndexBuffer = funcRslts.needsDrawIndexBuffer;
+ 	_needsVertexOutputBuffer = funcRslts.needsOutputBuffer;
+ 	_needsXfbBuffer = funcRslts.needsXfbBuffer;
+ 	markIfUsingPhysicalStorageBufferAddressesCapability(funcRslts, kMVKShaderStageVertex);
+@@ -1349,6 +1360,7 @@
+     shaderConfig.options.mslOptions.dynamic_offsets_buffer_index = _dynamicOffsetBufferIndex.stages[kMVKShaderStageVertex];
+     shaderConfig.options.mslOptions.texture_offset_buffer_index = _textureOffsetBufferIndex.stages[kMVKShaderStageVertex];
+     shaderConfig.options.mslOptions.view_mask_buffer_index = _viewRangeBufferIndex.stages[kMVKShaderStageVertex];
++	shaderConfig.options.mslOptions.draw_index_buffer_index = _drawIndexBufferIndex.stages[kMVKShaderStageVertex];
+     shaderConfig.options.mslOptions.capture_output_to_buffer = false;
+     shaderConfig.options.mslOptions.disable_rasterization = !_isRasterizing;
+     shaderConfig.options.mslOptions.for_mesh_pipeline = true;
+@@ -1456,6 +1468,8 @@
+ 		pVtxFunctions[i] = func;
+ 
+ 		auto& funcRslts = func.shaderConversionResults;
++	_needsVertexDrawIndexBuffer = funcRslts.needsDrawIndexBuffer;
++	_needsVertexDrawIndexBuffer = funcRslts.needsDrawIndexBuffer;
+ 		_needsVertexSwizzleBuffer = funcRslts.needsSwizzleBuffer;
+ 		_needsVertexBufferSizeBuffer = funcRslts.needsBufferSizeBuffer;
+ 		_needsVertexDynamicOffsetBuffer = funcRslts.needsDynamicOffsetBuffer;
+@@ -2069,6 +2083,7 @@
+ 		_swizzleBufferIndex.stages[stage] = getImplicitBufferIndex(stage, 3);
+ 		_indirectParamsIndex.stages[stage] = getImplicitBufferIndex(stage, 4);
+ 		_outputBufferIndex.stages[stage] = getImplicitBufferIndex(stage, 5);
++		_drawIndexBufferIndex.stages[stage] = getImplicitBufferIndex(stage, 8);
+ 		if (stage == kMVKShaderStageTessCtl) {
+ 			_tessCtlPatchOutputBufferIndex = getImplicitBufferIndex(stage, 6);
+ 			_tessCtlLevelBufferIndex = getImplicitBufferIndex(stage, 7);
+--- a/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
++++ b/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
+@@ -840,6 +840,12 @@
+     pipeline->getStages(stages);
+ 
+     for (uint32_t drawIdx = 0; drawIdx < _drawCount; drawIdx++) {
++        // Metal no expone el índice del draw, pero aquí se conoce: se encodea un draw de Metal
++        // por cada draw de Vulkan. Se pasa por el buffer implícito que el shader declara al leer
++        // gl_DrawID; si no lo lee, no se toca nada.
++        if (pipeline->needsDrawIndexBuffer()) {
++            cmdEncoder->_graphicsResourcesState.setDrawIndex(drawIdx);
++        }
+         for (uint32_t s : stages) {
+             auto stage = MVKGraphicsStage(s);
+             id<MTLComputeCommandEncoder> mtlTessCtlEncoder = nil;
+@@ -1207,6 +1213,12 @@
+     pipeline->getStages(stages);
+ 
+     for (uint32_t drawIdx = 0; drawIdx < _drawCount; drawIdx++) {
++        // Metal no expone el índice del draw, pero aquí se conoce: se encodea un draw de Metal
++        // por cada draw de Vulkan. Se pasa por el buffer implícito que el shader declara al leer
++        // gl_DrawID; si no lo lee, no se toca nada.
++        if (pipeline->needsDrawIndexBuffer()) {
++            cmdEncoder->_graphicsResourcesState.setDrawIndex(drawIdx);
++        }
+         for (uint32_t s : stages) {
+             auto stage = MVKGraphicsStage(s);
+             id<MTLComputeCommandEncoder> mtlTessCtlEncoder = nil;

@@ -100,7 +100,7 @@ el run cerrado. **No** tienen entrada en `VerifiedGameCatalog` hasta entonces.
 | TMNT: Shredder's Revenge | Overlay de Epic aislado en `TMNT.exe`; la colisión es del EOS SDK, no de Unreal | [`tmnt-shredders-revenge.md`](games/tmnt-shredders-revenge.md) |
 | Core Keeper | Caché de Steam Cloud desincronizada del disco; se diagnostica con `regressionctl cloud-status` | [`core-keeper.md`](games/core-keeper.md) |
 | D3D12 por delay-load | Corrección transversal: enruta a D3DMetal por la evidencia real de Unreal | [`d3d12-delay-load-routing.md`](games/d3d12-delay-load-routing.md) |
-| Enshrouded | `drawIndirectCount` **implementado y demostrado**; no se publica porque el SPIRV-Cross del árbol es un stub | [`enshrouded.md`](games/enshrouded.md) |
+| Enshrouded | Cadena de **cinco** bloqueos del traductor Vulkan→Metal: cuatro resueltos (llega a jugarse), el quinto medido y abierto | [`enshrouded.md`](games/enshrouded.md) |
 | Critadel | Resuelto: la app del juego no llegaba a estar activa; cesión de activación y foco de ventana | [`critadel.md`](games/critadel.md) |
 | The Witcher 3 | Prelanzador de 32 bits sin Vulkan, interfaz Chromium omitida y D3D12 por D3DMetal | [`the-witcher-3.md`](games/the-witcher-3.md) |
 | Sonic Adventure 2 | Negro con música: el `d3d9` de DXVK aliasa el sampler de sombra y Metal lo rechaza; ruta a wined3d | [`sonic-adventure-2.md`](games/sonic-adventure-2.md) |
@@ -151,7 +151,7 @@ Sources/RegressionCore/          Coordinación, perfiles, telemetría y catálog
 Tests/RegressionCoreTests/       Pruebas de comportamiento y no regresión
 Scripts/                         Instalación, firma y empaquetado
 build/                           Toolchain, verificadores y ensamblado
-patches/                         Parches propios y auditables
+patches/                         Parches propios y auditables (Wine, DXMT, MoltenVK)
 assets/                          Marca, iconos, estados y entitlements
 docs/games/                      Expedientes públicos por juego
 tools/diagnostics/               Diagnósticos de solo lectura

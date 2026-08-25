@@ -586,6 +586,59 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
     instrumentación está en el binario.** Un `strings -a <dylib> | grep <marca>` cuesta un segundo
     y evita concluir «esta función nunca se llama» cuando lo que pasa es que tu `fprintf` no se
     compiló. Ocurrió aquí dos veces seguidas.
+81. **MoltenVK se reconstruye con `build/build-moltenvk.sh`, y todo su estado vive en tres
+    parches.** El script extrae el tar FOSS oficial, verifica que el SPIRV-Cross es el de
+    CodeWeavers (`for_mesh_pipeline` debe dar **31**; el árbol contaminado da **0**), obtiene el
+    resto de dependencias con el `fetchDependencies` del propio MoltenVK **apartando y restaurando
+    ese SPIRV-Cross** —si no, `fetchDependencies` lo sustituye por el upstream y vuelve la
+    contaminación de la regla 77—, aplica `draw-indirect-count`, `draw-index-builtin` y
+    `block-texel-view` en ese orden, y comprueba con `strings` que el símbolo llegó al dylib.
+    Está acreditado: **tar + los tres parches reproduce byte a byte el árbol que se compiló.**
+82. **La regla 79 tiene una causa concreta, y es el `-derivedDataPath`.** MoltenVK **no compila**
+    SPIRV-Cross: lo **copia** de `${BUILT_PRODUCTS_DIR}/libSPIRVCross.a`. Si el conversor y el
+    paquete usan derived data distintos, el dylib enlaza un `.a` viejo **sin dar ningún error**, y
+    el cambio parece no surtir efecto. Además Xcode no rastrea ese `.a` copiado como entrada: un
+    `.a` nuevo no basta para que re-enlace, hay que **borrar `libMoltenVK.dylib` del directorio de
+    productos**. Los dos pasos están en el script.
+83. **Un mensaje de error del juego no es un diagnóstico.** Enshrouded muere con «The graphics
+    memory is too small» y no falta memoria: el heap son 25,7 GB. El motor traduce cualquier fallo
+    de `createTexture` a `Graphics_NotEnoughDeviceMemory`, y la causa real —`vkCreateImage failed
+    with VK_ERROR_FEATURE_NOT_PRESENT`— está una línea antes en su propio log. Leer el log del
+    juego y el del traductor antes de creerse el diálogo.
+84. **Lo que Metal «no permite» se comprueba con Metal, no se argumenta.** Antes de emular
+    `VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT` se midieron las dos vías obvias con
+    programas de veinte líneas: `newTextureViewWithPixelFormat:` de BC5 a `RG32Uint` lanza una
+    **aserción dura** que aborta el proceso, y el aliasing de ambas texturas en un `MTLHeap` de
+    tipo `placement` **no preserva la disposición** —para 16 384 B de contenido la BC5 pide 32 768 B
+    de heap y la `RG32Uint` 17 408 B, y 15 440 de 16 384 bytes salen distintos—. Solo entonces se
+    escribió la emulación con almacenamiento propio y reconciliación por buffer en las barreras.
+85. **Cambiar `libMoltenVK.dylib` invalida la caché de pipelines de los juegos Vulkan.** Enshrouded
+    recompila miles de sombreadores tras cada build, y mientras lo hace **en partida** usa 2 hilos
+    en vez de 14, avisa de que faltan efectos visuales y puede desbordar su cola de replicación
+    (`Could not prune enough replication states`). No es una regresión del motor: hay que dejar que
+    termine **en el menú**, donde el propio juego lo recomienda. Corolario: agrupa los cambios de
+    MoltenVK en un solo build en vez de encadenar builds pequeños.
+86. **La validación de Metal TAPA los fallos de dirección de GPU, no solo los reporta.**
+    `MTL_DEBUG_LAYER=1` y `MTL_SHADER_VALIDATION=1` enlazan recursos de relleno en las ranuras
+    vacías, así que un juego que revienta sin ellas puede parecer perfectamente estable con ellas.
+    Sirven para **localizar** el acceso —`MTL_SHADER_VALIDATION=1` da función, offset y encoder
+    exactos, que es lo único que identificó el fallo de Enshrouded—, nunca para acreditar que algo
+    funciona. Una validación sin fallo no es una prueba de estabilidad.
+87. **Un binario incremental y uno limpio de las mismas fuentes pueden comportarse distinto, y el
+    limpio es el que manda.** Con las fuentes comprobadas byte a byte, el build incremental de
+    MoltenVK llegó a jugar cinco minutos y el limpio cae a los ocho segundos: la diferencia es la
+    ventana de una carrera, no el código. Al medir estabilidad se usa **siempre** el artefacto del
+    build reproducible; el incremental sirve para iterar, no para concluir.
+88. **Todo cambio de MoltenVK se mete en su parche ANTES de compilar.** `build/build-moltenvk.sh`
+    parte del tar y aplica los parches, así que editar el árbol de trabajo y compilar **no ejecuta
+    tu cambio** y no da ningún error. Se comprueba como manda la regla 80: `strings -a <dylib> |
+    grep <marca>`. Corolario: la instrumentación de diagnóstico entra y sale de los parches, así
+    que hay que **limpiarla explícitamente** antes de dar el trabajo por cerrado; en esta sesión se
+    colaron quince líneas de `fprintf` en un parche.
+89. **No se deja puesto un cambio que no arregló lo que se buscaba.** Sobre un traductor que usan
+    los 27 juegos certificados, una hipótesis fallida se revierte, no se acumula «por si acaso».
+    En el bloqueo 5 de Enshrouded se probaron y revirtieron dos: rellenar con memoria cero los
+    descriptor sets sin enlazar, y enlazar siempre el argument buffer del set enlazado.
 
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 
@@ -876,4 +929,5 @@ bash build/verify-canonical-installation.sh             # solo una app en Finder
 ## Build
 
 Scripts en `build/` (README §5). Toolchain ya compilado en `toolchain/x86/` — no recompilar
-salvo cambio de versiones. Wine: `build/build-wine.sh`. DXMT: `build/build-dxmt.sh`.
+salvo cambio de versiones. Wine: `build/build-wine.sh`. DXMT: `build/build-dxmt.sh`. MoltenVK:
+`build/build-moltenvk.sh` (tar oficial + los tres parches; ver reglas 77 y 81-82).

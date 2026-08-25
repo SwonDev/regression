@@ -165,6 +165,7 @@ bash build/verify-public-installed-state.sh --release-1.12.3
 bash build/apply-wine-patches.sh   # serie de parches propios sobre sources-26.3.0
 bash build/build-wine.sh           # wine CX 26.3.0 → Regression.app
 bash build/build-dxmt.sh           # DXMT v0.72 + parches
+bash build/build-moltenvk.sh       # MoltenVK: tar FOSS oficial + los tres parches (reglas 81-82, 88)
 bash build/build-public-wine-runtime.sh   # recompila el arranque para /Applications
 Scripts/sign_regression.sh Regression.app # SIEMPRE tras tocar el bundle
 ```
@@ -426,16 +427,18 @@ exacto que recibirá GitHub.** Actualizar también la nota de contrato en `READM
 - **Verificados en esta sesión sobre 1.12.7**: Sonic Adventure 2, Critadel, Wayfinder (pantalla de
   perfiles con partidas), Redfall, Beyond Contact, Runika, The Last Spell, Fields of Mistria,
   The Witcher 3 y la tienda de Steam.
-- **Enshrouded: el bloqueo documentado está resuelto; lo que queda es otra cosa.**
-  `vkCmdDrawIndirectCount` y su variante indexada están **implementados** contra las fuentes FOSS
-  oficiales (`patches/moltenvk-26.3.0-draw-indirect-count.patch`): un kernel recorta los argumentos
-  indirectos con el contador de la GPU y anula los draws sobrantes. Compilado **desde el tar**, el
-  juego pasa a `drawIndirectCount=VK_TRUE` y `Created Vulkan device!`, y Wayfinder y Redfall siguen
-  bien con ese MoltenVK. **No se publica** porque el juego muere después, en
-  `WaitForGpcLoaderReady`, sin dejar rastro, y porque sustituir `libMoltenVK.dylib` obliga a
-  revalidar la fila D3D9 entera y no hay ningún juego D3D9 puro instalado con el que hacerlo
-  (reglas 77-78 de `AGENTS.md`). El binario publicado está restaurado y verificado. Ver
-  `docs/games/enshrouded.md`.
+- **Enshrouded: cuatro de cinco bloqueos resueltos; llegó a jugarse y no se publica.** El motor es
+  Vulkan puro y la cadena está medida entera en `docs/games/enshrouded.md`. Resueltos con tres
+  parches reproducibles sobre el tar FOSS oficial —`moltenvk-26.3.0-draw-indirect-count`,
+  `-draw-index-builtin` y `-block-texel-view`, que `build/build-moltenvk.sh` aplica en orden—:
+  `vkCmdDrawIndirectCount`, un shader de cómputo que no convergía, `gl_DrawID` en el backend MSL, y
+  la emulación de `VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT`. Con eso el juego arranca, carga
+  la partida y muestra mundo, HUD, misiones e inventario. **El quinto sigue abierto**: un shader de
+  cómputo *del juego* lee el argument buffer de un descriptor set sin enlazar y eso falla la
+  dirección en la GPU (`VK_ERROR_DEVICE_LOST`). **No lo introducen los parches** —el binario previo
+  a todos ellos produce 861 cargas inválidas idénticas bajo `MTL_SHADER_VALIDATION=1`— y ocho
+  hipótesis quedaron descartadas con evidencia, tabuladas en el expediente. La app instalada lleva
+  el `libMoltenVK.dylib` **publicado**; el experimental se reconstruye con un comando.
 - **Validados con incidencia**: Dragon's Dogma 2 (letterbox 16:9), Rotwood (superficie 1512×870).
 - **Investigación abierta y separada**: FANTASY LIFE i, bloqueado por la política oficial de EAC en
   entornos virtualizados (`208 Cannot run under Virtual Machine`). No se elude, no se oculta la VM,
@@ -458,15 +461,10 @@ exacto que recibirá GitHub.** Actualizar también la nota de contrato en `READM
 - **Matriz de regresión permanente**: Steam/CEF, Palworld, Moonlighter 2 (control Unity) y la ruta D3D9.
   ⚠️ Palworld y Moonlighter 2 **ya no están instalados**; en su lugar se validó con Fields of
   Mistria (Unity) y Dragonkin (UE5/D3D12 por GPTK), que cubren las mismas clases de motor.
-- ⚠️ **El lanzador instalado está por delante del contrato publicado.** `Contents/MacOS/regression-engine`
-  incluye las rutas de Cloudheim y TMNT y el detector D3D12 por evidencia, y su hash ya no coincide
-  con los PIN de 1.12.4. El `ntdll.so` instalado es el **loader v2** (acredita el App ID), con
-  `ComponentHealth` y los verificadores del asset refrescados en consecuencia. Es deliberado: se
-  resuelve al publicar la próxima versión, **nunca** reescribiendo los PIN de una release ya
-  publicada. `build/verify-protected-state.sh` apunta al bundle de *staging* del checkout, así que
-  no sirve para auditar `/Applications`; `verify-public-installed-state.sh` todavía no tiene modo
-  `--release-1.12.5` y hay que añadirlo al publicar. Backups en
-  `backups/launcher-pre-cloudheim-20260821-195727/`, `backups/runtime-install-20260822-062125/` y
-  `backups/launcher-pre-tmnt-20260822-065735/`.
+- **El estado instalado coincide con el contrato publicado.**
+  `bash build/verify-public-installed-state.sh --release-1.12.7` pasa entero sobre
+  `/Applications/Regression.app`, incluido `libMoltenVK.dylib`. `build/verify-protected-state.sh`
+  apunta al bundle de *staging* del checkout, así que no sirve para auditar `/Applications`: para
+  eso está el verificador público.
 - La botella vive en `~/Library/Application Support/Regression/Bottles/Steam/` (datos del usuario,
   fuera del repo).
