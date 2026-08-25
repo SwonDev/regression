@@ -261,6 +261,25 @@ Lo que sigue sin reproducirse en el arnés es **la condición que deja ese set s
 orden de vinculación (sets antes que la pipeline), ni un layout compatible pero distinto, ni un set
 sencillamente no enlazado bastan por sí solos.
 
+**La causa está acotada a una sola posibilidad**, y se puede afirmar leyendo el código. La guarda
+que se salta la ranura es `descSet && descSet->hasMetalArgumentBuffer()`, y ese segundo término no
+comprueba nada sobre el buffer:
+
+```cpp
+bool hasMetalArgumentBuffer() { return _layout->isUsingMetalArgumentBuffers(); }
+```
+
+Devuelve simplemente si los argument buffers están activos, que con este runtime siempre lo están.
+Así que **el único término que puede fallar es `descSet == nullptr`**: en el momento del dispatch,
+`_boundDescriptorSets[N]` está vacío. Sólo hay dos formas de llegar ahí —que la aplicación no haya
+enlazado ese set para ese punto de vinculación, o que el layout de la pipeline declare menos sets de
+los que el shader referencia—, y el aviso nuevo distingue entre ambas: si el índice queda fuera de
+`getDescriptorSetCount()`, el bucle ni lo visita y no habrá aviso; si hay aviso, el set entra en el
+rango y estaba sin enlazar.
+
+Es decir: **el primer arranque del juego con este MoltenVK responde la pregunta que queda**, y la
+responde en una línea del log en vez de en horas de bisección.
+
 **Y ese salto ha dejado de ser silencioso.** `patches/moltenvk-26.3.0-report-missing-argument-buffer.patch`
 hace que MoltenVK avise, con el número de set y la etapa, cuando se salta un argument buffer que el
 shader **sí usa** —sin ruido para los layouts vacíos que la aplicación legítimamente no enlaza, y
