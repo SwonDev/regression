@@ -392,7 +392,17 @@
  	_vulkan12FeaturesNoExt.shaderOutputViewportIndex = _features.multiViewport;
 --- a/MoltenVK/MoltenVK/Vulkan/vulkan.mm
 +++ b/MoltenVK/MoltenVK/Vulkan/vulkan.mm
-@@ -2390,6 +2390,7 @@
+@@ -1087,7 +1087,8 @@
+     MVKDevice* mvkDev = MVKDevice::getMVKDevice(device);
+     VkResult rslt = mvkDev->createPipelines<MVKComputePipeline, VkComputePipelineCreateInfo>(pipelineCache, count, pCreateInfos, pAllocator, pPipelines);
+ 	MVKTraceVulkanCallEnd();
+-	return rslt;
++	VkResult regpipe_rv = rslt;
++	return regpipe_rv;
+ }
+ 
+ MVK_PUBLIC_VULKAN_SYMBOL void vkDestroyPipeline(
+@@ -2390,6 +2391,7 @@
      uint32_t                                    stride) {
  
  	MVKTraceVulkanCallStart();
@@ -400,11 +410,26 @@
  	MVKTraceVulkanCallEnd();
  }
  
-@@ -2403,6 +2404,7 @@
+@@ -2403,6 +2405,7 @@
      uint32_t                                    stride) {
  
  	MVKTraceVulkanCallStart();
 +	MVKAddCmd(DrawIndirectCount, commandBuffer, buffer, offset, countBuffer, countBufferOffset, maxDrawCount, stride);
  	MVKTraceVulkanCallEnd();
  }
+ 
+--- a/MoltenVKShaderConverter/MoltenVKShaderConverter/SPIRVToMSLConverter.cpp
++++ b/MoltenVKShaderConverter/MoltenVKShaderConverter/SPIRVToMSLConverter.cpp
+@@ -301,6 +301,12 @@
+ 		pMSLCompiler->set_msl_options(shaderConfig.options.mslOptions);
+ 
+ 		auto scOpts = pMSLCompiler->get_common_options();
++		// SPIRV-Cross fija en 3 el número de pasadas de emisión y aborta con «Maximum compilation
++		// loops detected» si no converge. Su propio comentario dice que esta opción «can be
++		// increased in an attempt to workaround SPIRV-Cross bugs temporarily». Hay shaders que
++		// necesitan más pasadas porque cada una fuerza temporales nuevos desde
++		// track_expression_read(); con el tope por defecto no llegan a compilar nunca.
++		scOpts.force_recompile_max_debug_iterations = 32;
+ 		scOpts.vertex.flip_vert_y = shaderConfig.options.shouldFlipVertexY;
+ 		pMSLCompiler->set_common_options(scOpts);
  

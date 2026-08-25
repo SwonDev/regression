@@ -82,46 +82,45 @@ funcionando con ese binario.
 
 Aun así **no se publica**, por dos motivos:
 
-1. **Enshrouded todavía no arranca con él, y ya se sabe exactamente dónde se queda.**
+1. **Enshrouded avanza mucho más, pero todavía no arranca. La cadena de bloqueos está medida.**
 
-   Instrumentando MoltenVK paso a paso —creación de pipelines, `getMTLFunction`, y la conversión
-   SPIR-V → MSL— el balance de una ejecución es este:
+   Primero, una corrección: hubo dos diagnósticos intermedios equivocados —«muere sin dejar
+   rastro» y «bucle infinito que nunca lanza»— y los dos eran **artefactos de builds
+   inconsistentes**. MoltenVK aquí enlaza un `libSPIRVCross.a` prefabricado que vive en
+   `External/build/Release` y dentro de `SPIRVCross.xcframework`; reconstruir solo el conversor o
+   solo el dylib mezcla dos versiones distintas y produce síntomas que no son reales. **Se
+   construye con `MoltenVKPackaging.xcodeproj`, esquema «MoltenVK Package (macOS only)»**, y si se
+   toca SPIRV-Cross hay que rehacer también su `.a` y la slice del xcframework.
 
-   | Marca | Veces |
-   |---|---|
-   | `vkCreateComputePipelines` entra | 12 |
-   | Constructor `MVKComputePipeline` | 12 |
-   | Llega a `getMTLFunction` | 12 |
-   | Llega a `MVKShaderModule::getMTLFunction` | 12 |
-   | Llega a `pMSLCompiler->compile()` | **3** |
-   | **Vuelve de `compile()`** | **0** |
-   | `vkCreateComputePipelines` retorna | **0** |
+   Con un build coherente, la cadena real es esta:
 
-   Es decir: tres hilos entran en el compilador de SPIRV-Cross y **ninguno sale**; los otros nueve
-   se quedan esperando detrás. El juego escribe `start creation step WaitForGpcLoaderReady`, su
-   cargador de pipelines nunca queda listo y el proceso termina.
+   **Bloqueo 1 — `drawIndirectCount` (resuelto).** Implementado; el juego acepta la GPU.
 
-   **No es una excepción no capturada**: `libMoltenVKShaderConverter.a` se compila con excepciones
-   —255 símbolos `__gxx_personality`— y el `catch (CompilerError&)` de `SPIRVToMSLConverter::convert`
-   está instrumentado y no se dispara nunca.
+   **Bloqueo 2 — un shader de cómputo no convergía (resuelto).**
+   `VolumetricFog3ViewVolumeIntegrate` fallaba con:
 
-   **Es un bucle sin salida en el backend MSL de SPIRV-Cross.** `CompilerGLSL::reset()` tiene una
-   salvaguarda —`Maximum compilation loops detected and no forward progress was made`— pero **solo
-   salta si el compilador no declara progreso**:
-
-   ```cpp
-   if (iteration_count >= options.force_recompile_max_debug_iterations && !is_force_recompile_forward_progress)
-       SPIRV_CROSS_THROW("Maximum compilation loops detected ...");
+   ```text
+   [mvk-error] SPIR-V to MSL conversion error: Maximum compilation loops detected and no forward
+               progress was made. Must be a SPIRV-Cross bug!
    ```
 
-   El propio comentario del código lo anticipa: «In buggy situations we will loop forever, or loop
-   for an unbounded number of iterations». Con uno de los shaders de cómputo de Enshrouded se da
-   justo ese caso: cada vuelta pide recompilar declarando progreso, así que la salvaguarda nunca
-   salta y `compile()` gira indefinidamente.
+   Instrumentando `Compiler::force_recompile()` con `backtrace`, el causante dominante es
+   `CompilerGLSL::track_expression_read()` a través de `to_expression()`: cada pasada fuerza
+   temporales nuevos y SPIRV-Cross agota su tope de **3** pasadas de emisión. Ese tope es una
+   opción documentada —«Debug option, can be increased in an attempt to workaround SPIRV-Cross
+   bugs temporarily»—, así que se sube a 32 en `SPIRVToMSLConverter::convert`. Con eso el shader
+   converge, los 70 shaders del arranque compilan y **no queda ni un solo bucle agotado**.
 
-   Con el SPIRV-Cross contaminado del árbol de trabajo **sí** saltaba —de ahí el
-   `VK_ERROR_INVALID_SHADER_NV` en `VolumetricFog3ViewVolumeIntegrate` que se vio al principio—.
-   Con el bueno, no salta y se cuelga. Es un defecto de SPIRV-Cross, no de este proyecto.
+   **Bloqueo 3 — `gl_DrawID` (abierto).** El juego pasa a fallar en pipelines gráficas
+   —`BillboardModelChunk_*`, `Terrain_Visibility_Chunklets`— con:
+
+   ```text
+   [mvk-error] SPIR-V to MSL conversion error: DrawIndex is not supported in MSL.
+   ```
+
+   Es el builtin `BuiltInDrawIndex` de SPIR-V. Metal no lo expone, y SPIRV-Cross lo rechaza en
+   tres sitios de `spirv_msl.cpp`. **El juego lo usa precisamente porque ahora tiene
+   `drawIndirectCount`**: dibuja en lotes y necesita saber qué draw es cada uno.
 
 2. **Publicar `libMoltenVK.dylib` obliga a revalidar toda la fila D3D9 de la matriz**, y no hay
    ningún juego D3D9 puro instalado con el que hacerlo: Sonic Adventure 2 va por `wined3d` desde
@@ -132,13 +131,19 @@ El binario publicado se restauró y el estado instalado vuelve a verificar como 
 
 ## Qué haría falta para cerrarlo
 
-1. **Encontrar qué construcción del shader hace que SPIRV-Cross pida recompilar sin parar.** La
-   vía es instrumentar `CompilerGLSL::force_recompile()` para volcar quién la llama en cada vuelta
-   y con qué motivo; el bucle está en `CompilerGLSL::compile()` y la cuenta en
-   `CompilerGLSL::reset(iteration_count)`.
-2. Corregirlo en SPIRV-Cross —o, como mínimo, hacer que la salvaguarda salte también con progreso
-   declarado, para que un shader así **falle limpio** en vez de colgar al compilador de pipelines:
-   un error es peor que un cuelgue solo si oculta información, y aquí la ocultaría menos.
+1. **Implementar `gl_DrawID` en el backend MSL.** Es abordable porque en la ruta indirecta el
+   índice del draw **se conoce al codificar**: MoltenVK ya encodea un draw de Metal por cada draw
+   de Vulkan, así que basta con pasarlo. El diseño sería:
+   - SPIRV-Cross: declarar un buffer implícito —al estilo del `spvIndirectParams` que ya existe
+     para teselación— y emitir `BuiltInDrawIndex` como lectura de él, en lugar de los tres
+     `SPIRV_CROSS_THROW` de `spirv_msl.cpp`; y reportarlo en los resultados de conversión.
+   - MoltenVK: reservar el índice de buffer implícito, propagar `needsDrawIndexBuffer` y escribir
+     el índice antes de cada draw en los cuatro caminos indirectos —`MVKCmdDrawIndirect`,
+     `MVKCmdDrawIndexedIndirect` y sus variantes con contador—.
+   No es un parche pequeño: toca el manejo de builtins de SPIRV-Cross, que afecta a **todos** los
+   shaders de **todos** los juegos. Va con su propia validación.
+2. Comprobar si detrás de `gl_DrawID` aparece un cuarto bloqueo. El juego usa un renderizador con
+   muchas características modernas y la cadena podría no terminar ahí.
 3. Instalar un juego D3D9 puro para poder acreditar la fila D3D9 de la matriz con el MoltenVK nuevo.
 4. Solo entonces, cortar una release con él.
 
