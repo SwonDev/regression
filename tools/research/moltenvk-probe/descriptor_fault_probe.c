@@ -57,7 +57,9 @@ int main(int argc, char** argv) {
     CHK(vkCreateDescriptorSetLayout(dev,&lv,NULL,&dslv));
     VkDescriptorSetLayout sets[5]={dsl0,dslv,dslv,dslv,dsl4};
     if (strstr(argc>1?argv[argc-1]:"", "length") != NULL) sets[1]=dsl4;
-    VkPipelineLayoutCreateInfo pli={ .sType=VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,.setLayoutCount=5,.pSetLayouts=sets };
+    VkPushConstantRange pcr={ .stageFlags=VK_SHADER_STAGE_COMPUTE_BIT,.offset=0,.size=4 };
+    VkPipelineLayoutCreateInfo pli={ .sType=VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,.setLayoutCount=5,.pSetLayouts=sets,
+        .pushConstantRangeCount=1,.pPushConstantRanges=&pcr };
     VkPipelineLayout pl; CHK(vkCreatePipelineLayout(dev,&pli,NULL,&pl));
 
     FILE* f=fopen(spv,"rb");
@@ -68,7 +70,9 @@ int main(int argc, char** argv) {
     VkShaderModule sm; CHK(vkCreateShaderModule(dev,&smi,NULL,&sm));
     VkComputePipelineCreateInfo cpi={ .sType=VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,.layout=pl,
         .stage={ .sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,.stage=VK_SHADER_STAGE_COMPUTE_BIT,.module=sm,.pName="main" } };
-    VkPipeline pipe; CHK(vkCreateComputePipelines(dev,VK_NULL_HANDLE,1,&cpi,NULL,&pipe));
+    VkPipeline pipe, pipe2;
+    CHK(vkCreateComputePipelines(dev,VK_NULL_HANDLE,1,&cpi,NULL,&pipe));
+    CHK(vkCreateComputePipelines(dev,VK_NULL_HANDLE,1,&cpi,NULL,&pipe2));
     printf("pipeline de cómputo creada\n");
 
     // Buffers
@@ -110,6 +114,15 @@ int main(int argc, char** argv) {
         if (enlazarSet4 || destino==1u)
             vkCmdBindDescriptorSets(cb,VK_PIPELINE_BIND_POINT_COMPUTE,pl,destino,1,&ds[1],0,NULL);
     }
+    uint32_t ranura=0; vkCmdPushConstants(cb,pl,VK_SHADER_STAGE_COMPUTE_BIT,0,4,&ranura);
+    vkCmdDispatch(cb,64,1,1);
+    // Se cambia de pipeline y se vuelve, SIN re-enlazar los descriptor sets: así los buffers dejan
+    // de estar sucios mientras el buffer implícito de tamaños vuelve a marcarse para enlazar.
+    vkCmdBindPipeline(cb,VK_PIPELINE_BIND_POINT_COMPUTE,pipe2);
+    ranura=1; vkCmdPushConstants(cb,pl,VK_SHADER_STAGE_COMPUTE_BIT,0,4,&ranura);
+    vkCmdDispatch(cb,64,1,1);
+    vkCmdBindPipeline(cb,VK_PIPELINE_BIND_POINT_COMPUTE,pipe);
+    ranura=2; vkCmdPushConstants(cb,pl,VK_SHADER_STAGE_COMPUTE_BIT,0,4,&ranura);
     vkCmdDispatch(cb,64,1,1);
     CHK(vkEndCommandBuffer(cb));
 
@@ -124,8 +137,8 @@ int main(int argc, char** argv) {
         void* p=NULL;
         if (vkMapMemory(dev,mem[0],0,VK_WHOLE_SIZE,0,&p)==VK_SUCCESS) {
             uint32_t* v=(uint32_t*)p;
-            printf("  el shader vio length() = %u  (el buffer tiene 4096 B = 1024 uint;"
-                   " con rango parcial deberían ser 256)\n", v[0]);
+            printf("  length() por dispatch: [1]=%u  [2 tras cambiar de pipeline]=%u  [3 al volver]=%u\n",
+                   v[0], v[1], v[2]);
             vkUnmapMemory(dev,mem[0]);
         }
     }

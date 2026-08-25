@@ -1,0 +1,16 @@
+#version 450
+#extension GL_EXT_nonuniform_qualifier : require
+
+// Tercer patrón, el que queda vivo en Enshrouded: un array bindless de SSBO con cuenta variable e
+// indexación no uniforme. Si el set se reserva con menos descriptores de los que el shader indexa,
+// MoltenVK dimensiona el argument buffer para los reservados y el shader lee fuera.
+layout(local_size_x = 1) in;
+
+layout(set = 0, binding = 0) buffer Salida { uint valores[]; } salida;
+layout(set = 1, binding = 0) readonly buffer Recurso { uint datos[]; } recursos[];
+
+layout(push_constant) uniform Empuje { uint indice; } empuje;
+
+void main() {
+    salida.valores[0] = recursos[nonuniformEXT(empuje.indice)].datos[0];
+}

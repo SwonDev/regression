@@ -1,16 +1,18 @@
 #version 450
 
-// Segundo patrón: un array de tamaño dinámico cuyo índice se deriva de length(). MoltenVK no puede
-// preguntarle el tamaño a Metal, así que lo publica en un buffer auxiliar; si ese tamaño no
-// coincide con el rango del descriptor, el shader indexa fuera y falla la dirección en la GPU.
+// El tamaño de un array dinámico no lo puede preguntar el shader a Metal: MoltenVK lo publica en
+// un buffer implícito que sólo rellena cuando hay bindings de buffer marcadas como sucias. Con
+// argument buffers puede no haberlas, y entonces ese buffer se enlaza vacío —Metal lo redondea a
+// 1 byte— y la lectura del tamaño se sale. Este patrón fuerza esa secuencia: varios dispatches con
+// una re-vinculación de pipeline en medio, sin volver a enlazar los descriptor sets.
 layout(local_size_x = 1) in;
 
 layout(set = 0, binding = 0) buffer Salida  { uint valores[]; } salida;
 layout(set = 1, binding = 0) readonly buffer Origen { uint datos[]; } origen;
 
+layout(push_constant) uniform Empuje { uint ranura; } empuje;
+
 void main() {
     uint n = origen.datos.length();
-    // Se guarda el tamaño que ve el shader y se lee el último elemento según ese tamaño.
-    salida.valores[0] = n;
-    salida.valores[1] = origen.datos[n - 1u];
+    salida.valores[empuje.ranura] = n;
 }
