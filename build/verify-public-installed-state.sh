@@ -86,6 +86,12 @@ case "$MODE" in
         [[ -d "$APP" && ! -L "$APP" ]] \
             || fail "la release pública debe ser un bundle físico"
         ;;
+    --release-1.12.10)
+        EXPECTED_VERSION="1.12.10"
+        EXPECTED_BUILD="48"
+        [[ -d "$APP" && ! -L "$APP" ]] \
+            || fail "la release pública debe ser un bundle físico"
+        ;;
     --release-1.12.9)
         EXPECTED_VERSION="1.12.9"
         EXPECTED_BUILD="47"
@@ -122,8 +128,9 @@ fi
 [[ "$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")" == "$EXPECTED_BUILD" ]] \
     || fail "build público no soportado"
 
-if [[ "$MODE" == "--release-1.12.9" || "$MODE" == "--release-1.12.8" ]]; then
-    # 1.12.8 y 1.12.9 sólo cambian la app —verificación de runs observados, caducidad del aviso de
+if [[ "$MODE" == "--release-1.12.10" || "$MODE" == "--release-1.12.9" \
+      || "$MODE" == "--release-1.12.8" ]]; then
+    # 1.12.8, 1.12.9 y 1.12.10 sólo cambian la app —verificación de runs observados, caducidad del aviso de
     # Steam y el barrido de logs de la autorreparación—, y comparten el mismo runtime público, así
     # que comparten también sus hashes. 1.12.8 sólo cambia la app: la verificación manual deja
     # de exigir un envelope que nunca existirá, y el aviso de arranque de Steam caduca al cerrarse.
