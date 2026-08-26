@@ -455,12 +455,13 @@ exacto que recibirá GitHub.** Actualizar también la nota de contrato en `READM
 - **La autorreparación ya está desbloqueada y blindada.** El loader v2 acredita el App ID contra
   el `appmanifest` de Steam antes de aplicar nada, y la activación solo se promueve a aplicada si
   trae respaldo real y manifiesto de rollback de dos entradas. `reconcile` y `restore` funcionan.
-  Sigue siendo un aprendizaje **acotado**, pero ya no ciego a media botella:
-  `CompiledCrashRepairLearner` lee los `.log` que mencionen el ejecutable **en dos sitios**, bajo
-  `drive_c/users` y en la propia carpeta de instalación del juego, que es donde escriben su traza
-  motores como el de Enshrouded. La carpeta se deriva de la ruta Windows del ejecutable y no puede
-  salirse de la botella. Sigue sin cubrir a un juego que solo deja rastro en el log de **su
-  lanzador** —TMNT—, que se blinda a mano.
+  `CompiledCrashRepairLearner` busca la traza **en dos sitios**: bajo `drive_c/users` y en la propia
+  carpeta de instalación del juego, que es donde la escriben motores como el de Enshrouded. La
+  carpeta se deriva de la ruta Windows del ejecutable y no puede salirse de la botella. El filtro
+  por nombre de ejecutable solo se aplica a los logs de `drive_c/users`, que comparten todos los
+  juegos: dentro de la carpeta del juego la ubicación ya lo asocia, y exigir además el nombre
+  dejaba fuera al que escribe **su lanzador** —el caso de TMNT—, que nombra el suyo. Sigue siendo
+  un aprendizaje acotado —receta compilada, respaldo y manifiesto de rollback— pero ya no ciego.
 - **Matriz de regresión permanente**: Steam/CEF, Palworld, Moonlighter 2 (control Unity) y la ruta D3D9.
   ⚠️ Palworld y Moonlighter 2 **ya no están instalados**; en su lugar se validó con Fields of
   Mistria (Unity) y Dragonkin (UE5/D3D12 por GPTK), que cubren las mismas clases de motor.

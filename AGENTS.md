@@ -661,7 +661,11 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
     escribe ahí su `enshrouded.log`—. Mirar sólo el primero dejaba esos juegos fuera del aprendizaje
     y obligaba a blindarlos a mano. La carpeta del juego se deriva de la ruta Windows del propio
     ejecutable, se rechaza cualquier ruta que no sea del disco C: y ningún componente puede escapar
-    de la botella. Lo que sigue fuera es el juego que sólo deja rastro en el log de **su lanzador**.
+    de la botella. Y el filtro por nombre de ejecutable **sólo aplica a los logs de
+    `drive_c/users`**, que comparten todos los juegos: uno que ya está dentro de la carpeta del
+    juego está asociado por su ubicación, y exigirle además el nombre dejaba fuera al que escribe
+    su lanzador —el caso de TMNT—, que nombra el suyo. Ese filtro no se relaja en la carpeta
+    compartida: ahí sin nombre no se sabe de quién es el rastro, y una prueba lo fija.
 
 93. **Un run sin envelope de lanzamiento no es un run inválido: es el que observó la telemetría.**
     Cuando el usuario abre el juego desde el propio Steam de la botella, Regression no autoriza el

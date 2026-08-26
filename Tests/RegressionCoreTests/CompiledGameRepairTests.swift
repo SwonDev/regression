@@ -1115,6 +1115,77 @@ final class CompiledGameRepairTests: XCTestCase {
         XCTAssertEqual(detection.executable, "future.exe")
     }
 
+    /// El caso de TMNT: el rastro lo deja el **lanzador**, que nombra su propio ejecutable y no el
+    /// del juego. Exigir el nombre del juego en un log que ya está dentro de su carpeta dejaba
+    /// fuera a esa familia entera y obligaba a blindarla a mano.
+    func testCrashDetectionAcceptsALauncherLogInsideTheGameFolder() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-crash-launcher-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("drive_c/users/test", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+
+        let gameDirectory = root.appendingPathComponent(
+            "drive_c/Program Files (x86)/Steam/steamapps/common/Turtles",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: gameDirectory, withIntermediateDirectories: true)
+        let crashURL = gameDirectory.appendingPathComponent("Launcher.log")
+        // El log nombra al lanzador, nunca al ejecutable del juego.
+        try Data("""
+        Unhandled Exception: EXCEPTION_ACCESS_VIOLATION reading address 0x1
+        d3d11.dll
+        gameoverlayrenderer64.dll
+        EOSOVH-Win64-Shipping.dll
+        EOSSDK-Win64-Shipping.dll
+        TurtlesLauncher.exe
+        """.utf8).write(to: crashURL)
+        let now = Date()
+        try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: crashURL.path)
+
+        let detection = try XCTUnwrap(CompiledCrashRepairLearner.detect(
+            appID: "424242",
+            executable: #"C:\Program Files (x86)\Steam\steamapps\common\Turtles\Turtles.exe"#,
+            bottleURL: root,
+            startedAt: now.addingTimeInterval(-10),
+            endedAt: now.addingTimeInterval(1)
+        ))
+        XCTAssertEqual(detection.recipe, .unrealD3D11DualOverlayIsolation)
+        XCTAssertEqual(detection.executable, "turtles.exe", "se blinda el juego, no su lanzador")
+    }
+
+    /// Un log bajo `drive_c/users` lo comparten todos los juegos, así que ahí el nombre del
+    /// ejecutable sigue siendo obligatorio: sin él no se sabe de quién es el rastro.
+    func testCrashDetectionStillRequiresTheExecutableInSharedUserLogs() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-crash-shared-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let logs = root.appendingPathComponent(
+            "drive_c/users/test/AppData/Local/Otro/Saved/Crashes/UECC-1", isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+        let crashURL = logs.appendingPathComponent("Otro.log")
+        try Data("""
+        Unhandled Exception: EXCEPTION_ACCESS_VIOLATION reading address 0x1
+        d3d11.dll
+        EOSOVH-Win64-Shipping.dll
+        EOSSDK-Win64-Shipping.dll
+        OtroJuego.exe
+        """.utf8).write(to: crashURL)
+        let now = Date()
+        try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: crashURL.path)
+
+        XCTAssertNil(try CompiledCrashRepairLearner.detect(
+            appID: "424242",
+            executable: #"C:\Program Files (x86)\Steam\steamapps\common\Turtles\Turtles.exe"#,
+            bottleURL: root,
+            startedAt: now.addingTimeInterval(-10),
+            endedAt: now.addingTimeInterval(1)
+        ), "el rastro de otro juego no puede blindar a este")
+    }
+
     /// La ruta del ejecutable no puede sacar el barrido de la botella.
     func testGameDirectoryNeverEscapesTheBottle() {
         let bottle = URL(fileURLWithPath: "/tmp/bottle")

@@ -854,22 +854,32 @@ public enum CompiledCrashRepairLearner {
         ].compactMap { $0 }
 
         var scanned = false
-        for root in roots where FileManager.default.fileExists(atPath: root.path) {
+        var enLaCarpetaDelJuego: Set<URL> = []
+        for (indice, root) in roots.enumerated()
+        where FileManager.default.fileExists(atPath: root.path) {
             scanned = true
+            var deEstaRaiz: [(url: URL, modifiedAt: Date)] = []
             try collectLogs(
                 below: root,
                 depth: maximumDepth,
                 budget: &budget,
                 earliest: earliest,
                 latest: latest,
-                result: &candidates
+                result: &deEstaRaiz
             )
+            if indice == 1 { enLaCarpetaDelJuego.formUnion(deEstaRaiz.map(\.url)) }
+            candidates.append(contentsOf: deEstaRaiz)
         }
         guard scanned else { return nil }
 
         for candidate in candidates.sorted(by: { $0.modifiedAt > $1.modifiedAt }) {
             guard let log = try readTail(of: candidate.url),
-                  logMentionsExecutable(log, executable: executable),
+                  // Un log bajo `drive_c/users` lo comparten todos los juegos, así que tiene que
+                  // nombrar el ejecutable para saber de quién es. Uno que está DENTRO de la carpeta
+                  // del juego ya está asociado por su ubicación, y exigir además el nombre dejaba
+                  // fuera al que escribe su lanzador —el caso de TMNT—, que nombra el suyo.
+                  enLaCarpetaDelJuego.contains(candidate.url)
+                    || logMentionsExecutable(log, executable: executable),
                   let recipe = CompiledRepairClassifier.recipe(forCrashLog: log),
                   let basename = executable
                     .split(whereSeparator: { $0 == "/" || $0 == "\\" })
