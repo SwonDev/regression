@@ -1068,6 +1068,73 @@ final class CompiledGameRepairTests: XCTestCase {
         XCTAssertThrowsError(try CompiledRepairActivationStore.activations(in: root))
     }
 
+    /// Muchos motores dejan su traza junto al usuario, pero otros la escriben en su propia carpeta
+    /// de instalación. Mirar sólo `drive_c/users` dejaba esos juegos fuera de la autorreparación y
+    /// obligaba a blindarlos a mano, que es lo que le pasaba a TMNT.
+    func testCrashDetectionReadsTheLogTheGameLeavesInItsOwnFolder() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("regression-crash-gamedir-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        // La botella tiene su carpeta de usuarios, pero sin ninguna traza dentro.
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("drive_c/users/test", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+
+        let gameDirectory = root.appendingPathComponent(
+            "drive_c/Program Files (x86)/Steam/steamapps/common/Future",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: gameDirectory, withIntermediateDirectories: true)
+        let crashURL = gameDirectory.appendingPathComponent("future.log")
+        try Data("""
+        Unhandled Exception: EXCEPTION_ACCESS_VIOLATION reading address 0x1
+        d3d11.dll
+        gameoverlayrenderer64.dll
+        EOSOVH-Win64-Shipping.dll
+        EOSSDK-Win64-Shipping.dll
+        Future.exe
+        """.utf8).write(to: crashURL)
+        let now = Date()
+        try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: crashURL.path)
+
+        let detection = try XCTUnwrap(CompiledCrashRepairLearner.detect(
+            appID: "424242",
+            executable: #"C:\Program Files (x86)\Steam\steamapps\common\Future\Future.exe"#,
+            bottleURL: root,
+            startedAt: now.addingTimeInterval(-10),
+            endedAt: now.addingTimeInterval(1)
+        ))
+        XCTAssertEqual(detection.recipe, .unrealD3D11DualOverlayIsolation)
+        // /tmp es un enlace a /private/tmp, así que se comparan rutas resueltas.
+        XCTAssertEqual(
+            detection.crashLogURL.resolvingSymlinksInPath().standardizedFileURL,
+            crashURL.resolvingSymlinksInPath().standardizedFileURL
+        )
+        XCTAssertEqual(detection.executable, "future.exe")
+    }
+
+    /// La ruta del ejecutable no puede sacar el barrido de la botella.
+    func testGameDirectoryNeverEscapesTheBottle() {
+        let bottle = URL(fileURLWithPath: "/tmp/bottle")
+        XCTAssertNil(CompiledCrashRepairLearner.gameDirectoryURL(
+            forExecutable: #"C:\..\..\etc\Future.exe"#, bottleURL: bottle
+        ))
+        XCTAssertNil(CompiledCrashRepairLearner.gameDirectoryURL(
+            forExecutable: #"D:\Juegos\Future.exe"#, bottleURL: bottle
+        ))
+        XCTAssertNil(CompiledCrashRepairLearner.gameDirectoryURL(
+            forExecutable: "Future.exe", bottleURL: bottle
+        ))
+        XCTAssertEqual(
+            CompiledCrashRepairLearner.gameDirectoryURL(
+                forExecutable: #"C:\Juegos\Future\Future.exe"#, bottleURL: bottle
+            ),
+            bottle.appendingPathComponent("drive_c/Juegos/Future", isDirectory: true)
+        )
+    }
+
     func testCrashDetectionIsPureUntilActivationIsExplicit() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("regression-crash-pure-detection-\(UUID().uuidString)")

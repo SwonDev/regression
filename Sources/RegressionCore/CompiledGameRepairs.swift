@@ -839,20 +839,33 @@ public enum CompiledCrashRepairLearner {
         endedAt: Date
     ) throws -> CompiledCrashRepairDetection? {
         guard let normalizedAppID = SteamAppID.normalized(appID) else { return nil }
-        let usersURL = bottleURL.appendingPathComponent("drive_c/users", isDirectory: true)
-        guard FileManager.default.fileExists(atPath: usersURL.path) else { return nil }
         var budget = maximumFiles
         var candidates: [(url: URL, modifiedAt: Date)] = []
         let earliest = startedAt.addingTimeInterval(-30)
         let latest = endedAt.addingTimeInterval(30)
-        try collectLogs(
-            below: usersURL,
-            depth: maximumDepth,
-            budget: &budget,
-            earliest: earliest,
-            latest: latest,
-            result: &candidates
-        )
+
+        // Dos sitios, no uno. Muchos motores escriben su traza junto al usuario, pero otros la
+        // dejan en su propia carpeta de instalación —Enshrouded escribe `enshrouded.log` ahí, y
+        // TMNT sólo deja rastro en el log de su lanzador—, así que mirar únicamente
+        // `drive_c/users` los dejaba fuera de la autorreparación y había que blindarlos a mano.
+        let roots = [
+            bottleURL.appendingPathComponent("drive_c/users", isDirectory: true),
+            gameDirectoryURL(forExecutable: executable, bottleURL: bottleURL)
+        ].compactMap { $0 }
+
+        var scanned = false
+        for root in roots where FileManager.default.fileExists(atPath: root.path) {
+            scanned = true
+            try collectLogs(
+                below: root,
+                depth: maximumDepth,
+                budget: &budget,
+                earliest: earliest,
+                latest: latest,
+                result: &candidates
+            )
+        }
+        guard scanned else { return nil }
 
         for candidate in candidates.sorted(by: { $0.modifiedAt > $1.modifiedAt }) {
             guard let log = try readTail(of: candidate.url),
@@ -869,6 +882,32 @@ public enum CompiledCrashRepairLearner {
             )
         }
         return nil
+    }
+
+    /// Traduce la ruta Windows del ejecutable a la carpeta que lo contiene dentro de la botella.
+    /// Devuelve `nil` si la ruta no es una del disco C:, que es lo único que la botella expone.
+    static func gameDirectoryURL(forExecutable executable: String, bottleURL: URL) -> URL? {
+        let componentes = executable
+            .split(whereSeparator: { $0 == "/" || $0 == "\\" })
+            .map(String.init)
+        guard componentes.count >= 2,
+              let unidad = componentes.first,
+              unidad.lowercased() == "c:"
+        else { return nil }
+
+        // Se descarta la unidad y el propio ejecutable: queda la carpeta del juego.
+        let intermedios = componentes.dropFirst().dropLast()
+        guard !intermedios.isEmpty else { return nil }
+        // Ningún componente puede escapar de la botella.
+        guard !intermedios.contains(where: { $0 == ".." || $0 == "." || $0.isEmpty }) else {
+            return nil
+        }
+
+        var url = bottleURL.appendingPathComponent("drive_c", isDirectory: true)
+        for componente in intermedios {
+            url.appendPathComponent(componente, isDirectory: true)
+        }
+        return url
     }
 
     private static func collectLogs(

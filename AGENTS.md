@@ -650,6 +650,13 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
     punteros nulos y la GPU caía dejando sólo `VK_ERROR_DEVICE_LOST`. Ahora lo reporta con el set y
     la etapa, sólo cuando el shader usa ese set y una vez por pipeline. Es la regla 21 aplicada al
     runtime: lo que se degrada se dice. Verificado con el arnés, no supuesto.
+95. **La autorreparación busca la traza en dos sitios, no en uno.** Muchos motores escriben su log
+    bajo `drive_c/users`, pero otros lo dejan en su propia carpeta de instalación —Enshrouded
+    escribe ahí su `enshrouded.log`—. Mirar sólo el primero dejaba esos juegos fuera del aprendizaje
+    y obligaba a blindarlos a mano. La carpeta del juego se deriva de la ruta Windows del propio
+    ejecutable, se rechaza cualquier ruta que no sea del disco C: y ningún componente puede escapar
+    de la botella. Lo que sigue fuera es el juego que sólo deja rastro en el log de **su lanzador**.
+
 93. **Un run sin envelope de lanzamiento no es un run inválido: es el que observó la telemetría.**
     Cuando el usuario abre el juego desde el propio Steam de la botella, Regression no autoriza el
     lanzamiento y no hay sobre que cerrar. `verifyRunAndCompleteEnvelope` exigía uno «exactamente»,
