@@ -22,10 +22,10 @@ trap cleanup EXIT
 
 runtime_entries() {
     cat <<'EOF'
-tools/wine/wine bin/wine f438bf93dcb4f4728521978738b5b9d383c79fb0af3183f14348ec1e23527798
-server/wineserver bin/wineserver f5b6b088220292d751d6b90d6857758ac2c76c00c7784e798259f0e825ebddcb
-loader/wine lib/wine/x86_64-unix/wine 7909257efcb08a72b0fb3633878971205c9432f3557cf42a2c22324dc13c9762
-dlls/ntdll/ntdll.so lib/wine/x86_64-unix/ntdll.so d38e99ac312e3a404b663fdb1af476191ff2aa78fefe32846a6191cd4bf890ab
+tools/wine/wine bin/wine d047199971479d20423a196756e01048c96d738557fd4e416e4cda9d0d0e1fd1
+server/wineserver bin/wineserver d80925c5a5ddc2e8e7bbefe6f06c55b4ad9ea8190f30f252a6464e610de1c6f0
+loader/wine lib/wine/x86_64-unix/wine 3eedd595dd34ac7ce51586e6d9bc4c298581edf70bd022d0fe30e0e0009e394e
+dlls/ntdll/ntdll.so lib/wine/x86_64-unix/ntdll.so 7b08210d619c0a90eb77e2fbe8504c2efbd2bcd20bd3c348f3f1f47a07de9961
 EOF
 }
 

@@ -3,8 +3,8 @@
 Este índice separa la portada del producto de la documentación técnica. Empieza por la ruta que
 corresponda a tu objetivo y consulta `AGENTS.md` antes de cambiar runtime, perfiles o botella.
 
-> **Contrato actual del código fuente:** Regression **1.12.7 (45)** y SQLite **v17**.
-> **v1.12.7 (45)** es la release estable actual y **v1.11.0 (37)** el baseline histórico. Los documentos de
+> **Contrato actual del código fuente:** Regression **1.12.8 (46)** y SQLite **v17**.
+> **v1.12.8 (46)** es la release estable actual y **v1.11.0 (37)** el baseline histórico. Los documentos de
 > expedientes conservan versiones anteriores como evidencia y no deben reinterpretarse como el
 > estado de la release actual.
 

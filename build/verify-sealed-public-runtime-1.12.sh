@@ -28,16 +28,16 @@ verify_raw_runtime_file() {
     || fail "falta el builder público sellado 1.12: $PUBLIC_BUILD"
 
 verify_raw_runtime_file \
-    b1d413fdb57e84408a9d9b990570808d523eb5f90ce282e34255971bd9c86074 \
+    12f2c5133f7181ce1c380d102aa7226d77574cbe81e3b1734b91fc13bc7f4d13 \
     tools/wine/wine
 verify_raw_runtime_file \
-    2bfecf1bb9f75f8b2d1ff8251827b3b9dc110946739d0c747fe9a9f4347ed48e \
+    8dcc1859a2845db8373b88d6d5d6a6d693e1c40f2f276925d91ef0b92a961ab3 \
     server/wineserver
 verify_raw_runtime_file \
-    220650ffd61f9d612a391e9b5ab8be06d052cd85c0fb5586288737f522dcb06a \
+    c552611469c1faf2bd93c4f87a3eb3dc72b5a2229b3b3f7cef0ffca67f7f1cbf \
     loader/wine
 verify_raw_runtime_file \
-    18d0f87b09e5735a7c819844488234f9a0f25c8dc1cc144e0be80733e1604cdc \
+    ff8f4a63de5ff94da5f80c1ee6c741347389c0551e739d364f4f8e1307856865 \
     dlls/ntdll/ntdll.so
 
 NTDLL="$PUBLIC_BUILD/dlls/ntdll/ntdll.so"

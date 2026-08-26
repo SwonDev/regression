@@ -8,8 +8,8 @@ export PATH
 # Ningún smoke, wineboot, instalador ni wineserver puede heredar la sesión de otro runtime.
 unset WINESERVERSOCKET
 
-VERSION="1.12.7"
-BUILD_NUMBER="45"
+VERSION="1.12.8"
+BUILD_NUMBER="46"
 REPO="SwonDev/regression"
 ASSET_NAME="Regression-${VERSION}-macos-arm64.tar.gz"
 APP_NAME="Regression.app"
@@ -58,10 +58,10 @@ EXPECTED_GPTK_INSTALLER_SHA256="f6bcd552320e3713693d0a0bbf1af4932b573fc35798282c
 release_runtime_authority_v2()
 {
     cat <<'EOF'
-f438bf93dcb4f4728521978738b5b9d383c79fb0af3183f14348ec1e23527798 bin/wine
-f5b6b088220292d751d6b90d6857758ac2c76c00c7784e798259f0e825ebddcb bin/wineserver
-7909257efcb08a72b0fb3633878971205c9432f3557cf42a2c22324dc13c9762 lib/wine/x86_64-unix/wine
-d38e99ac312e3a404b663fdb1af476191ff2aa78fefe32846a6191cd4bf890ab lib/wine/x86_64-unix/ntdll.so
+d047199971479d20423a196756e01048c96d738557fd4e416e4cda9d0d0e1fd1 bin/wine
+d80925c5a5ddc2e8e7bbefe6f06c55b4ad9ea8190f30f252a6464e610de1c6f0 bin/wineserver
+3eedd595dd34ac7ce51586e6d9bc4c298581edf70bd022d0fe30e0e0009e394e lib/wine/x86_64-unix/wine
+7b08210d619c0a90eb77e2fbe8504c2efbd2bcd20bd3c348f3f1f47a07de9961 lib/wine/x86_64-unix/ntdll.so
 0315a55b11a456590a9368f4cb8d0011d6735cc04c9093ea583570d1352e1ee1 share/wine/wine.inf
 885c0421bfe30600bae9df83961b0fcbb5b9ccd1c02e7b071ce213ff2522e34a lib/wine/x86_64-windows/ntdll.dll
 7b580e19eb4fce14b5730cd2835c5204dc2622ce0fc4f33b68b0155864477667 lib/wine/i386-windows/ntdll.dll

@@ -86,6 +86,12 @@ case "$MODE" in
         [[ -d "$APP" && ! -L "$APP" ]] \
             || fail "la release pública debe ser un bundle físico"
         ;;
+    --release-1.12.8)
+        EXPECTED_VERSION="1.12.8"
+        EXPECTED_BUILD="46"
+        [[ -d "$APP" && ! -L "$APP" ]] \
+            || fail "la release pública debe ser un bundle físico"
+        ;;
     --candidate-1.12.1-before-runtime-join-fix)
         EXPECTED_VERSION="1.12.1"
         EXPECTED_BUILD="39"
@@ -110,7 +116,22 @@ fi
 [[ "$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")" == "$EXPECTED_BUILD" ]] \
     || fail "build público no soportado"
 
-if [[ "$MODE" == "--release-1.12.7" ]]; then
+if [[ "$MODE" == "--release-1.12.8" ]]; then
+    # 1.12.8 sólo cambia la app: la verificación manual de un run observado por la telemetría deja
+    # de exigir un envelope que nunca existirá, y el aviso de arranque de Steam caduca al cerrarse.
+    # El runtime se reconstruyó desde el tar oficial con la misma serie de parches, así que sus
+    # binarios cambian de hash aunque su comportamiento sea el de 1.12.7.
+    verify_hash 52cc190e2fda3a6d295de70c38f876db6dc6a976167dc2a81ebf87a9b2f96749 \
+        "$APP/Contents/MacOS/regression-engine"
+    verify_hash d047199971479d20423a196756e01048c96d738557fd4e416e4cda9d0d0e1fd1 \
+        "$APP/Contents/SharedSupport/wine-root/bin/wine"
+    verify_hash d80925c5a5ddc2e8e7bbefe6f06c55b4ad9ea8190f30f252a6464e610de1c6f0 \
+        "$APP/Contents/SharedSupport/wine-root/bin/wineserver"
+    verify_hash 3eedd595dd34ac7ce51586e6d9bc4c298581edf70bd022d0fe30e0e0009e394e \
+        "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/wine"
+    verify_hash 7b08210d619c0a90eb77e2fbe8504c2efbd2bcd20bd3c348f3f1f47a07de9961 \
+        "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+elif [[ "$MODE" == "--release-1.12.7" ]]; then
     # 1.12.7 cede la activación a la app del juego y le concede el foco de ventana, enruta el
     # `d3d9` de todo proceso de 32 bits al builtin de Wine y añade `--launcher-skip` al
     # prelanzador de REDengine, así que cambian el lanzador y el `ntdll` público.
