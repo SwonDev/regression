@@ -515,22 +515,28 @@ final class LaunchEnvelopeRepositoryTests: XCTestCase {
         XCTAssertNil(runAfterRollback?.verification)
     }
 
-    func testAtomicVerificationRejectsRunWithoutEnvelopeAndRollsBackVerification() async throws {
+    /// Un run sin envelope es el que la telemetría observó porque el usuario abrió el juego desde
+    /// el propio Steam de la botella: ahí Regression no autoriza el lanzamiento y no hay sobre que
+    /// cerrar. Rechazarlo dejaba esos runs imposibles de verificar y perdía el veredicto sin
+    /// guardarlo, que es lo que se veía en la app como «Pendiente de verificación visual» después
+    /// de marcar el juego a mano.
+    func testAtomicVerificationAcceptsRunObservedWithoutEnvelope() async throws {
         let fixture = try await Fixture.make()
         defer { fixture.remove() }
         try await Self.finish(fixture: fixture)
 
-        await XCTAssertThrowsErrorAsync {
-            try await fixture.repository.verifyRunAndCompleteEnvelope(RunVerification(
+        let completedEnvelope = try await fixture.repository.verifyRunAndCompleteEnvelope(
+            RunVerification(
                 runID: fixture.context.id,
                 verdict: .failed,
                 source: .user,
                 verifiedAt: Date().addingTimeInterval(1)
-            ))
-        }
+            )
+        )
 
+        XCTAssertFalse(completedEnvelope, "sin envelope no hay sobre que cerrar")
         let run = try await fixture.repository.runDetails().first { $0.id == fixture.context.id }
-        XCTAssertNil(run?.verification)
+        XCTAssertEqual(run?.verification?.verdict, .failed)
     }
 
     func testSpawnAuthorizationIsTheOnlyPublicPreSpawnTransition() async throws {

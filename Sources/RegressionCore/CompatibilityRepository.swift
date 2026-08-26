@@ -445,9 +445,19 @@ public actor CompatibilityRepository {
         }
     }
 
-    /// Persiste la verificación explícita y el cierre del envelope en una única transacción. Si
-    /// la fase del envelope no permite el cierre, también se revierte la verificación: UI y CLI
-    /// nunca dejan una certificación/recibo a medias tras un cierre de proceso o de la app.
+    /// Persiste la verificación explícita y, si el run nació de un lanzamiento autorizado por
+    /// Regression, cierra su envelope en la misma transacción. Si la fase del envelope no permite
+    /// el cierre, también se revierte la verificación: UI y CLI nunca dejan una certificación o un
+    /// recibo a medias tras un cierre de proceso o de la app.
+    ///
+    /// Un run **sin** envelope no es un error: es el que la telemetría observó porque el usuario
+    /// abrió el juego desde el propio Steam de la botella, donde Regression no autoriza el
+    /// lanzamiento y por tanto nunca hay sobre que cerrar. Exigirlo dejaba esos runs imposibles de
+    /// verificar para siempre, y el veredicto se perdía sin guardarse. El envelope acredita la
+    /// **autorización** del lanzamiento; la evidencia del veredicto la acredita
+    /// `validateRunVerification` junto con la custodia de procesos, y esas dos siguen intactas.
+    ///
+    /// Devuelve `true` sólo si además se cerró un envelope.
     @discardableResult
     public func verifyRunAndCompleteEnvelope(_ verification: RunVerification) throws -> Bool {
         try ensurePrepared()
@@ -459,14 +469,14 @@ public actor CompatibilityRepository {
                 where: "run_id=?",
                 bindings: [verification.runID.uuidString]
             )
-            guard envelopes.count == 1, let envelope = envelopes.first else {
-                throw RegressionCoreError.invalidEvidence(
-                    "una verificación de UI/CLI exige exactamente un envelope de lanzamiento"
-                )
-            }
+            // launch_envelopes.run_id es UNIQUE, así que aquí sólo caben cero o uno.
+            guard let envelope = envelopes.first else { return }
             guard envelope.phase == .awaitingVerification else {
                 throw RegressionCoreError.invalidEvidence(
-                    "la verificación no puede cerrar un envelope que no espera revisión explícita"
+                    """
+                    el lanzamiento de este run quedó en «\(envelope.phase.rawValue)» y no espera \
+                    revisión: sólo se certifica un lanzamiento que llegó a completarse
+                    """
                 )
             }
             try transitionLaunchEnvelope(

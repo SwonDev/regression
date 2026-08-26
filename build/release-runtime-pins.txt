@@ -1,7 +1,0 @@
-# Evidencia del builder sellado del runtime público.
-# Generado por build/refresh-release-pins.sh; no editar a mano.
-# sha256-builder  sha256-sin-firma  ruta-en-el-builder  ruta-en-el-runtime
-b1d413fdb57e84408a9d9b990570808d523eb5f90ce282e34255971bd9c86074  66df233e2e43b2f3a0bf58dc809c6a00f748c232d9e69ec5eb27ef55b486a52d  tools/wine/wine  bin/wine
-2bfecf1bb9f75f8b2d1ff8251827b3b9dc110946739d0c747fe9a9f4347ed48e  fb292fe498616dc8f93be79edd158969e832c0d300a9844f8584f2721938d76c  server/wineserver  bin/wineserver
-220650ffd61f9d612a391e9b5ab8be06d052cd85c0fb5586288737f522dcb06a  794208e5a5f606530a9cb2dc5e143d7defa65f2c4b1565e84b4a274b903d4d8c  loader/wine  lib/wine/x86_64-unix/wine
-18d0f87b09e5735a7c819844488234f9a0f25c8dc1cc144e0be80733e1604cdc  adcc50b40778fee625889f959af67d33defe648def43e3dd23c39777137ebdd2  dlls/ntdll/ntdll.so  lib/wine/x86_64-unix/ntdll.so

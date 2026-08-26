@@ -650,6 +650,22 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
     punteros nulos y la GPU caía dejando sólo `VK_ERROR_DEVICE_LOST`. Ahora lo reporta con el set y
     la etapa, sólo cuando el shader usa ese set y una vez por pipeline. Es la regla 21 aplicada al
     runtime: lo que se degrada se dice. Verificado con el arnés, no supuesto.
+93. **Un run sin envelope de lanzamiento no es un run inválido: es el que observó la telemetría.**
+    Cuando el usuario abre el juego desde el propio Steam de la botella, Regression no autoriza el
+    lanzamiento y no hay sobre que cerrar. `verifyRunAndCompleteEnvelope` exigía uno «exactamente»,
+    así que esos runs eran **imposibles de verificar para siempre** y el veredicto se perdía sin
+    guardarse: la app mostraba «La verificación no es válida» y el juego seguía «Pendiente de
+    verificación visual» después de marcarlo a mano. El envelope acredita la **autorización** del
+    lanzamiento; la evidencia del veredicto la acreditan `validateRunVerification` y la custodia de
+    procesos de `RunPerfectEvidenceSQL`, que no se tocan. `launch_envelopes.run_id` es UNIQUE, así
+    que ahí sólo caben cero o uno: cero se acepta, uno se cierra, y una fase que no espera revisión
+    se sigue rechazando con un mensaje que dice en qué fase quedó.
+94. **Un aviso que describe una condición transitoria tiene que caducar con ella.** El texto «La
+    evaluación se descartó porque Steam se está iniciando» sólo se limpiaba al terminar una
+    evaluación nueva, así que seguía en pantalla horas después de cerrar Steam, informando de algo
+    que no estaba pasando. Los avisos atados al runtime se marcan como tales y se retiran en
+    `refreshRuntimeState()`, que es donde se detecta que Steam se cerró.
+
 92. **Los shaders de un juego se pueden estudiar sin ejecutarlo.** Muchos motores guardan el SPIR-V
     sin comprimir en sus paquetes: `tools/research/shader-extract/` lo localiza por número mágico y
     lo convierte a MSL con las mismas opciones del runtime (`-mab`), así que la numeración de líneas

@@ -218,6 +218,10 @@ final class RegressionAppModel {
     var physicalLibraryCustodyAssessment: PhysicalLibraryCustodyAssessment?
     var physicalLibraryCustodyAssessmentIsRunning = false
     var physicalLibraryCustodyAssessmentNotice: String?
+    /// Cierto cuando el aviso describe una condición transitoria de Steam. Sin esto, el texto
+    /// «Steam se está iniciando» seguía en pantalla horas después de cerrarlo, porque sólo se
+    /// limpiaba al terminar una evaluación nueva.
+    @ObservationIgnored private var custodyNoticeDependsOnSteamRunning = false
     var libraryIndependenceState: LibraryIndependenceState = .preparing
     var testReadiness: GameTestPreflightReport?
     var readinessIsRefreshing = false
@@ -649,6 +653,7 @@ final class RegressionAppModel {
             // el snapshot anterior hacía que los marcadores DXMT de la sesión recién abierta
             // siguieran apareciendo como restos de una sesión cerrada.
             runningState = await coordinator.runningState()
+            clearCustodyNoticeIfSteamIsIdle()
             testReadiness = try await collectTestReadiness(for: nil)
         } catch {
             logger.error(
@@ -1748,7 +1753,8 @@ final class RegressionAppModel {
         defer { steamLaunchIsInProgress = false }
         guard await ensureSteamRuntimeReadyForLaunch() else { return }
         invalidatePhysicalLibraryCustodyAssessment(
-            notice: "La evaluación se descartó porque Steam se está iniciando. Repítela cuando Steam esté cerrado."
+            notice: "La evaluación se descartó porque Steam se está iniciando. Repítela cuando Steam esté cerrado.",
+            expiresWhenSteamCloses: true
         )
         LifecycleDiagnostics.write("startSteam invocado")
         logger.info("startSteam con \(self.selectedBackend.rawValue)")
@@ -2365,6 +2371,7 @@ final class RegressionAppModel {
                 self.physicalLibraryCustodyAssessment = nil
                 self.physicalLibraryCustodyAssessmentNotice =
                     "La evaluación se descartó porque Steam o la ubicación de la biblioteca cambiaron."
+                self.custodyNoticeDependsOnSteamRunning = latestRunningState.activeBackend != nil
                 self.libraryIndependenceState = .error(
                     phase: .assessment,
                     detail: "Steam o la ubicación de la biblioteca cambiaron durante el inventario."
@@ -2393,13 +2400,28 @@ final class RegressionAppModel {
         libraryIndependenceState = .eligible
     }
 
-    private func invalidatePhysicalLibraryCustodyAssessment(notice: String) {
+    private func invalidatePhysicalLibraryCustodyAssessment(
+        notice: String,
+        expiresWhenSteamCloses: Bool = false
+    ) {
         physicalLibraryCustodyAssessmentTask?.cancel()
         physicalLibraryCustodyAssessmentTask = nil
         physicalLibraryCustodyAssessmentID = nil
         physicalLibraryCustodyAssessmentIsRunning = false
         physicalLibraryCustodyAssessment = nil
         physicalLibraryCustodyAssessmentNotice = notice
+        custodyNoticeDependsOnSteamRunning = expiresWhenSteamCloses
+    }
+
+    /// Retira el aviso de custodia cuando ya no describe nada: si caducaba al cerrarse Steam y
+    /// Steam está cerrado, mantenerlo sólo informa de algo que no está pasando.
+    private func clearCustodyNoticeIfSteamIsIdle() {
+        guard custodyNoticeDependsOnSteamRunning,
+              runningState.activeBackend == nil,
+              !steamLaunchIsInProgress
+        else { return }
+        physicalLibraryCustodyAssessmentNotice = nil
+        custodyNoticeDependsOnSteamRunning = false
     }
 
     private func applyPhysicalLibraryCustodyStatus(_ status: PhysicalLibraryCustodyStatus) {
@@ -2907,6 +2929,7 @@ final class RegressionAppModel {
     private func refreshRuntimeState() async {
         let previousActiveBackend = runningState.activeBackend
         runningState = await coordinator.runningState()
+        clearCustodyNoticeIfSteamIsIdle()
         if runningState.hasConflict {
             present(RegressionCoreError.backendConflict)
         } else if let active = runningState.activeBackend {
