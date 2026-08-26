@@ -650,6 +650,15 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
     punteros nulos y la GPU caía dejando sólo `VK_ERROR_DEVICE_LOST`. Ahora lo reporta con el set y
     la etapa, sólo cuando el shader usa ese set y una vez por pipeline. Es la regla 21 aplicada al
     runtime: lo que se degrada se dice. Verificado con el arnés, no supuesto.
+97. **Los dos fallos de la app de 2026-08-26 se auditaron como familia, no como incidentes.**
+    Tras corregirlos se barrió el código buscando más casos de cada uno, y **no hay ninguno**:
+    (a) de las cuatro guardas que lanzan dentro de una `transaction`, sólo la de
+    `verifyRunAndCompleteEnvelope` persistía trabajo del usuario antes de lanzar —las tres de
+    `CompatibilityRepository+LaunchEnvelope` comprueban antes de escribir, así que su rollback es
+    correcto—; (b) de los dos avisos de texto persistentes del modelo, `libraryFailureDetail` se
+    limpia en nueve puntos y `shieldConfirmation` caduca por temporizador. Al corregir un fallo de
+    estos, repetir el barrido: cuesta dos búsquedas y evita corregir el mismo error tres veces.
+
 96. **Borrar un bundle temporal no lo retira de LaunchServices.** `verify-release-asset.sh`
     despliega el asset en `/private/tmp` para acreditarlo, y macOS indexaba esa copia como app
     descubrible: después de cada release, `verify-canonical-installation.sh` fallaba por un
