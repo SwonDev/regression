@@ -1215,6 +1215,12 @@ enum RegressionControl {
             print("Eventos de envelope:", health.launchEnvelopeEventCount ?? 0)
             print("Recibos de envelope:", health.launchEnvelopeReceiptCount ?? 0)
             print("Violaciones de envelope:", health.launchEnvelopeViolationCount ?? 0)
+            // El informe calculaba estas tres y no las enseñaba, así que una certificación
+            // invalidada en silencio —por mutar la cadena de procesos de su run, por ejemplo— no
+            // aparecía por ninguna parte. Una degradación que no se ve no existe para quien mira.
+            print("Certificados sin evidencia perfecta:", health.perfectEvidenceViolationCount ?? 0)
+            print("Certificaciones activas inconsistentes:", health.activeCertificationViolationCount ?? 0)
+            print("Reparaciones sin evidencia:", health.repairAttemptEvidenceViolationCount ?? 0)
             if let backup = await repository.lastMigrationBackup() {
                 print("Backup de migración:", PrivacySanitizer.normalizedPath(backup.path))
             }

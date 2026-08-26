@@ -120,8 +120,8 @@ public enum TrustedComponentCatalog {
   public static let windowsMediaComponentVersion = "1"
   public static let steamRuntimePrerequisitesComponentID = "steam-runtime-prerequisites"
   public static let steamRuntimePrerequisitesComponentVersion = "3"
-  public static let supportedApplicationVersion = "1.12.10"
-  public static let supportedBuildIdentifier = "48"
+  public static let supportedApplicationVersion = "1.12.11"
+  public static let supportedBuildIdentifier = "49"
 
   private static let windowsMediaDevelopmentManifestSHA256 =
     "ac662661fb3384c6ad100066391cab209f9de60b2e129fb92e07365ee6fe9bb1"

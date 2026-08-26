@@ -650,6 +650,13 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
     punteros nulos y la GPU caía dejando sólo `VK_ERROR_DEVICE_LOST`. Ahora lo reporta con el set y
     la etapa, sólo cuando el shader usa ese set y una vez por pipeline. Es la regla 21 aplicada al
     runtime: lo que se degrada se dice. Verificado con el arnés, no supuesto.
+98. **`regressionctl database` calculaba tres contadores de violaciones y sólo enseñaba uno.**
+    Una certificación invalidada en silencio —por mutar después la cadena de procesos de su run— no
+    aparecía por ninguna parte, que es justo lo que la regla 21 prohíbe: una degradación que no se
+    ve no existe para quien mira. Ahora imprime los cuatro. Es además la única auditoría de las
+    certificaciones que **no** exige lanzar los juegos: acredita que la evidencia sigue en pie, no
+    que el juego siga arrancando.
+
 97. **Los dos fallos de la app de 2026-08-26 se auditaron como familia, no como incidentes.**
     Tras corregirlos se barrió el código buscando más casos de cada uno, y **no hay ninguno**:
     (a) de las cuatro guardas que lanzan dentro de una `transaction`, sólo la de
@@ -809,7 +816,7 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
 ## Estado rápido (2026-08-14)
 
 - **Contrato de este corte**: el código fuente y los empaquetadores convergen en Regression
-  **1.12.10 (48)** y SQLite **v17**. **v1.12.10 (48)** es la release estable actual y
+  **1.12.11 (49)** y SQLite **v17**. **v1.12.11 (49)** es la release estable actual y
   **v1.11.0 (37)** el baseline histórico; sus verificadores `public-1.11` se conservan como
   gates de transición, no como versión vigente. Toda release futura debe verificar el asset
   exacto y completar su matriz antes de publicarse.
