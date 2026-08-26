@@ -650,6 +650,12 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
     punteros nulos y la GPU caía dejando sólo `VK_ERROR_DEVICE_LOST`. Ahora lo reporta con el set y
     la etapa, sólo cuando el shader usa ese set y una vez por pipeline. Es la regla 21 aplicada al
     runtime: lo que se degrada se dice. Verificado con el arnés, no supuesto.
+96. **Borrar un bundle temporal no lo retira de LaunchServices.** `verify-release-asset.sh`
+    despliega el asset en `/private/tmp` para acreditarlo, y macOS indexaba esa copia como app
+    descubrible: después de cada release, `verify-canonical-installation.sh` fallaba por un
+    artefacto que ya ni existía. Su limpieza ahora hace `lsregister -u` antes de borrar. Lo mismo
+    vale para cualquier respaldo de la app dentro del repo: van a un directorio `.noindex`.
+
 95. **La autorreparación busca la traza en dos sitios, no en uno.** Muchos motores escriben su log
     bajo `drive_c/users`, pero otros lo dejan en su propia carpeta de instalación —Enshrouded
     escribe ahí su `enshrouded.log`—. Mirar sólo el primero dejaba esos juegos fuera del aprendizaje
@@ -790,7 +796,7 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
 ## Estado rápido (2026-08-14)
 
 - **Contrato de este corte**: el código fuente y los empaquetadores convergen en Regression
-  **1.12.8 (46)** y SQLite **v17**. **v1.12.8 (46)** es la release estable actual y
+  **1.12.9 (47)** y SQLite **v17**. **v1.12.9 (47)** es la release estable actual y
   **v1.11.0 (37)** el baseline histórico; sus verificadores `public-1.11` se conservan como
   gates de transición, no como versión vigente. Toda release futura debe verificar el asset
   exacto y completar su matriz antes de publicarse.

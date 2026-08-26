@@ -145,6 +145,14 @@ cleanup_path()
 cleanup()
 {
     if [[ -n "$WORK_DIR" && "$WORK_DIR" == /private/tmp/regression-release-verify.* ]]; then
+        # Borrar el directorio no basta: LaunchServices ya ha indexado el bundle desplegado ahí y
+        # lo conserva como app descubrible, así que verify-canonical-installation.sh falla después
+        # de cada release por un artefacto que ya no existe. Se retira el registro antes de borrar.
+        local core=/System/Library/Frameworks/CoreServices.framework/Frameworks
+        local lsregister="$core/LaunchServices.framework/Support/lsregister"
+        if [[ -x "$lsregister" && -d "$WORK_DIR/Regression.app" ]]; then
+            "$lsregister" -u "$WORK_DIR/Regression.app" >/dev/null 2>&1 || true
+        fi
         cleanup_path "$WORK_DIR"
     fi
 }
