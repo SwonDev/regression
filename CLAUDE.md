@@ -13,7 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > Si algo de este archivo difiere de `AGENTS.md`, **manda `AGENTS.md`**. `README.md` es la portada
 > del producto y `docs/README.md` el índice técnico.
 
-> **Contrato del checkout:** Regression **1.12.13 (51)**, release estable publicada, y SQLite **v17**.
+> **Contrato del checkout:** Regression **1.12.14 (52)**, release estable publicada, y SQLite **v17**.
 > **v1.11.0 (37)** es el baseline histórico: conservar sus gates `public-1.11` de transición no
 > autoriza a saltarse la matriz global de futuras releases.
 
@@ -427,7 +427,7 @@ exacto que recibirá GitHub.** Actualizar también la nota de contrato en `READM
 
 ## 7. Estado actual (2026-08-25)
 
-- **Release estable**: v1.12.13 (51), instalada y verificada en `/Applications/Regression.app`
+- **Release estable**: v1.12.14 (52), instalada y verificada en `/Applications/Regression.app`
   (`verify-public-installed-state.sh --release-1.12.11`). Baseline histórico: v1.11.0 (37).
 - **Lo que trae 1.12.7**, todo con corrección general y no receta por juego:
   - **Un juego recién lanzado ya recibe teclado y ratón.** macOS 14 exige que la app activa

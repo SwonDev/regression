@@ -250,7 +250,7 @@ enum RuntimeModuleCatalog {
             "87ed91e86f1f4620f5229b7a0d4f1f8c5436a56088e8d4692201fe0c7d5b0deb"
         case ("dxmt.d3d11", .bottleSystem32),
              ("dxmt.d3d11", .wineRootWindows64):
-            "e6209af3a04947504af1f12b4533eded103687841197cff45a92d1a5f916c0a8"
+            "1eafefb8650dc7239471d701f099b9caf7c8a4b288f0402b724894c5451fe6ae"
         case ("dxmt.dxgi", .bottleSystem32),
              ("dxmt.dxgi", .wineRootWindows64):
             "25f74dafc3ebaf77ddc5a7b32d933853462c303a2636399860e80937cda82941"
