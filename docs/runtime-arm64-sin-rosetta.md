@@ -24,7 +24,7 @@ juegos Intel *de macOS* con el que no conviene contar. Margen: algo más de un a
    `metalsharp/VKD3D-Proton-MacOS` (MIT) publica una release **construida para Wine x86_64** — es
    decir, **se puede probar sobre nuestro runtime actual, sin port a ARM**.
 3. **El camino completo ya está trazado por terceros.** `metalsharp/VKMT-Wine` (MIT) ejecuta Wine
-   ARM64 + FEX sin Rosetta, y sus 18 parches son la lista concreta de lo que hay que resolver.
+   ARM64 + FEX sin Rosetta, y sus 17 parches son la lista concreta de lo que hay que resolver.
    Partimos, además, de la **misma versión de FEX (2607)** que ellos. Y **FEX ya usa el TSO por
    hardware de Apple Silicon** —lo que hace rápido a Rosetta—, así que el camino que no depende de
    Apple no es necesariamente el lento.
@@ -34,7 +34,7 @@ juegos Intel *de macOS* con el que no conviene contar. Margen: algo más de un a
 | # | Acción | Por qué |
 |---|---|---|
 | 1 | Probar `VKD3D-Proton-MacOS` v1.0 sobre el runtime actual y medirlo contra D3DMetal en un juego D3D12 | Es la pregunta que más decide y **no requiere ARM** |
-| 2 | Leer los 18 parches de VKMT y escribir *adoptamos · adaptamos · no aplica* | Lectura barata que puede ahorrar meses |
+| 2 | Leer los 17 parches de VKMT y escribir *adoptamos · adaptamos · no aplica* | Lectura barata que puede ahorrar meses |
 | 3 | Probar un juego GPTK sobre DXMT (Grim Dawn o FFT) | Empieza a despejar la dependencia de Apple |
 | 4 | Compilar el Wine `aarch64` del tar **sin parches propios** | Responde por poco esfuerzo si el árbol levanta aquí |
 
@@ -96,7 +96,8 @@ independientes:
    payload sigue siendo x86_64.
 
 2. **CodeWeavers lo dice por escrito**: «no D3DMetal in this build» en su Preview ARM64. Y en su
-   bundle, `lib/apple_gptk/` sólo tiene `x86_64-unix` y `x86_64-windows`.
+   bundle, `lib/apple_gptk/wine/` sólo tiene `x86_64-unix` y `x86_64-windows`: `find lib/apple_gptk
+   -name '*aarch64*'` devuelve cero.
 
 3. **FEX no puede salvarlo.** Lo documenta la auditoría de VKMT (§4.3): FEX traduce las rutas del
    *guest Windows*; **no hay loader Mach-O ni `dyld` que convierta un framework x86-64 de macOS en un
@@ -219,9 +220,10 @@ lib/wine/x86_64-windows/    163 MB   PE x86-64: lo que carga el juego emulado
 lib/wine/i386-windows/      157 MB
 lib/wine/x86_64-unix/       5,8 MB   el mundo antiguo, aún presente (build de transición)
 lib/dxmt/aarch64-unix/winemetal.so       22 MB  ← el compilador de shaders vive aquí
-lib/dxmt/aarch64-windows/{d3d11,d3d10core}.dll  ← DXMT en ARM64EC, 4,9 MB
+lib/dxmt/aarch64-windows/                ← DXMT en ARM64EC: d3d11 (4,9 MB), d3d10core,
+                                            dxgi, nvapi64, nvngx, winemetal.dll
 lib/aarch64/libMoltenVK.dylib            arm64 nativo
-lib/apple_gptk/                          SÓLO x86_64-unix y x86_64-windows
+lib/apple_gptk/wine/                     SÓLO x86_64-unix y x86_64-windows (cero aarch64)
 ```
 
 Tres lecturas importantes de esa tabla:
@@ -591,7 +593,7 @@ antes, sola, y no mezclada con el port a ARM.
 
 ### Fase C — Estudiar VKMT en serio *(barato y ahorra meses)*
 
-Antes de escribir código de port: leer sus 18 parches y su `docs/architecture.md`, y **replicar su
+Antes de escribir código de port: leer sus 17 parches y su `docs/architecture.md`, y **replicar su
 runtime en una máquina de pruebas** para ver qué funciona de verdad. Preguntas concretas a
 responder:
 
@@ -612,7 +614,7 @@ cd "$CLEAN/sources/wine" && ./configure --enable-archs=arm64ec,aarch64,i386 && m
 ```
 
 Primero **sin parches propios**: responde por muy poco esfuerzo si el árbol oficial levanta aquí.
-Después, clasificar los ~20 `patches/wine-26.3.0-*` en *aplica igual · hay que reescribir · ya no
+Después, clasificar los **17** `patches/wine-26.3.0-*` en *aplica igual · hay que reescribir · ya no
 aplica*; los que tocan `signal_x86_64.c`, selectores de segmento o el loader son los sospechosos.
 
 Cuando salga el tar de **CrossOver 27**, rehacer esta fase sobre él.
@@ -666,7 +668,7 @@ Nada de esto toca el motor estable:
 1. **Probar `VKD3D-Proton-MacOS` v1.0 sobre el runtime actual** —es x86_64 y MIT, así que entra sin
    port— y medirlo contra D3DMetal en un juego D3D12. Es la pregunta que más decide: si el coste en
    rendimiento es asumible, D3DMetal deja de dar miedo y la Fase A se desbloquea entera.
-2. **Leer los 18 parches de VKMT** y escribir el *adoptamos · adaptamos · no aplica*. Es lectura,
+2. **Leer los 17 parches de VKMT** y escribir el *adoptamos · adaptamos · no aplica*. Es lectura,
    no código, y puede ahorrar meses.
 3. **Fase A sobre un juego**: el que menos dependa de D3D12 —Grim Dawn o FFT— sobre DXMT.
 4. **Compilar el Wine `aarch64` del tar sin parches propios.**
@@ -692,7 +694,64 @@ Y dos que dependen de terceros pequeños, así que conviene no apoyarse en ellas
 
 ---
 
-## 8. Fuentes
+## 8. Cómo verificar este documento
+
+Los datos externos caducan. Todo lo que aquí se afirma como **verificado** se comprobó el
+**2026-08-28** con estos comandos; repetirlos es la forma de saber si algo ha cambiado.
+
+```bash
+# Arquitecturas del runtime instalado y de la app
+W=/Applications/Regression.app/Contents/SharedSupport/wine-root
+lipo -archs "$W/bin/wine" "$W/bin/wineserver" "$W/lib/wine/x86_64-unix/ntdll.so"   # x86_64
+lipo -archs /Applications/Regression.app/Contents/MacOS/Regression                 # arm64
+ls "$W/lib/wine"                       # i386-windows x86_64-unix x86_64-windows
+
+# D3DMetal: ni GPTK 3.0 ni GPTK 4.0b2 son ARM64
+C="$HOME/Library/Application Support/Regression/Components/AppleGPTK"
+lipo -archs "$C"/{3.0,4.0b2}/external/D3DMetal.framework/Versions/A/D3DMetal   # x86_64
+lipo -archs "$C"/{3.0,4.0b2}/external/libd3dshared.dylib                       # x86_64
+
+# CrossOver Preview ARM64: el emulador es un puente a Rosetta, no FEX
+cd "Crossover-ARM64/CrossOver Preview.app/Contents/SharedSupport/CrossOver"
+size -m lib/wine/aarch64-unix/libwow64fex.so | grep 'Section __text'   # 176 bytes
+nm -gU  lib/wine/aarch64-unix/libwow64fex.so   # sólo ___wine_unix_call_funcs
+nm -u   lib/wine/aarch64-unix/libwow64fex.so   # …_thread_set_x86_64_compat
+nm -gU /usr/lib/system/libsystem_kernel.dylib | grep x86_64_compat   # T _thread_set…
+find lib/apple_gptk -name '*aarch64*' | wc -l                        # 0
+ls lib/wine/aarch64-unix/ | grep -E 'winemac|win32u'                 # ambos presentes
+ls lib/dxvk                                                          # sin aarch64-*
+
+# La tensión de DXMT: D3D12 abajo, ARM64EC arriba
+gh api 'repos/3Shain/dxmt/contents?ref=main'      --jq '[.[].name|select(startswith("build-"))]'
+gh api 'repos/gamesir-labs/dxmt/contents?ref=main' --jq '[.[].name|select(startswith("build-"))]'
+gh api 'repos/gamesir-labs/dxmt/contents/src?ref=main' --jq '[.[].name]'   # …d3d12 winemetal4
+
+# MetalSharp: licencias y tamaño del trabajo
+for r in MetalSharp VKMT-Wine VKD3D-Proton-MacOS WineMetalGL; do
+  gh api "repos/metalsharp/$r" --jq '"\(.name) ★\(.stargazers_count) \(.license.spdx_id)"'
+done
+gh api repos/metalsharp/MetalSharp/contents/LICENSE --jq .content | base64 -d | head -1
+gh api 'repos/metalsharp/VKMT-Wine/contents/patches?ref=main' \
+  --jq '[.[]|select(.name|endswith(".patch"))]|length'    # 17
+
+# FEX y el TSO por hardware
+gh api repos/FEX-Emu/FEX/pulls/5613 --jq '"merged=\(.merged) \(.merged_at[0:10])"'
+
+# El ecosistema descartado
+gh api repos/Whisky-App/Whisky            --jq .archived        # true
+gh api 'repos/Gcenx/macOS_Wine_builds/releases?per_page=1' \
+  --jq '[.[0].assets[].name]'                                   # sólo osx64
+```
+
+**Resultado de la auditoría del 2026-08-28:** todos los comandos devuelven lo que este documento
+afirma. Se corrigieron cuatro imprecisiones de redacción detectadas en esa pasada: la ruta exacta de
+GPTK es `lib/apple_gptk/wine/`, el directorio `lib/dxmt/aarch64-windows/` contiene además `dxgi`,
+`nvapi64`, `nvngx` y `winemetal.dll`, VKMT tiene **17** parches (el 18.º archivo es su README) y
+nuestra serie de Wine son **17** parches, no ~20.
+
+---
+
+## 9. Fuentes
 
 - [Rosetta 2 discontinuation notice — 9to5Mac, 2026-02-16](https://9to5mac.com/2026/02/16/macos-26-4-will-notify-users-of-rosetta-2-discontinuation/)
 - [Rosetta 2 ends with macOS 27 Golden Gate](https://www.squaredtech.co/rosetta-2-ends-with-macos-27-golden-gate-what-it-means-for-your-mac)
