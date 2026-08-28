@@ -159,6 +159,91 @@ Tres lecturas importantes de esa tabla:
 
 ---
 
+## 4-bis. Lo que dicen las fuentes primarias (consultadas el 2026-08-28)
+
+### Wine
+
+`wine-11.16` es del **22 de agosto de 2026**, seis días antes de esta investigación. Sus notas:
+motor Mono 11.3.0 **con soporte ARM64**, decodificación de vídeo por VA-API, **manejo de
+excepciones mejorado en ARM64EC** y 35 correcciones. Es decir: ARM64EC sigue recibiendo trabajo
+activo cada quincena. La rama 11.x es de desarrollo; la estable es 11.0 (enero 2026), que cerró la
+nueva arquitectura WoW64 — el mecanismo del que depende todo este modelo.
+
+### CodeWeavers, en su propio anuncio
+
+Sobre la Preview ARM64 de julio, y esto conviene citarlo tal cual porque **fija el calendario
+ajeno**:
+
+- **«no D3DMetal in this build»** — confirma por escrito lo que medimos en §5.
+- **«Direct3D 12 support coming soon»**.
+- Muchos lanzadores de juegos no funcionan; el build «no sirve para nada más que probar».
+- **Todo eso debería estar resuelto para CrossOver 27, previsto a principios de 2027.**
+
+Ese último punto ordena nuestra estrategia: **su tar de fuentes de CrossOver 27 llegará antes que
+macOS 28** (otoño 2027). No tiene sentido adelantarles el port del runtime; tiene sentido preparar
+lo que ellos no van a hacer por nosotros.
+
+> **Discrepancia sin resolver.** CodeWeavers dice usar «su propio emulador x86 open source, FEX, en
+> vez del traductor de Apple». Lo que medimos en el binario del 31 de julio es un puente de 176
+> bytes a `thread_set_x86_64_compat` (§3). Puede ser un paso intermedio, que FEX se cargue aparte, o
+> que la nota simplifique. **No lo damos por resuelto.** Y da igual para el plan: la interfaz de
+> enganche es la misma (`__wine_unix_call_funcs` en `lib/wine/aarch64-unix/`), así que se puede
+> empezar por el puente y cambiar el motor después sin rehacer nada.
+
+### gamesir-labs — de donde sale nuestro DXMT
+
+```bash
+gh api "orgs/gamesir-labs/repos?per_page=100" \
+   --jq '.[] | "\(.name)\t\(.pushed_at[0:10])\t\(.description)"'
+```
+
+| Repo | Último push | Qué es |
+|---|---|---|
+| `dxmt` | 2026-08-13 | **El que usamos.** «D3D12, D3D11, D3D10 y D3D9 for macOS / Wine» |
+| `wine` | 2026-04-25 | **Un árbol de Wine basado en Proton para macOS**, con parches de WineCX, CrossOver y upstream |
+| `rosettax87_jit` | 2026-04-14 | Fork de `Lifeisawful/rosettax87_jit`: hookea Rosetta para acelerar x87 y emitir AArch64 directo. **Optimiza Rosetta, no lo sustituye** |
+| `MGL` | 2026-01-29 | OpenGL 4.6 sobre Metal |
+| `dxvk`, `apitrace`, `Metal-Rust`, `gamehub-for-mac` | varios | Auxiliares |
+
+Que exista `gamesir-labs/wine` como árbol **Proton para macOS** es relevante: es exactamente la
+línea del laboratorio `work/fli-proton-arm64-20260808/`.
+
+### DXMT: el upstream real es `3Shain/dxmt`
+
+`gamesir-labs/dxmt` se declara **downstream** de [`3Shain/dxmt`](https://github.com/3Shain/dxmt)
+(1160 estrellas, push del 2026-08-26). Y ahí está la novedad que más nos afecta:
+
+| | Upstream `3Shain` | Downstream `gamesir-labs` (el nuestro) |
+|---|---|---|
+| Última versión | **v0.80** (2026-04-23) | v0.74 |
+| **ARM64EC** | **Sí**: `build-arm64ec.txt` en `main`; «build: add arm64ec support» el 2026-03-09 y «ci: package ARM64EC build» el 2026-08-04 | **No**: sólo `build-win32.txt` y `build-win64.txt` |
+| **D3D12** | No está ni en el plan de 1.0 | **Sí**: `src/d3d12/` completo, más `src/winemetal4` (Metal 4) |
+| Licencia | MIT hasta v0.80; **LGPL a partir de ahí** | LGPL 2.1+ |
+
+Verificado en local:
+
+```bash
+ls work/gamesir-labs-20260821/dxmt/src/    # …d3d12 winemetal4…
+ls build/toolchain/dxmt-src/src/           # v0.72: sin d3d12
+ls work/gamesir-labs-20260821/dxmt/build-*.txt   # sin arm64ec
+```
+
+**Y ésta es la tensión central del port:** lo que sustituye a D3DMetal (**D3D12**) está en el
+downstream; lo que hace falta para ARM (**ARM64EC**) está en el upstream. Hoy **no hay un solo árbol
+con las dos cosas**. Resolverlo es trabajo real, y hay tres salidas:
+
+1. Esperar a que gamesir-labs rebase sobre `3Shain` v0.80+ *(lo más barato; hay que vigilarlo)*.
+2. Portar el `build-arm64ec` del upstream al árbol de gamesir-labs *(unos pocos ficheros de build,
+   pero el código nuevo de `d3d12`/`winemetal4` tiene que compilar en ARM64EC)*.
+3. Usar el upstream para ARM y renunciar a D3D12 *(nos devuelve al problema de D3DMetal)*.
+
+El roadmap de DXMT 1.0 (issue #151, actualizado el 2026-08-05) incluye además **«Cross-Process
+Rendering — Wine upstream changes required»**, que es justo lo que resuelve nuestro parche
+`dxmt-v0.72-cross-process-present`. Merece la pena seguirlo: puede que upstream converja con lo que
+mantenemos a mano.
+
+---
+
 ## 5. El riesgo mayor sigue siendo D3DMetal
 
 `lib/apple_gptk/` en la Preview **ARM64** sólo tiene `x86_64-unix` y `x86_64-windows`, y el propio
@@ -196,17 +281,32 @@ propia para el camino B**.
 
 ## 7. El plan
 
-Regla de siempre: **una variable por paso y el motor estable no se toca**. Cada fase tiene un hito
-que se puede enseñar.
+Dos cosas ordenan las prioridades y no son nuestras: **CrossOver 27 llega a principios de 2027** con
+el port maduro y su tar de fuentes, y **macOS 28 llega en otoño de 2027**. Hay una ventana de meses
+entre ambos. No tiene sentido adelantar a CodeWeavers el port del runtime; sí tenerlo todo listo
+para que, cuando publiquen, sea cuestión de semanas y no de meses.
 
-### Fase 0 — Reducir la dependencia de D3DMetal *(empezar ya; no depende de ARM)*
+Regla de siempre: **una variable por paso y el motor estable no se toca**.
 
-Por cada juego con perfil GPTK: lanzarlo sobre DXMT y anotar qué le falta al traductor. Cada
-carencia corregida en DXMT vale para todos los juegos.
+### Fase 0 — Quitarnos D3DMetal de encima *(empezar ya; no depende de nadie)*
+
+Es la única fase que no espera a nada externo, y CodeWeavers ya confirmó por escrito que **su build
+ARM64 no lleva D3DMetal**. Por cada juego con perfil GPTK: lanzarlo sobre DXMT y anotar qué le falta
+al traductor. Cada carencia corregida vale para todos.
 
 *Hito:* tabla con los nueve juegos y su veredicto sobre DXMT, en este documento.
-*Por qué primero:* es lo único que aporta valor hoy **y** despeja el futuro, y no depende de Apple,
-de CodeWeavers ni de FEX.
+
+### Fase 0-bis — Resolver la tensión de DXMT *(en paralelo, y es lo que más nos bloquea)*
+
+Necesitamos un árbol con **D3D12** (downstream) **y ARM64EC** (upstream) a la vez. Hoy no existe.
+Vigilar si `gamesir-labs` rebasa sobre `3Shain` v0.80+; si no lo hace en unos meses, portar
+`build-arm64ec.txt` y el detector de ABI al árbol de gamesir-labs y ver qué falla al compilar
+`src/d3d12` y `src/winemetal4` en ARM64EC.
+
+Subir de v0.72 a v0.74/v0.80 es además **una release nuestra con su matriz completa**, así que
+conviene hacerlo antes y por separado, no mezclado con el port a ARM.
+
+*Hito:* un `d3d11.dll` ARM64EC compilado desde un árbol que también tenga `src/d3d12`.
 
 ### Fase 1 — Wine arm64 reproducible
 
@@ -214,47 +314,49 @@ de CodeWeavers ni de FEX.
 CLEAN=/private/tmp/regression-wine-arm64
 rm -rf "$CLEAN" && mkdir -p "$CLEAN"
 tar -xf Crossover-ARM64/crossover-sources-20260731.tar -C "$CLEAN" sources/wine
-# configure con las tres arquitecturas del modelo ARM64EC
-./configure --enable-archs=arm64ec,aarch64,i386 …
+cd "$CLEAN/sources/wine" && ./configure --enable-archs=arm64ec,aarch64,i386 && make -j
 ```
 
-Primero **sin parches propios**, para saber si el árbol oficial levanta en este Mac. Después,
-reportar la serie: los ~20 `patches/wine-26.3.0-*` están escritos contra el árbol x86_64 de 26.3.0 y
-**algunos no tienen sentido en arm64** —los que tocan `signal_x86_64.c`, los selectores de segmento
-o el loader—. Hay que clasificarlos uno a uno: *aplica igual · hay que reescribir · ya no aplica*.
+Primero **sin parches propios**: responde la pregunta más grande —si el árbol oficial levanta en
+este Mac— por muy poco esfuerzo. Después, reportar la serie: los ~20 `patches/wine-26.3.0-*` están
+escritos contra el árbol x86_64 y hay que clasificarlos uno a uno en *aplica igual · hay que
+reescribir · ya no aplica*. Los que tocan `signal_x86_64.c`, selectores de segmento o el loader son
+los sospechosos.
+
+Cuando salga el tar de CrossOver 27, **rehacer esta fase sobre él**: será un árbol más maduro.
 
 *Hito:* `wineboot` completo en una botella desechable. Sin Steam, sin juegos.
 
-### Fase 2 — El emulador x86-64
+### Fase 2 — El motor de emulación
 
-**Camino A primero**, porque es barato y desbloquea todo lo demás: un unixlib puente sobre
-`thread_set_x86_64_compat`, con la misma interfaz que espera Wine
-(`__wine_unix_call_funcs`) y JIT con `pthread_jit_write_protect_np`. Es el diseño que CrossOver ya
-demuestra que funciona; hay que escribirlo, no copiarlo.
+**Empezar por el puente**, que es barato: un unixlib sobre `thread_set_x86_64_compat` con la
+interfaz `__wine_unix_call_funcs` que Wine espera, y JIT con `pthread_jit_write_protect_np`. Se
+escribe, no se copia. Ventaja de diseñar contra esa interfaz: **el motor de detrás es
+intercambiable**, así que si Apple retira la API o CodeWeavers publica su FEX, se sustituye sin
+rehacer el resto.
 
-**Camino B en paralelo y sin prisa**, retomando `work/fli-proton-arm64-20260808/`: si Apple retira
-la API, el puente muere y FEX es lo único que queda.
+**FEX propio como seguro**, retomando `work/fli-proton-arm64-20260808/` y los parches
+`patches/fex-a04b0241-darwin-*`. Sin prisa mientras el puente funcione.
 
 *Hito:* un `.exe` PE x86-64 de consola que imprime y termina.
 
 ### Fase 3 — Capas gráficas
 
-- **DXMT** con `build-arm64ec.txt`, adoptando el reparto de CrossOver (PE fino + LLVM en el unixlib
-  arm64). El `native_llvm_path` pasa a LLVM **arm64**, que Homebrew ya sirve nativo — más fácil que
-  hoy, donde hay que descargar el LLVM x86_64 oficial.
+- **DXMT**: `build-arm64ec.txt` y el reparto de CrossOver (PE fino + LLVM en el unixlib arm64).
+  El `native_llvm_path` pasa a LLVM **arm64**, que Homebrew sirve nativo — más fácil que hoy.
 - **MoltenVK** arm64, reportando los tres parches de Enshrouded.
-- **DXVK**: no existe en ARM64EC ni en CrossOver. Afecta sólo a D3D9; recordar que los procesos de
-  32 bits ya van al `d3d9` builtin de Wine, así que el impacto real es menor de lo que parece.
-- **D3DMetal**: sin salida propia. De ahí la Fase 0.
+- **DXVK**: no existe en ARM64EC ni en CrossOver. Afecta sólo a D3D9 y los procesos de 32 bits ya
+  van al `d3d9` builtin, así que el impacto real es menor.
+- **D3DMetal**: sin salida. De ahí la Fase 0.
 
 *Hito:* la tienda de Steam renderizando, que es el canario de siempre.
 
 ### Fase 4 — El aparato de sellado
 
-Todo asume x86_64: `toolchain/x86/`, los `-arch x86_64` de los builds, los PIN, `verify-*.sh`,
-`ComponentHealth` y `RuntimeModuleCatalog`. Decidir si el runtime arm64 **convive** con el x86_64 en
-un bundle —como hace CrossOver ahora, y es lo sensato en la transición— o lo sustituye. Convivir
-**duplica la matriz de validación**, y eso hay que presupuestarlo.
+Todo asume x86_64: `toolchain/x86/`, los `-arch x86_64`, los PIN, `verify-*.sh`, `ComponentHealth` y
+`RuntimeModuleCatalog`. Decidir si el runtime arm64 **convive** con el x86_64 en un bundle —como
+hace CrossOver ahora, y es lo sensato en la transición— o lo sustituye. Convivir **duplica la matriz
+de validación**; hay que presupuestarlo.
 
 *Hito:* matriz verde en las dos arquitecturas, con el verificador distinguiéndolas.
 
@@ -265,11 +367,13 @@ un bundle —como hace CrossOver ahora, y es lo sensato en la transición— o l
 Nada de esto toca el motor estable:
 
 1. **Fase 0 sobre un juego**: el que menos dependa de D3D12 —Grim Dawn o FFT— sobre DXMT, y anotar
-   el resultado en la tabla.
-2. **Compilar el Wine `aarch64` del tar sin parches propios**. Es barato y responde a la pregunta
-   más grande: si el árbol oficial levanta aquí.
-3. **Leer `work/fli-proton-arm64-20260808/RESUME.md`** y decidir si el laboratorio FEX se retoma tal
-   cual o se replantea, ahora que el objetivo ya no es sólo el anticheat.
+   el resultado.
+2. **Compilar el Wine `aarch64` del tar sin parches propios.** Barato y responde lo más importante.
+3. **Decidir el camino de DXMT** (Fase 0-bis): mirar si `gamesir-labs/dxmt` ha rebasado sobre
+   `3Shain` v0.80+, y si no, abrir el port de `build-arm64ec` a nuestro árbol.
+4. **Poner en seguimiento** tres cosas que llegarán solas y cambian el plan: el tar de fuentes de
+   **CrossOver 27**, el rebase de `gamesir-labs/dxmt`, y el issue **#166 de DXMT** (cross-process
+   rendering), que puede hacer innecesario un parche que hoy mantenemos a mano.
 
 ---
 
@@ -284,4 +388,7 @@ Nada de esto toca el motor estable:
 - [Wine 11.16 release notes](https://gitlab.winehq.org/wine/wine/-/releases/wine-11.16) · [Wine 11.0 — ADMIN Magazine](https://www.admin-magazine.com/News/Wine-11-Released)
 - [FEX-Emu](https://fex-emu.com/) · [FEX-Emu/FEX](https://github.com/FEX-Emu/FEX) · [Development:ARM64EC — FEX wiki](https://wiki.fex-emu.com/index.php/Development:ARM64EC)
 - [Hangover](https://github.com/AndreRH/hangover) · [Hangover 11.0 — Phoronix](https://www.phoronix.com/news/Hangover-11.0-Released)
+- [3Shain/dxmt](https://github.com/3Shain/dxmt) (upstream real de DXMT) · [Roadmap DXMT 1.0, issue #151](https://github.com/3Shain/dxmt/issues/151) · [Release v0.80](https://github.com/3Shain/dxmt/releases/tag/v0.80)
+- [gamesir-labs](https://github.com/gamesir-labs) — `dxmt` (downstream con D3D12), `wine` (árbol Proton para macOS), `rosettax87_jit`, `MGL`
+- [CrossOver ARM64 y FEX probados — blendlogic](https://blendlogic.com/posts/crossover-arm64-fex-mac-gaming.html) · [CrossOver Goes Native on Apple Silicon — TUAW, 2026-08-02](https://www.tuaw.com/2026/08/02/crossover-goes-native-on-apple-silicon)
 - [Rosetta 2 en un Mac con Apple silicon — Apple](https://support.apple.com/guide/security/rosetta-2-on-a-mac-with-apple-silicon-secebb113be1/web)
