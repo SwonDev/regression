@@ -19,6 +19,7 @@ corresponda a tu objetivo y consulta `AGENTS.md` antes de cambiar runtime, perfi
 | Entender la autoridad durable de lanzamiento v17 | [Plataforma de compatibilidad](compatibility-platform.md#autoridad-de-lanzamiento-v17) |
 | Revisar runtimes y autorreparación | [Evolución tecnológica](runtime-evolution.md) |
 | Recompilar el runtime sin romper la instalación | [Recompilar el runtime](runtime-rebuild.md) |
+| Qué pasa cuando Rosetta 2 se retire y por dónde tirar | [Runtime arm64 sin Rosetta](runtime-arm64-sin-rosetta.md) |
 | Entender telemetría y certificación v15 | [Plataforma de compatibilidad](compatibility-platform.md#custodia-de-procesos-y-perfectos-v15) |
 | Preparar D3DMetal legalmente | [Apple GPTK: instalación asistida](apple-gptk-onboarding.md) |
 | Auditar la aplicación Swift/macOS | [Auditoría nativa](native-app-audit.md) |
