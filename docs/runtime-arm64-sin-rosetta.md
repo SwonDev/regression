@@ -244,6 +244,108 @@ mantenemos a mano.
 
 ---
 
+## 4-ter. Alguien ya lo ha hecho: `metalsharp/VKMT-Wine`
+
+**Es el proyecto más avanzado que existe en esta línea y hay que estudiarlo antes de escribir una
+línea de código propio.** Consultado el 2026-08-28.
+
+> [`metalsharp/VKMT-Wine`](https://github.com/metalsharp/VKMT-Wine) — *«A 0-Rosetta Wine Build for
+> Arm64 macOS Silicon, using a custom FEX build»*. **MIT**, creado el 24-07-2026, último push el
+> 20-08-2026, release **VKMT-1.0** del 01-08-2026 con runtime completo empaquetado. CI con
+> ShellCheck, Ruff, Clippy, CMake y CodeQL.
+
+Su arquitectura es literalmente la que necesitamos:
+
+```text
+Apple Silicon macOS
+└── ARM64 Wine host y wineserver
+    ├── ARM64/AArch64 Windows
+    ├── ARM64EC Windows
+    ├── x86_64 Windows  ── FEX xtajit64
+    └── i386/WoW64      ── FEX xtajit
+```
+
+Y sus invariantes son los que adoptaríamos: **host ARM64 nativo, Rosetta rechazado**,
+`FEX_TSOENABLED=0`, cachés de código traducido versionadas por prefijo, y parada del wineserver
+exacto al cambiar de proveedor.
+
+### Su pila gráfica responde a nuestro problema
+
+| Lane | D3D11/D3D9/DXGI | D3D12 | Puente nativo |
+|---|---|---|---|
+| ARM64/AArch64 | DXVK | **VKD3D-Proton** | puente Unix ARM64 de DXMT |
+| ARM64EC | DXVK | **VKD3D-Proton** | puente Windows ARM64EC de DXMT |
+| x86_64 | DXVK | **VKD3D-Proton** | `xtajit64` + DXMT |
+| i386/WoW64 | DXVK | **VKD3D-Proton** | `xtajit` + DXMT |
+
+**El sustituto de D3DMetal es VKD3D-Proton** (D3D12 → Vulkan → MoltenVK → Metal). No es una
+suposición nuestra: es lo que ellos ejecutan. Y nosotros **ya tenemos la receta**:
+`build/build-vkd3d-dxvk.sh` compila vkd3d 1.18, sólo que hoy no se instala en el runtime porque
+D3D12 va por GPTK.
+
+### Su auditoría de D3DMetal cierra el asunto
+
+`D3DMetal.md` es una auditoría independiente que llega a nuestra misma conclusión con **una razón
+técnica que no habíamos escrito**:
+
+> «El árbol actual no contiene ningún loader Mach-O ni `dyld` para traducir un `D3DMetal.framework`
+> o `libd3dshared.dylib` x86_64 de macOS dentro del host ARM64 de Wine. FEX traduce las rutas del
+> guest Windows, pero **no puede por sí mismo convertir un proveedor x86_64 de macOS en un proveedor
+> ARM64 nativo**.»
+
+Es decir: **ni siquiera con FEX se salva D3DMetal**, porque FEX emula el *invitado Windows*, no
+dylibs *de macOS*. Lo verifican por tres vías: el GPTK 3.0-2 instalado es x86_64;
+[`utmapp/d3dmetal-native`](https://github.com/utmapp/d3dmetal-native) documenta que el framework de
+Apple exige un proceso x86_64 bajo Rosetta; y CodeWeavers dice por escrito que su build ARM64 no lo
+incluye. Su release es **D3DMetal-free por diseño**.
+
+### Sus parches son el mapa de I+D
+
+`patches/` (MIT) es, punto por punto, la lista de lo que hay que resolver:
+
+| Parche | Qué resuelve |
+|---|---|
+| `wine-11.12-vkmt.patch` (192 KB) | Integración base de Wine ARM64 en macOS |
+| `wine-11.12-no-tso-steam-runtime.patch` (839 KB) | Ordenación de memoria software y ruta de Steam |
+| `wine-wow64-f108c09.patch` | Reparación del puente WoW64 |
+| `fex-2607-vkmt.patch` · `fex-2607-no-tso-steam-runtime.patch` · `fex-wow64-nested-code-buffer-pin.patch` | **El proveedor FEX y la propiedad del buffer de código del guest** |
+| **`dxmt-v0.80-xcode27-arm64.patch`** | **DXMT v0.80 compilando nativo en ARM64** |
+| `dxvk-vkmt-moltenvk.patch` · `vkd3d-proton-tls.patch` · `vkd3d-proton-vkmt-wine-compat.patch` | DXVK y VKD3D-Proton sobre MoltenVK |
+| `MoltenVK-vkmt-fatal-gaps.patch` (48 KB) · `moltenvk-665b11e7.patch` | **Huecos de Metal que MoltenVK no cubre** |
+| `wine-mono-11.2.0-arm64-coree.patch` | Loader gestionado ARM64 |
+
+**Coincidencia que no conviene desaprovechar: parten de FEX 2607, igual que nuestro laboratorio**
+(`patches/fex-2607-x86_64-{fs,gs}-selector.patch`). Sus parches de Darwin y los nuestros
+—`fex-a04b0241-darwin-{core,map-jit,guest-memory-bias}`— atacan el mismo problema desde dos sitios.
+El suyo está probado de punta a punta; el nuestro no.
+
+Su `MoltenVK-vkmt-fatal-gaps.patch` merece lectura aparte: nosotros mantenemos tres parches propios
+de MoltenVK por Enshrouded, y es probable que haya solape.
+
+### Lo que NO da
+
+- 4 estrellas y dos meses de vida: **no es una dependencia, es una referencia**. Su release es un
+  runtime empaquetado, no un producto con matriz de compatibilidad publicada.
+- No hay lista de juegos verificados ni evidencia de rendimiento comparable a la nuestra.
+- La licencia MIT cubre *su* material; Wine, FEX, DXMT, DXVK, VKD3D-Proton y MoltenVK conservan la
+  suya. Estudiar y aprender: sí. Copiar el runtime: no.
+
+## 4-quater. Lo que hace Valve, que puede cambiarlo todo
+
+- **Proton 11.0** (abril 2026) añadió **soporte ARM64 con FEX integrado** (FEX-2604 → 2605), pensado
+  para Steam Frame con Snapdragon. **FEX 2608** es de agosto de 2026. Es decir: Valve ya tiene
+  **Proton + FEX funcionando en ARM64**, sólo que en Linux.
+- **El cliente de Steam ya corre nativo en Apple Silicon** (beta), precisamente porque Apple retira
+  Rosetta: sin cliente nativo, sus usuarios de Mac pierden la biblioteca en macOS 28.
+
+Ese es el escenario que lo cambiaría todo: **si Valve porta Proton a macOS**, el problema deja de
+ser nuestro. No hay anuncio, y la objeción técnica que circula es real —Proton haría
+DX→Vulkan→Metal con shaders DXIL→SPIR-V→MSL, mientras GPTK mapea DX→Metal directo—, pero es
+exactamente lo que VKMT ya hace con VKD3D-Proton+MoltenVK. **Ponerlo en seguimiento, no en el
+camino crítico.**
+
+---
+
 ## 5. El riesgo mayor sigue siendo D3DMetal
 
 `lib/apple_gptk/` en la Preview **ARM64** sólo tiene `x86_64-unix` y `x86_64-windows`, y el propio
@@ -281,34 +383,54 @@ propia para el camino B**.
 
 ## 7. El plan
 
-Dos cosas ordenan las prioridades y no son nuestras: **CrossOver 27 llega a principios de 2027** con
-el port maduro y su tar de fuentes, y **macOS 28 llega en otoño de 2027**. Hay una ventana de meses
-entre ambos. No tiene sentido adelantar a CodeWeavers el port del runtime; sí tenerlo todo listo
-para que, cuando publiquen, sea cuestión de semanas y no de meses.
+Tres calendarios ajenos ordenan el trabajo: **CrossOver 27** a principios de 2027 con su tar de
+fuentes, **macOS 28** en otoño de 2027, y **VKMT-Wine**, que ya existe hoy y demuestra que el modelo
+completo funciona. Nuestra ventaja es no tener que descubrir nada: hay un camino trazado y probado.
 
 Regla de siempre: **una variable por paso y el motor estable no se toca**.
 
-### Fase 0 — Quitarnos D3DMetal de encima *(empezar ya; no depende de nadie)*
+### Fase A — Quitarnos D3DMetal *(empezar ya; no depende de nadie)*
 
-Es la única fase que no espera a nada externo, y CodeWeavers ya confirmó por escrito que **su build
-ARM64 no lleva D3DMetal**. Por cada juego con perfil GPTK: lanzarlo sobre DXMT y anotar qué le falta
-al traductor. Cada carencia corregida vale para todos.
+No hay proveedor ARM64 de D3DMetal y **no lo habrá**: ni Apple lo ha publicado, ni FEX puede
+salvarlo (§4-ter). El sustituto está identificado y probado por VKMT: **VKD3D-Proton** para D3D12 y
+**DXMT** para D3D11.
 
-*Hito:* tabla con los nueve juegos y su veredicto sobre DXMT, en este documento.
+Dos frentes, ambos ejecutables hoy sobre el runtime x86_64 actual:
 
-### Fase 0-bis — Resolver la tensión de DXMT *(en paralelo, y es lo que más nos bloquea)*
+1. **Por cada juego con perfil GPTK**, probarlo sobre DXMT y anotar qué le falta al traductor. Cada
+   carencia corregida vale para todos.
+2. **Levantar la ruta VKD3D-Proton**, que ya tenemos a medias: `build/build-vkd3d-dxvk.sh` compila
+   vkd3d 1.18 pero no se instala en el runtime. Ponerla en pie y medirla contra D3DMetal en los
+   juegos D3D12 —Dragonkin, The Witcher 3, Borderlands 4— dice cuánto rendimiento cuesta el cambio.
 
-Necesitamos un árbol con **D3D12** (downstream) **y ARM64EC** (upstream) a la vez. Hoy no existe.
-Vigilar si `gamesir-labs` rebasa sobre `3Shain` v0.80+; si no lo hace en unos meses, portar
-`build-arm64ec.txt` y el detector de ABI al árbol de gamesir-labs y ver qué falla al compilar
-`src/d3d12` y `src/winemetal4` en ARM64EC.
+*Hito:* tabla con los nueve juegos GPTK, su veredicto sobre DXMT y, para los D3D12, su medición
+sobre VKD3D-Proton.
 
-Subir de v0.72 a v0.74/v0.80 es además **una release nuestra con su matriz completa**, así que
-conviene hacerlo antes y por separado, no mezclado con el port a ARM.
+### Fase B — Resolver la tensión de DXMT *(en paralelo; nos bloquea)*
+
+Necesitamos un árbol con **D3D12** (downstream `gamesir-labs`) **y ARM64EC** (upstream `3Shain`).
+Hoy no existe… **pero VKMT publica `dxmt-v0.80-xcode27-arm64.patch`**, que es exactamente el puente
+que falta. Estudiarlo antes de intentar nada propio.
+
+Además, subir de v0.72 a v0.80 es **una release nuestra con matriz completa**: conviene hacerla
+antes, sola, y no mezclada con el port a ARM.
 
 *Hito:* un `d3d11.dll` ARM64EC compilado desde un árbol que también tenga `src/d3d12`.
 
-### Fase 1 — Wine arm64 reproducible
+### Fase C — Estudiar VKMT en serio *(barato y ahorra meses)*
+
+Antes de escribir código de port: leer sus 18 parches y su `docs/architecture.md`, y **replicar su
+runtime en una máquina de pruebas** para ver qué funciona de verdad. Preguntas concretas a
+responder:
+
+- ¿Qué hace `wine-11.12-no-tso-steam-runtime.patch` en 839 KB, y cuánto de eso necesitamos?
+- ¿Su `MoltenVK-vkmt-fatal-gaps.patch` solapa con nuestros tres parches de Enshrouded?
+- ¿Sus parches de FEX 2607 hacen innecesarios los `fex-a04b0241-darwin-*` del laboratorio, o los
+  complementan? **Partimos de la misma versión de FEX**, así que es comparable línea a línea.
+
+*Hito:* un documento corto que diga, parche a parche, *adoptamos · adaptamos · no aplica*.
+
+### Fase D — Wine arm64 reproducible
 
 ```bash
 CLEAN=/private/tmp/regression-wine-arm64
@@ -317,48 +439,46 @@ tar -xf Crossover-ARM64/crossover-sources-20260731.tar -C "$CLEAN" sources/wine
 cd "$CLEAN/sources/wine" && ./configure --enable-archs=arm64ec,aarch64,i386 && make -j
 ```
 
-Primero **sin parches propios**: responde la pregunta más grande —si el árbol oficial levanta en
-este Mac— por muy poco esfuerzo. Después, reportar la serie: los ~20 `patches/wine-26.3.0-*` están
-escritos contra el árbol x86_64 y hay que clasificarlos uno a uno en *aplica igual · hay que
-reescribir · ya no aplica*. Los que tocan `signal_x86_64.c`, selectores de segmento o el loader son
-los sospechosos.
+Primero **sin parches propios**: responde por muy poco esfuerzo si el árbol oficial levanta aquí.
+Después, clasificar los ~20 `patches/wine-26.3.0-*` en *aplica igual · hay que reescribir · ya no
+aplica*; los que tocan `signal_x86_64.c`, selectores de segmento o el loader son los sospechosos.
 
-Cuando salga el tar de CrossOver 27, **rehacer esta fase sobre él**: será un árbol más maduro.
+Cuando salga el tar de **CrossOver 27**, rehacer esta fase sobre él.
 
-*Hito:* `wineboot` completo en una botella desechable. Sin Steam, sin juegos.
+*Hito:* `wineboot` completo en una botella desechable.
 
-### Fase 2 — El motor de emulación
+### Fase E — El motor de emulación
 
-**Empezar por el puente**, que es barato: un unixlib sobre `thread_set_x86_64_compat` con la
-interfaz `__wine_unix_call_funcs` que Wine espera, y JIT con `pthread_jit_write_protect_np`. Se
-escribe, no se copia. Ventaja de diseñar contra esa interfaz: **el motor de detrás es
-intercambiable**, así que si Apple retira la API o CodeWeavers publica su FEX, se sustituye sin
-rehacer el resto.
+Dos opciones, y ahora sabemos que **las dos están demostradas**:
 
-**FEX propio como seguro**, retomando `work/fli-proton-arm64-20260808/` y los parches
-`patches/fex-a04b0241-darwin-*`. Sin prisa mientras el puente funcione.
+- **El puente a Rosetta** (lo que hace CrossOver): unixlib fino sobre `thread_set_x86_64_compat`.
+  Barato, rendimiento de Rosetta, y **dependiente de que Apple conserve esa API**.
+- **FEX propio** (lo que hace VKMT, y lo que hace Valve en Linux): sin dependencia de Apple, con un
+  camino ya trazado por terceros y por nuestro propio laboratorio.
+
+Dado que **VKMT demuestra que FEX funciona en macOS**, el equilibrio cambia respecto a lo que
+pensábamos: el puente deja de ser «la única opción barata» y pasa a ser «el atajo si hay prisa».
+Diseñar contra la interfaz `__wine_unix_call_funcs` permite empezar por uno y cambiar al otro.
 
 *Hito:* un `.exe` PE x86-64 de consola que imprime y termina.
 
-### Fase 3 — Capas gráficas
+### Fase F — Capas gráficas
 
-- **DXMT**: `build-arm64ec.txt` y el reparto de CrossOver (PE fino + LLVM en el unixlib arm64).
-  El `native_llvm_path` pasa a LLVM **arm64**, que Homebrew sirve nativo — más fácil que hoy.
-- **MoltenVK** arm64, reportando los tres parches de Enshrouded.
-- **DXVK**: no existe en ARM64EC ni en CrossOver. Afecta sólo a D3D9 y los procesos de 32 bits ya
-  van al `d3d9` builtin, así que el impacto real es menor.
-- **D3DMetal**: sin salida. De ahí la Fase 0.
+- **DXMT** ARM64EC con el reparto de CrossOver (PE fino + LLVM en el unixlib arm64); `native_llvm_path`
+  pasa a LLVM **arm64**, que Homebrew sirve nativo.
+- **VKD3D-Proton** para D3D12, con los parches de VKMT como referencia.
+- **MoltenVK** arm64, reconciliando nuestros parches de Enshrouded con los suyos.
+- **DXVK**: VKMT lo tiene en ARM64; CrossOver aún no.
 
 *Hito:* la tienda de Steam renderizando, que es el canario de siempre.
 
-### Fase 4 — El aparato de sellado
+### Fase G — El aparato de sellado
 
 Todo asume x86_64: `toolchain/x86/`, los `-arch x86_64`, los PIN, `verify-*.sh`, `ComponentHealth` y
-`RuntimeModuleCatalog`. Decidir si el runtime arm64 **convive** con el x86_64 en un bundle —como
-hace CrossOver ahora, y es lo sensato en la transición— o lo sustituye. Convivir **duplica la matriz
-de validación**; hay que presupuestarlo.
+`RuntimeModuleCatalog`. Decidir si el runtime arm64 **convive** con el x86_64 —como CrossOver, y es
+lo sensato en la transición— o lo sustituye. Convivir **duplica la matriz**; hay que presupuestarlo.
 
-*Hito:* matriz verde en las dos arquitecturas, con el verificador distinguiéndolas.
+*Hito:* matriz verde en las dos arquitecturas.
 
 ---
 
@@ -366,14 +486,18 @@ de validación**; hay que presupuestarlo.
 
 Nada de esto toca el motor estable:
 
-1. **Fase 0 sobre un juego**: el que menos dependa de D3D12 —Grim Dawn o FFT— sobre DXMT, y anotar
-   el resultado.
-2. **Compilar el Wine `aarch64` del tar sin parches propios.** Barato y responde lo más importante.
-3. **Decidir el camino de DXMT** (Fase 0-bis): mirar si `gamesir-labs/dxmt` ha rebasado sobre
-   `3Shain` v0.80+, y si no, abrir el port de `build-arm64ec` a nuestro árbol.
-4. **Poner en seguimiento** tres cosas que llegarán solas y cambian el plan: el tar de fuentes de
-   **CrossOver 27**, el rebase de `gamesir-labs/dxmt`, y el issue **#166 de DXMT** (cross-process
-   rendering), que puede hacer innecesario un parche que hoy mantenemos a mano.
+1. **Levantar VKD3D-Proton** sobre el runtime actual y medirlo contra D3DMetal en un juego D3D12.
+   Es la pregunta que más decide: si el coste en rendimiento es asumible, D3DMetal deja de dar
+   miedo.
+2. **Leer los 18 parches de VKMT** y escribir el *adoptamos · adaptamos · no aplica*. Es lectura,
+   no código, y puede ahorrar meses.
+3. **Fase A sobre un juego**: el que menos dependa de D3D12 —Grim Dawn o FFT— sobre DXMT.
+4. **Compilar el Wine `aarch64` del tar sin parches propios.**
+
+Y poner en seguimiento cuatro cosas que llegarán solas y cambian el plan: el tar de **CrossOver 27**,
+el rebase de **`gamesir-labs/dxmt`** sobre v0.80+, el **issue #166 de DXMT** (cross-process
+rendering, que podría hacer innecesario un parche que hoy mantenemos), y cualquier movimiento de
+**Valve hacia Proton en macOS**.
 
 ---
 
@@ -390,5 +514,9 @@ Nada de esto toca el motor estable:
 - [Hangover](https://github.com/AndreRH/hangover) · [Hangover 11.0 — Phoronix](https://www.phoronix.com/news/Hangover-11.0-Released)
 - [3Shain/dxmt](https://github.com/3Shain/dxmt) (upstream real de DXMT) · [Roadmap DXMT 1.0, issue #151](https://github.com/3Shain/dxmt/issues/151) · [Release v0.80](https://github.com/3Shain/dxmt/releases/tag/v0.80)
 - [gamesir-labs](https://github.com/gamesir-labs) — `dxmt` (downstream con D3D12), `wine` (árbol Proton para macOS), `rosettax87_jit`, `MGL`
+- [metalsharp/VKMT-Wine](https://github.com/metalsharp/VKMT-Wine) — Wine ARM64 + FEX en macOS, 0-Rosetta · [su auditoría de D3DMetal](https://github.com/metalsharp/VKMT-Wine/blob/main/D3DMetal.md) · [sus parches](https://github.com/metalsharp/VKMT-Wine/tree/main/patches)
+- [utmapp/d3dmetal-native](https://github.com/utmapp/d3dmetal-native) — documenta que D3DMetal exige un proceso x86_64 bajo Rosetta
+- [Proton 11.0-1 Beta 3: FEX para ARM64 — GamingOnLinux, 2026-05](https://www.gamingonlinux.com/2026/05/proton-11-0-1-beta-3-brings-fex-upgrades-for-linux-arm64-like-the-steam-frame/) · [FEX 2608 — Phoronix](https://www.phoronix.com/news/FEX-2608-Released)
+- [i1rr/steam-arm64-mac](https://github.com/i1rr/steam-arm64-mac) — Steam nativo en Apple Silicon sin Rosetta
 - [CrossOver ARM64 y FEX probados — blendlogic](https://blendlogic.com/posts/crossover-arm64-fex-mac-gaming.html) · [CrossOver Goes Native on Apple Silicon — TUAW, 2026-08-02](https://www.tuaw.com/2026/08/02/crossover-goes-native-on-apple-silicon)
 - [Rosetta 2 en un Mac con Apple silicon — Apple](https://support.apple.com/guide/security/rosetta-2-on-a-mac-with-apple-silicon-secebb113be1/web)
