@@ -3,8 +3,8 @@
 Este índice separa la portada del producto de la documentación técnica. Empieza por la ruta que
 corresponda a tu objetivo y consulta `AGENTS.md` antes de cambiar runtime, perfiles o botella.
 
-> **Contrato actual del código fuente:** Regression **1.12.12 (50)** y SQLite **v17**.
-> **v1.12.12 (50)** es la release estable actual y **v1.11.0 (37)** el baseline histórico. Los documentos de
+> **Contrato actual del código fuente:** Regression **1.12.13 (51)** y SQLite **v17**.
+> **v1.12.13 (51)** es la release estable actual y **v1.11.0 (37)** el baseline histórico. Los documentos de
 > expedientes conservan versiones anteriores como evidencia y no deben reinterpretarse como el
 > estado de la release actual.
 
@@ -103,7 +103,7 @@ el run cerrado. **No** tienen entrada en `VerifiedGameCatalog` hasta entonces.
 | Enshrouded | Cadena de **cinco** bloqueos del traductor Vulkan→Metal: cuatro resueltos (llega a jugarse), el quinto medido y abierto | [`enshrouded.md`](games/enshrouded.md) |
 | Critadel | Resuelto: la app del juego no llegaba a estar activa; cesión de activación y foco de ventana | [`critadel.md`](games/critadel.md) |
 | The Witcher 3 | Prelanzador de 32 bits sin Vulkan, interfaz Chromium omitida y D3D12 por D3DMetal | [`the-witcher-3.md`](games/the-witcher-3.md) |
-| PixARK | DXMT aborta en `UpdateSubresource` sobre textura staging; se enruta a Apple GPTK 3.0 | [`pixark.md`](games/pixark.md) |
+| PixARK | DXMT abortaba en `UpdateSubresource` sobre textura staging —corregido en el traductor— y el juego va por Apple GPTK 3.0 | [`pixark.md`](games/pixark.md) |
 | Sonic Adventure 2 | Negro con música: el `d3d9` de DXVK aliasa el sampler de sombra y Metal lo rechaza; ruta a wined3d | [`sonic-adventure-2.md`](games/sonic-adventure-2.md) |
 | Triaje 2026-08-24 | Nueve juegos reportados: qué se resolvió, qué es límite real y qué queda | [`triaje-2026-08-24.md`](games/triaje-2026-08-24.md) |
 

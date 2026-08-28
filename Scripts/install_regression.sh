@@ -8,8 +8,8 @@ export PATH
 # Ningún smoke, wineboot, instalador ni wineserver puede heredar la sesión de otro runtime.
 unset WINESERVERSOCKET
 
-VERSION="1.12.12"
-BUILD_NUMBER="50"
+VERSION="1.12.13"
+BUILD_NUMBER="51"
 REPO="SwonDev/regression"
 ASSET_NAME="Regression-${VERSION}-macos-arm64.tar.gz"
 APP_NAME="Regression.app"
@@ -50,7 +50,7 @@ LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchS
 
 # REGRESSION_RELEASE_AUTHORITY_V2_BEGIN
 EXPECTED_MEDIA_MANIFEST_SHA256="da8ba98d99d157f981ef3a2472dc9d74c9ce4673ef126bdd61851b9dd21dedb3"
-EXPECTED_STEAM_BOTTLE_BASELINE_MANIFEST_SHA256="884912891b7a3f5440a46b30b9241aa604e248fbbe578498058658e2293b00f4"
+EXPECTED_STEAM_BOTTLE_BASELINE_MANIFEST_SHA256="6abdb8ed8cee033692645921877f6fdcc68d60ec86fb796bbfa47073854efdf3"
 EXPECTED_ENGINE_SHA256="979b6a0847495058e144341009330020e158a61dae558312c8e434f3d8ed3f3f"
 EXPECTED_GPTK_INSTALLER_SHA256="f6bcd552320e3713693d0a0bbf1af4932b573fc35798282c1724f2b52a688660"
 # Hashes del ensemble público derivados del builder raw sellado mediante strip,

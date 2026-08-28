@@ -45,7 +45,7 @@ juego necesita **las dos cosas a la vez**, y sólo un backend las tiene.
 
 | Backend | Resultado |
 |---|---|
-| **DXMT** (baseline) | Aborta en la inicialización del RHI: `UpdateTexture: staging` no implementado |
+| **DXMT** (baseline) | Abortaba en la inicialización del RHI: `UpdateTexture: staging` no implementado. **Corregido en 1.12.13**: con el caso implementado, PixARK arranca y se juega sobre DXMT |
 | **DXVK** (`lib/dxvk`) | Arranca, menú y mundo, pero sus **geometry shaders** no compilan: SPIRV-Cross emite `EmitVertex()` en MSL y Metal no lo conoce → `VK_ERROR_INVALID_SHADER_NV`, después `kIOGPUCommandBufferCallbackErrorPageFault` y `VK_ERROR_DEVICE_LOST`. El juego cae con «Client resource loading has encountered an unexpected condition» |
 | **Apple GPTK 4.0b2** | El proceso vive pero **no abre ventana**: se queda colgado sin escribir una línea de log |
 | **Apple GPTK 3.0** | **Funciona entero** |
@@ -67,21 +67,41 @@ contrato indexado que ya usan Grim Dawn, DragonSword, Dragon's Dogma 2 y FINAL F
 **No se toca DXMT, ni su PIN, ni el baseline.** Cualquier otro proceso —la tienda de Steam
 incluida— sigue exactamente en DXMT. El perfil se activa por proceso, nunca globalmente.
 
-## Por qué no se corrigió DXMT
+## La corrección general: DXMT implementa el caso staging (v1.12.13)
 
-Sería la corrección general: `UpdateTexture` sobre staging es ~20 líneas (escribir en el buffer
-mapeado del recurso staging, sin GPU). Se dejó fuera de forma deliberada y consciente:
+El perfil resolvía PixARK; no resolvía la clase de fallo. Cualquier juego que use la creación
+asíncrona de texturas de Unreal Engine 4 abortaba igual, y sólo se descubría cuando alguien lo
+reportaba. Así que se implementó lo que faltaba, en
+`patches/dxmt-v0.72-update-staging-texture.patch`:
 
-1. Reconstruir DXMT exige LLVM x86_64 y un árbol de Wine compilado que este checkout no conserva.
-2. Sustituir `d3d11.dll` rompe el PIN **DXMT v0.72 + parche cross-process**, lo que obliga a la
-   matriz completa de validación gráfica sobre un artefacto no reproducible aquí.
-3. Las fuentes de DXMT disponibles (`work/gamesir-labs-*/dxmt`) son de otro laboratorio y **no
-   están acreditadas como la v0.72 publicada**: compilar de ahí no sería una variable, sería un
-   cambio de generación entera.
+Una textura staging no tiene textura Metal detrás: su subrecurso es un buffer plano cuyas filas
+siguen el `bytesPerRow`/`bytesPerImage` del propio recurso. La actualización es, por tanto, una
+copia buffer→buffer fila a fila —igual que la ruta staging→staging que ya existía—, con las filas
+de origen puestas antes en un staging buffer desde la memoria del cliente. Las texturas
+comprimidas direccionan bloques, así que el origen de destino, que llega en texels, se convierte;
+el resto ya cuenta bloques porque `TextureUpdateCommand` los calcula así.
 
-Queda anotado como deuda con causa raíz identificada y sitio exacto:
-`src/d3d11/d3d11_context_impl.cpp`, rama `GetStagingResource` de `UpdateTexture`. Cuando se
-regenere el toolchain de DXMT, ese arreglo retira la necesidad del perfil.
+Se eligió la copia por GPU y no un `memcpy` desde CPU a propósito: el destino puede tener trabajo
+encolado y una escritura directa se saltaría el orden del command buffer.
+
+**Cómo se acreditó**, separando las dos variables que había en juego:
+
+1. El árbol se preparó desde el tag **v0.72** del repositorio oficial `gamesir-labs/dxmt` —la
+   generación del PIN— con la serie de parches versionada (`build/apply-dxmt-patches.sh`).
+2. La toolchain disponible hoy (GCC 16.2 de Homebrew, LLVM 15.0.7 x86_64 oficial) **no reproduce
+   byte a byte** el binario publicado: son 19 KB de diferencia sobre 22 MB, y no hay PIN de
+   builder para DXMT con el que acreditarlo. Así que primero se instaló el binario **sin el fix**
+   y se validó la matriz: la tienda de Steam y Fields of Mistria renderizan igual. La toolchain
+   queda descartada como fuente de regresión antes de introducir el cambio.
+3. Sólo entonces se instaló el binario **con el fix** y se revalidó.
+
+Un aviso que cuesta caro: una captura tomada antes del primer fotograma muestra negro y parece una
+regresión gráfica. Ocurrió con Fields of Mistria y con la propia tienda. Antes de revertir por un
+negro, comprueba que el juego ha tenido tiempo de pintar, y confirma con una sonda si la rama
+nueva siquiera se ejecuta — en Fields of Mistria no se ejecuta ni una vez.
+
+**El perfil de PixARK se conserva.** Está validado de punta a punta y no depende de la generación
+del traductor; el fix de DXMT cubre a los juegos que aún no conocemos.
 
 ## Validación
 

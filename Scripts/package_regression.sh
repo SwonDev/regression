@@ -7,8 +7,8 @@ MACOS_DIR="$APP/Contents/MacOS"
 PLIST="$APP/Contents/Info.plist"
 RESOURCES_DIR="$APP/Contents/Resources"
 STATE_ICON_DIR="$ROOT/assets/menubar/states"
-VERSION="1.12.12"
-BUILD_NUMBER="50"
+VERSION="1.12.13"
+BUILD_NUMBER="51"
 BACKUP_ROOT="$ROOT/backups/native-packaging"
 COMPATIBILITY_ROOT="${REGRESSION_COMPATIBILITY_ROOT:-$HOME/Library/Application Support/Regression/Compatibility}"
 COMPATIBILITY_DB="$COMPATIBILITY_ROOT/compatibility.sqlite"
@@ -285,7 +285,7 @@ STEAM_BOTTLE_BASELINE_BUILD="${REGRESSION_STEAM_BOTTLE_BASELINE_BUILD:-$ROOT/bui
     shasum -a 256 -c manifest.sha256
 )
 [[ "$(shasum -a 256 "$STEAM_BOTTLE_BASELINE_BUILD/manifest.sha256" | awk '{print $1}')" \
-    == "884912891b7a3f5440a46b30b9241aa604e248fbbe578498058658e2293b00f4" ]] || {
+    == "6abdb8ed8cee033692645921877f6fdcc68d60ec86fb796bbfa47073854efdf3" ]] || {
     echo "ERROR: la receta gráfica de botella no coincide con la autoridad compilada." >&2
     exit 1
 }

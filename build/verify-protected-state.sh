@@ -333,7 +333,7 @@ if $RELEASE_1_12_DEVELOPMENT_CANDIDATE || $CANDIDATE_1_12_2_BEFORE_RUNTIME_CONTR
         echo "ERROR: el payload Windows Media 1.12 no supera su manifiesto." >&2
         exit 1
     }
-    verify_hash 884912891b7a3f5440a46b30b9241aa604e248fbbe578498058658e2293b00f4 \
+    verify_hash 6abdb8ed8cee033692645921877f6fdcc68d60ec86fb796bbfa47073854efdf3 \
         "Contents/SharedSupport/components/steam-bottle-baseline/1/manifest.sha256"
     (
         cd "$APP/Contents/SharedSupport/components/steam-bottle-baseline/1"
@@ -458,7 +458,7 @@ verify_transition_hash e2d3d63343702678441b4e28d9278f433fae543c460dd2e651ca1e399
 verify_transition_hash da91ec701a18e97c0c3cd943d383ef996092c11d74983876fd44c90b03d5e5b1 e921d454fbc67a40addb2e8e8e795f9d5274062b731c31a6280403850be687eb "Contents/SharedSupport/wine-root/lib/wine/x86_64-windows/winemac.drv"
 verify_transition_hash aaf38489b18bfeb967b7e6298510b46973ed79f516441b7fd74c95a3cf6b15ec 972000e02f63be8f84d414108d2f6aa5edd8e924111d1d58a07b8fa1b1c91060 "Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/winemetal.so"
 verify_hash 87ed91e86f1f4620f5229b7a0d4f1f8c5436a56088e8d4692201fe0c7d5b0deb "Contents/SharedSupport/wine-root/lib/wine/x86_64-windows/d3d10core.dll"
-verify_hash e6209af3a04947504af1f12b4533eded103687841197cff45a92d1a5f916c0a8 "Contents/SharedSupport/wine-root/lib/wine/x86_64-windows/d3d11.dll"
+verify_hash 1eafefb8650dc7239471d701f099b9caf7c8a4b288f0402b724894c5451fe6ae "Contents/SharedSupport/wine-root/lib/wine/x86_64-windows/d3d11.dll"
 verify_hash 25f74dafc3ebaf77ddc5a7b32d933853462c303a2636399860e80937cda82941 "Contents/SharedSupport/wine-root/lib/wine/x86_64-windows/dxgi.dll"
 
 # Perfil local Apple GPTK de Grim Dawn. Se verifica, nunca se redistribuye.
@@ -528,7 +528,7 @@ fi
 
 if $INCLUDE_BOTTLE; then
     verify_bottle_hash 0b97d99a61eeeefefc4451d49477d31dc8c6e50ecca7651003655ac67f72aef4 "drive_c/windows/system32/d3d10core.dll"
-    verify_bottle_hash e6209af3a04947504af1f12b4533eded103687841197cff45a92d1a5f916c0a8 "drive_c/windows/system32/d3d11.dll"
+    verify_bottle_hash 1eafefb8650dc7239471d701f099b9caf7c8a4b288f0402b724894c5451fe6ae "drive_c/windows/system32/d3d11.dll"
     verify_bottle_hash ff2062e17cfb5d4a0e4259e01fb264bb53e33fa093816e60c6e5a8f1e201b0eb "drive_c/windows/system32/d3d9.dll"
     verify_bottle_hash 25f74dafc3ebaf77ddc5a7b32d933853462c303a2636399860e80937cda82941 "drive_c/windows/system32/dxgi.dll"
 fi

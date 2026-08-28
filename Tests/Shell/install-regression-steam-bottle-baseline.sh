@@ -21,7 +21,7 @@ cleanup_path()
     /usr/bin/find "$target" -depth -delete
 }
 
-export EXPECTED_STEAM_BOTTLE_BASELINE_MANIFEST_SHA256="884912891b7a3f5440a46b30b9241aa604e248fbbe578498058658e2293b00f4"
+export EXPECTED_STEAM_BOTTLE_BASELINE_MANIFEST_SHA256="6abdb8ed8cee033692645921877f6fdcc68d60ec86fb796bbfa47073854efdf3"
 
 # Carga exclusivamente las funciones de producción que gobiernan la autoridad y la promoción.
 eval "$(

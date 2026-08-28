@@ -718,6 +718,26 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
     anotada con sitio exacto: `d3d11_context_impl.cpp`, rama `GetStagingResource` de
     `UpdateTexture`. Ver `docs/games/pixark.md`.
 
+100. **DXMT ya implementa `UpdateSubresource` sobre una textura staging, y el árbol de DXMT se
+    prepara como el de Wine: desde el tag oficial más la serie versionada.** El caso terminaba en
+    `UNIMPLEMENTED` y **abortaba el proceso**, así que cualquier motor que use la creación
+    asíncrona de texturas de UE4 se cerraba antes del primer fotograma. La implementación copia
+    buffer→buffer fila a fila sobre el subrecurso staging —no `memcpy` desde CPU, que se saltaría
+    el orden del command buffer— y convierte a bloques el origen de las texturas comprimidas.
+    Vive en `patches/dxmt-v0.72-update-staging-texture.patch` y la aplica
+    `build/apply-dxmt-patches.sh`; el árbol sale del tag **v0.72** de `gamesir-labs/dxmt`.
+    La toolchain de hoy **no reproduce** byte a byte el DXMT publicado y no hay PIN de builder que
+    lo acredite, así que se valida en dos pasos: primero el binario **sin** el cambio contra la
+    matriz —para descartar la toolchain— y sólo después el binario **con** el cambio.
+    Ver `docs/games/pixark.md`.
+
+101. **Un negro puede ser una captura tomada antes del primer fotograma, no una regresión.**
+    Capturando pronto, Fields of Mistria y la propia tienda de Steam salieron negras y llegué a
+    declarar una regresión que no existía. La regla de revertir ante un negro se mantiene —revertir
+    es barato—, pero antes de atribuirlo a un cambio: da tiempo a que el juego pinte, repite la
+    captura, y comprueba con una sonda (`ERR`) si la rama nueva siquiera se ejecuta en ese proceso.
+    En Fields of Mistria no se ejecutaba ni una vez.
+
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 
 Este proyecto es un sistema de muchas piezas acopladas (wine + DXMT + DXVK + D3DMetal + CEF +
@@ -828,7 +848,7 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
 ## Estado rápido (2026-08-14)
 
 - **Contrato de este corte**: el código fuente y los empaquetadores convergen en Regression
-  **1.12.12 (50)** y SQLite **v17**. **v1.12.12 (50)** es la release estable actual y
+  **1.12.13 (51)** y SQLite **v17**. **v1.12.13 (51)** es la release estable actual y
   **v1.11.0 (37)** el baseline histórico; sus verificadores `public-1.11` se conservan como
   gates de transición, no como versión vigente. Toda release futura debe verificar el asset
   exacto y completar su matriz antes de publicarse.

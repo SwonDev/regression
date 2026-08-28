@@ -1,0 +1,62 @@
+diff --git a/src/d3d11/d3d11_context_impl.cpp b/src/d3d11/d3d11_context_impl.cpp
+index 4b43cb2a..f9ddc803 100644
+--- a/src/d3d11/d3d11_context_impl.cpp
++++ b/src/d3d11/d3d11_context_impl.cpp
+@@ -3890,8 +3890,55 @@ public:
+         cmd_cptex.origin = cmd.DstOrigin;
+       });
+     } else if (auto staging_dst = GetStagingResource(cmd.pDst, cmd.DstSubresource)) {
+-      // staging: ...
+-      UNIMPLEMENTED("update staging texture");
++      // A staging texture has no Metal texture behind it: its subresource is a plain buffer whose
++      // rows are laid out with the resource's own bytesPerRow/bytesPerImage. So the update is a
++      // buffer-to-buffer copy done row by row, exactly like the staging-to-staging path above,
++      // with the source rows staged from client memory first.
++      //
++      // Unreal Engine reaches here on every asynchronous texture creation: it builds the mip in a
++      // D3D11_USAGE_STAGING texture with UpdateSubresource and then CopyResource's it into the
++      // real one. Leaving it unimplemented aborted the process before the first frame.
++      auto bytes_per_depth_slice = cmd.EffectiveRows * cmd.EffectiveBytesPerRow;
++      auto [source_buffer, source_offset] =
++          AllocateStagingBuffer(bytes_per_depth_slice * cmd.DstSize.depth, 16);
++      for (unsigned depthSlice = 0; depthSlice < cmd.DstSize.depth; depthSlice++) {
++        for (unsigned row = 0; row < cmd.EffectiveRows; row++) {
++          auto dst_offset =
++              source_offset + row * cmd.EffectiveBytesPerRow + depthSlice * bytes_per_depth_slice;
++          const char *src =
++              ((const char *)pSrcData) + row * SrcRowPitch + depthSlice * SrcDepthPitch;
++          source_buffer.updateContents(dst_offset, src, cmd.EffectiveBytesPerRow);
++        }
++      }
++
++      SwitchToBlitEncoder(CommandBufferState::BlitEncoderActive);
++      UseCopyDestination(staging_dst);
++      EmitOP([source_buffer, source_offset, bytes_per_depth_slice, dst_ = std::move(staging_dst),
++              cmd = std::move(cmd)](ArgumentEncodingContext &enc) {
++        auto [dst, dst_sub_offset] = enc.access(dst_->buffer(), 0, dst_->length, DXMT_ENCODER_RESOURCE_ACESS_WRITE);
++        // A block-compressed staging resource addresses whole blocks, and the destination origin
++        // arrives in texels, so it is converted here. Everything else already counts blocks:
++        // EffectiveBytesPerRow and EffectiveRows are computed that way by TextureUpdateCommand.
++        bool compressed = cmd.DstFormat.Flag & MTL_DXGI_FORMAT_BC;
++        auto origin_x = compressed ? (cmd.DstOrigin.x >> 2) : cmd.DstOrigin.x;
++        auto origin_y = compressed ? (cmd.DstOrigin.y >> 2) : cmd.DstOrigin.y;
++        for (unsigned offset_z = 0; offset_z < cmd.DstSize.depth; offset_z++) {
++          for (unsigned row = 0; row < cmd.EffectiveRows; row++) {
++            auto src_offset = source_offset + offset_z * bytes_per_depth_slice +
++                              row * cmd.EffectiveBytesPerRow;
++            auto dst_offset = dst_sub_offset + (cmd.DstOrigin.z + offset_z) * dst_->bytesPerImage +
++                              (origin_y + row) * dst_->bytesPerRow + origin_x * cmd.DstFormat.BytesPerTexel;
++            auto &cmdcp = enc.encodeBlitCommand<wmtcmd_blit_copy_from_buffer_to_buffer>();
++            cmdcp.type = WMTBlitCommandCopyFromBufferToBuffer;
++            cmdcp.copy_length = cmd.EffectiveBytesPerRow;
++            cmdcp.src = source_buffer;
++            cmdcp.src_offset = src_offset;
++            cmdcp.dst = dst->buffer();
++            cmdcp.dst_offset = dst_offset;
++          }
++        }
++      });
++      promote_flush = true;
+     } else {
+       UNIMPLEMENTED("unknown texture");
+     }
