@@ -244,17 +244,57 @@ mantenemos a mano.
 
 ---
 
-## 4-ter. Alguien ya lo ha hecho: `metalsharp/VKMT-Wine`
+## 4-ter. Alguien ya lo ha hecho: la organización **MetalSharp**
 
-**Es el proyecto más avanzado que existe en esta línea y hay que estudiarlo antes de escribir una
-línea de código propio.** Consultado el 2026-08-28.
+**Es el trabajo más avanzado que existe en esta línea y hay que estudiarlo antes de escribir una
+línea de código propio.** Consultado el 2026-08-28. Son cinco repositorios, y **la licencia decide
+qué podemos hacer con cada uno**:
 
-> [`metalsharp/VKMT-Wine`](https://github.com/metalsharp/VKMT-Wine) — *«A 0-Rosetta Wine Build for
-> Arm64 macOS Silicon, using a custom FEX build»*. **MIT**, creado el 24-07-2026, último push el
-> 20-08-2026, release **VKMT-1.0** del 01-08-2026 con runtime completo empaquetado. CI con
-> ShellCheck, Ruff, Clippy, CMake y CodeQL.
+| Repo | ★ | Licencia | Qué es | ¿Utilizable? |
+|---|---|---|---|---|
+| **MetalSharp** | 58 | **PolyForm Noncommercial** | El producto: Wine 11.5 propio, DXMT propio, botellas, reglas de lanzamiento y reparación. Un análogo directo de Regression | **NO usar su código.** Referencia de producto |
+| **VKMT-Wine** | 4 | **MIT** | El runtime: Wine ARM64 + FEX, 0-Rosetta | **Sí**, estudiar y adaptar |
+| **VKD3D-Proton-MacOS** | 1 | **MIT** | D3D12→Vulkan→MoltenVK→Metal | **Sí**, y sirve **hoy** |
+| **WineMetalGL** | 1 | **MIT** | OpenGL→Metal multiarquitectura | **Sí** |
+| homebrew-tap | — | — | Distribución | — |
 
-Su arquitectura es literalmente la que necesitamos:
+> ⚠️ **PolyForm Noncommercial** en `MetalSharp` es restrictiva. Su tabla de rutas y su enfoque son
+> información pública útil, pero **su código no entra en Regression**. Conviene saber además que su
+> propia ruta D3DMetal instala **GPTK + Rosetta** por Homebrew: ni ellos han encontrado forma de
+> tener D3DMetal sin Rosetta.
+
+### `VKD3D-Proton-MacOS` — la pieza que sirve **ya**, sin esperar a ARM
+
+```text
+D3D12 application → vkd3d-proton → Vulkan → custom MoltenVK → Metal
+```
+
+Release **v1.0** del 16-08-2026, MIT, con CI. Y el detalle que la vuelve accionable de inmediato:
+**«the public release contains the tested x86_64 Wine D3D12 runtime pair»** — está construida para
+un Wine **x86_64**, que es exactamente el nuestro de hoy.
+
+Su carril de validación declara feature levels **12_2 · 12_1 · 12_0 · 11_1 · 11_0 · CORE_1_0**,
+Shader Model 6.5, **DXR 1.1**, VRS tier 2, mesh shaders tier 1, sampler feedback, tiled resources
+tier 4, conservative rasterization tier 3, ROVs y barycentrics.
+
+**Esto convierte la Fase A en algo que se puede probar esta semana**, sin ARM de por medio: un D3D12
+sobre Metal, nativo y libre, que puede sustituir a D3DMetal en el runtime actual.
+
+### `WineMetalGL` — OpenGL sin Rosetta
+
+Traduce GLSL a Metal por SPIR-V y MSL, y **un mismo prefix soporta ARM64, ARM64EC, x86_64 e
+i386/WoW64**, con las librerías del host en ARM64 Mach-O y sin Rosetta. Sus puertas cubren carga de
+DLL, creación de contexto WGL, clear/readback determinista y GLSL 1.20/3.30/4.50.
+
+Nos toca de cerca: tenemos juegos OpenGL con perfiles a medida —Heroes of Hammerwatch 2 con
+`CX_FWD_COMPAT_GL_CTX`, Cursemark con los stubs de HashLink— y la regla 25 sobre contextos
+forward-compatible. Merece una comparación seria.
+
+### `VKMT-Wine` — el runtime ARM64 completo
+
+MIT, creado el 24-07-2026, push del 20-08-2026, release **VKMT-1.0** del 01-08-2026 con el runtime
+empaquetado y CI (ShellCheck, Ruff, Clippy, CMake, CodeQL). Su arquitectura es literalmente la que
+necesitamos:
 
 ```text
 Apple Silicon macOS
@@ -399,9 +439,12 @@ Dos frentes, ambos ejecutables hoy sobre el runtime x86_64 actual:
 
 1. **Por cada juego con perfil GPTK**, probarlo sobre DXMT y anotar qué le falta al traductor. Cada
    carencia corregida vale para todos.
-2. **Levantar la ruta VKD3D-Proton**, que ya tenemos a medias: `build/build-vkd3d-dxvk.sh` compila
-   vkd3d 1.18 pero no se instala en el runtime. Ponerla en pie y medirla contra D3DMetal en los
-   juegos D3D12 —Dragonkin, The Witcher 3, Borderlands 4— dice cuánto rendimiento cuesta el cambio.
+2. **Levantar la ruta VKD3D-Proton**, y aquí hay un atajo: `metalsharp/VKD3D-Proton-MacOS` es MIT,
+   tiene release v1.0 probada y **su runtime público es x86_64**, o sea que encaja con el Wine que
+   ya tenemos. Nosotros además llevamos media receta propia en `build/build-vkd3d-dxvk.sh`, que
+   compila vkd3d 1.18 y hoy no se instala porque D3D12 va por GPTK. Ponerla en pie y **medirla
+   contra D3DMetal** en los juegos D3D12 —Dragonkin, The Witcher 3, Borderlands 4— responde la
+   pregunta que más decide: cuánto rendimiento cuesta dejar de depender de Apple.
 
 *Hito:* tabla con los nueve juegos GPTK, su veredicto sobre DXMT y, para los D3D12, su medición
 sobre VKD3D-Proton.
@@ -486,9 +529,9 @@ lo sensato en la transición— o lo sustituye. Convivir **duplica la matriz**; 
 
 Nada de esto toca el motor estable:
 
-1. **Levantar VKD3D-Proton** sobre el runtime actual y medirlo contra D3DMetal en un juego D3D12.
-   Es la pregunta que más decide: si el coste en rendimiento es asumible, D3DMetal deja de dar
-   miedo.
+1. **Probar `VKD3D-Proton-MacOS` v1.0 sobre el runtime actual** —es x86_64 y MIT, así que entra sin
+   port— y medirlo contra D3DMetal en un juego D3D12. Es la pregunta que más decide: si el coste en
+   rendimiento es asumible, D3DMetal deja de dar miedo y la Fase A se desbloquea entera.
 2. **Leer los 18 parches de VKMT** y escribir el *adoptamos · adaptamos · no aplica*. Es lectura,
    no código, y puede ahorrar meses.
 3. **Fase A sobre un juego**: el que menos dependa de D3D12 —Grim Dawn o FFT— sobre DXMT.
@@ -514,6 +557,7 @@ rendering, que podría hacer innecesario un parche que hoy mantenemos), y cualqu
 - [Hangover](https://github.com/AndreRH/hangover) · [Hangover 11.0 — Phoronix](https://www.phoronix.com/news/Hangover-11.0-Released)
 - [3Shain/dxmt](https://github.com/3Shain/dxmt) (upstream real de DXMT) · [Roadmap DXMT 1.0, issue #151](https://github.com/3Shain/dxmt/issues/151) · [Release v0.80](https://github.com/3Shain/dxmt/releases/tag/v0.80)
 - [gamesir-labs](https://github.com/gamesir-labs) — `dxmt` (downstream con D3D12), `wine` (árbol Proton para macOS), `rosettax87_jit`, `MGL`
+- Organización [metalsharp](https://github.com/metalsharp): [MetalSharp](https://github.com/metalsharp/MetalSharp) (producto, PolyForm Noncommercial) · [VKD3D-Proton-MacOS](https://github.com/metalsharp/VKD3D-Proton-MacOS) (MIT) · [WineMetalGL](https://github.com/metalsharp/WineMetalGL) (MIT)
 - [metalsharp/VKMT-Wine](https://github.com/metalsharp/VKMT-Wine) — Wine ARM64 + FEX en macOS, 0-Rosetta · [su auditoría de D3DMetal](https://github.com/metalsharp/VKMT-Wine/blob/main/D3DMetal.md) · [sus parches](https://github.com/metalsharp/VKMT-Wine/tree/main/patches)
 - [utmapp/d3dmetal-native](https://github.com/utmapp/d3dmetal-native) — documenta que D3DMetal exige un proceso x86_64 bajo Rosetta
 - [Proton 11.0-1 Beta 3: FEX para ARM64 — GamingOnLinux, 2026-05](https://www.gamingonlinux.com/2026/05/proton-11-0-1-beta-3-brings-fex-upgrades-for-linux-arm64-like-the-steam-frame/) · [FEX 2608 — Phoronix](https://www.phoronix.com/news/FEX-2608-Released)
