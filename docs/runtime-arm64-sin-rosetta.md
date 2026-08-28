@@ -25,7 +25,9 @@ juegos Intel *de macOS* con el que no conviene contar. Margen: algo más de un a
    decir, **se puede probar sobre nuestro runtime actual, sin port a ARM**.
 3. **El camino completo ya está trazado por terceros.** `metalsharp/VKMT-Wine` (MIT) ejecuta Wine
    ARM64 + FEX sin Rosetta, y sus 18 parches son la lista concreta de lo que hay que resolver.
-   Partimos, además, de la **misma versión de FEX (2607)** que ellos.
+   Partimos, además, de la **misma versión de FEX (2607)** que ellos. Y **FEX ya usa el TSO por
+   hardware de Apple Silicon** —lo que hace rápido a Rosetta—, así que el camino que no depende de
+   Apple no es necesariamente el lento.
 
 **Las cuatro cosas que haría primero** (ninguna toca el motor estable):
 
@@ -482,7 +484,56 @@ muerto, o es Linux, o sigue montado sobre Rosetta.
 
 ---
 
-### 4.7 Referencias de código y de modelo
+### 4.7 Dos detalles técnicos que cambian valoraciones
+
+#### El TSO por hardware de Apple Silicon abarata el camino FEX
+
+La emulación x86→ARM paga su precio más alto en el **modelo de memoria**: x86 garantiza *total store
+ordering* y ARM no, así que un emulador tiene que emitir barreras por todas partes. Es la razón
+principal por la que Rosetta —que usa el **TSO por hardware** de los chips M— rinde tan bien.
+
+**FEX ya sabe usar ese hardware.** En su propio repositorio:
+
+- PR **#5613**, *«Windows/UnixLib: Adds support for Hardware TSO support»*, **mergeado el
+  2026-06-28**.
+- PR **#4682**, *«Windows: Support enabling hardware TSO on Asahi Linux»* (julio de 2025) — y Asahi
+  corre precisamente en Macs Apple Silicon.
+
+Esto **reequilibra la decisión del emulador** (§5, Fase E). Dábamos por hecho que FEX rendiría
+claramente peor que el puente a Rosetta; con TSO por hardware la brecha se estrecha mucho, y el
+camino que no depende de Apple deja de ser «el caro». Encaja además con los parches
+`*-no-tso-steam-runtime` de VKMT y con su invariante `FEX_TSOENABLED=0`: están gestionando
+exactamente esto.
+
+**Pendiente de medir**, no de suponer: nadie publica cifras de FEX con TSO hardware en macOS.
+
+#### `utmapp/d3dmetal-native` no reabre la puerta de D3DMetal, pero deja una idea
+
+[`utmapp/d3dmetal-native`](https://github.com/utmapp/d3dmetal-native) (MIT, activo) implementa el
+*host interface* GFXT que D3DMetal espera, para usarlo **fuera de Wine**, en un proceso macOS
+normal. Su documentación es tajante:
+
+> **«x86_64 only: `D3DMetal.framework` ships as x86_64, so the entire process must be x86_64. On
+> Apple Silicon everything runs under Rosetta 2.»**
+
+Es decir, **confirma el cierre de §3**: no hay forma de meter D3DMetal en un proceso ARM64.
+
+Lo que sí aporta es una **vía teórica** que conviene tener anotada por si VKD3D-Proton rindiera mal:
+la librería reimplementa el **compartido de recursos entre procesos** que D3DMetal deja como stubs
+—texturas, buffers, fences y keyed mutexes, cruzando D3D11↔D3D12—. Sobre eso se podría montar un
+**«sidecar» D3DMetal**: un proceso x86_64 aparte que renderice y comparta las texturas con el
+proceso ARM64 principal.
+
+**No es un plan, es una salida de emergencia**, y hay que decir por qué:
+
+1. Depende de que el subconjunto de Rosetta que Apple conserve permita **procesos x86_64 completos**,
+   cosa que nadie ha confirmado.
+2. Exige un **proxy D3D completo** entre procesos: mucho trabajo y mucha superficie de fallo.
+3. El coste de sincronización por fotograma es una incógnita.
+
+Con VKD3D-Proton disponible y probado, esto queda como plan C, no como alternativa seria.
+
+### 4.8 Referencias de código y de modelo
 
 | Proyecto | Qué aporta | Aplicable |
 |---|---|---|
@@ -577,9 +628,14 @@ Dos opciones, y ahora sabemos que **las dos están demostradas**:
 - **FEX propio** (lo que hace VKMT, y lo que hace Valve en Linux): sin dependencia de Apple, con un
   camino ya trazado por terceros y por nuestro propio laboratorio.
 
-Dado que **VKMT demuestra que FEX funciona en macOS**, el equilibrio cambia respecto a lo que
-pensábamos: el puente deja de ser «la única opción barata» y pasa a ser «el atajo si hay prisa».
-Diseñar contra la interfaz `__wine_unix_call_funcs` permite empezar por uno y cambiar al otro.
+Dos cosas mueven la balanza hacia FEX más de lo que parecía: **VKMT demuestra que funciona en
+macOS**, y **FEX ya usa el TSO por hardware de Apple Silicon** (§4.7), que es justo lo que hace
+rápido a Rosetta. El puente deja de ser «la única opción barata» y pasa a ser «el atajo si hay
+prisa». Diseñar contra la interfaz `__wine_unix_call_funcs` permite empezar por uno y cambiar al
+otro sin rehacer.
+
+**Lo que falta es una medición**: nadie publica cifras de FEX con TSO hardware en macOS, así que la
+comparación puente-vs-FEX hay que hacerla, no suponerla.
 
 *Hito:* un `.exe` PE x86-64 de consola que imprime y termina.
 
@@ -651,7 +707,8 @@ Y dos que dependen de terceros pequeños, así que conviene no apoyarse en ellas
 - [gamesir-labs](https://github.com/gamesir-labs) — `dxmt` (downstream con D3D12), `wine` (árbol Proton para macOS), `rosettax87_jit`, `MGL`
 - Organización [metalsharp](https://github.com/metalsharp): [MetalSharp](https://github.com/metalsharp/MetalSharp) (producto, PolyForm Noncommercial) · [VKD3D-Proton-MacOS](https://github.com/metalsharp/VKD3D-Proton-MacOS) (MIT) · [WineMetalGL](https://github.com/metalsharp/WineMetalGL) (MIT)
 - [metalsharp/VKMT-Wine](https://github.com/metalsharp/VKMT-Wine) — Wine ARM64 + FEX en macOS, 0-Rosetta · [su auditoría de D3DMetal](https://github.com/metalsharp/VKMT-Wine/blob/main/D3DMetal.md) · [sus parches](https://github.com/metalsharp/VKMT-Wine/tree/main/patches)
-- [utmapp/d3dmetal-native](https://github.com/utmapp/d3dmetal-native) — documenta que D3DMetal exige un proceso x86_64 bajo Rosetta
+- [utmapp/d3dmetal-native](https://github.com/utmapp/d3dmetal-native) — D3DMetal fuera de Wine; documenta que exige un proceso x86_64 bajo Rosetta, y reimplementa el compartido de recursos entre procesos
+- [FEX PR #5613 — Hardware TSO](https://github.com/FEX-Emu/FEX/pull/5613) (mergeado 2026-06-28) · [PR #4682 — hardware TSO en Asahi](https://github.com/FEX-Emu/FEX/pull/4682) · [FEX gets huge gaming improvements — GamingOnLinux](https://www.gamingonlinux.com/2025/08/x86-on-arm64-emulator-fex-gets-some-huge-gaming-improvements/)
 - [Proton 11.0-1 Beta 3: FEX para ARM64 — GamingOnLinux, 2026-05](https://www.gamingonlinux.com/2026/05/proton-11-0-1-beta-3-brings-fex-upgrades-for-linux-arm64-like-the-steam-frame/) · [FEX 2608 — Phoronix](https://www.phoronix.com/news/FEX-2608-Released)
 - [i1rr/steam-arm64-mac](https://github.com/i1rr/steam-arm64-mac) — Steam nativo en Apple Silicon sin Rosetta
 - [CrossOver ARM64 y FEX probados — blendlogic](https://blendlogic.com/posts/crossover-arm64-fex-mac-gaming.html) · [CrossOver Goes Native on Apple Silicon — TUAW, 2026-08-02](https://www.tuaw.com/2026/08/02/crossover-goes-native-on-apple-silicon)
