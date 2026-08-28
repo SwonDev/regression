@@ -86,6 +86,12 @@ case "$MODE" in
         [[ -d "$APP" && ! -L "$APP" ]] \
             || fail "la release pública debe ser un bundle físico"
         ;;
+    --release-1.12.12)
+        EXPECTED_VERSION="1.12.12"
+        EXPECTED_BUILD="50"
+        [[ -d "$APP" && ! -L "$APP" ]] \
+            || fail "la release pública debe ser un bundle físico"
+        ;;
     --release-1.12.11)
         EXPECTED_VERSION="1.12.11"
         EXPECTED_BUILD="49"
@@ -117,7 +123,7 @@ case "$MODE" in
             || fail "el candidato público debe ser un bundle físico"
         ;;
     *)
-        fail "uso: $0 --baseline-1.10.0 | --release-1.10.1 | --release-1.11.0 | --release-1.12.0 | --release-1.12.1 | --release-1.12.2 | --release-1.12.3 | --release-1.12.4 | --release-1.12.5 | --release-1.12.6 | --release-1.12.7 | --candidate-1.12.1-before-runtime-join-fix"
+        fail "uso: $0 --baseline-1.10.0 | --release-1.10.1 | --release-1.11.0 | --release-1.12.0 | --release-1.12.1 | --release-1.12.2 | --release-1.12.3 | --release-1.12.4 | --release-1.12.5 | --release-1.12.6 | --release-1.12.7 | --release-1.12.12 | --candidate-1.12.1-before-runtime-join-fix"
         ;;
 esac
 codesign --verify --deep --strict "$APP"
@@ -134,7 +140,21 @@ fi
 [[ "$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")" == "$EXPECTED_BUILD" ]] \
     || fail "build público no soportado"
 
-if [[ "$MODE" == "--release-1.12.11" || "$MODE" == "--release-1.12.10" \
+if [[ "$MODE" == "--release-1.12.12" ]]; then
+    # 1.12.12 enruta PixARK.exe a Apple GPTK 3.0: cambian el lanzador, que publica la ruta
+    # indexada, y el `ntdll` público, que lleva el basename en la puerta fail-closed. Los tres
+    # binarios de arranque de Wine son los mismos que 1.12.8-1.12.11.
+    verify_hash 979b6a0847495058e144341009330020e158a61dae558312c8e434f3d8ed3f3f \
+        "$APP/Contents/MacOS/regression-engine"
+    verify_hash d047199971479d20423a196756e01048c96d738557fd4e416e4cda9d0d0e1fd1 \
+        "$APP/Contents/SharedSupport/wine-root/bin/wine"
+    verify_hash d80925c5a5ddc2e8e7bbefe6f06c55b4ad9ea8190f30f252a6464e610de1c6f0 \
+        "$APP/Contents/SharedSupport/wine-root/bin/wineserver"
+    verify_hash 3eedd595dd34ac7ce51586e6d9bc4c298581edf70bd022d0fe30e0e0009e394e \
+        "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/wine"
+    verify_hash f2717c8e8b23c70ef6bdcc1f8ae49d1d4cf2c62fe8109376b60fb09cee6e796e \
+        "$APP/Contents/SharedSupport/wine-root/lib/wine/x86_64-unix/ntdll.so"
+elif [[ "$MODE" == "--release-1.12.11" || "$MODE" == "--release-1.12.10" \
       || "$MODE" == "--release-1.12.9" || "$MODE" == "--release-1.12.8" ]]; then
     # De 1.12.8 a 1.12.11 sólo cambia la app —verificación de runs observados, caducidad del aviso de
     # Steam y el barrido de logs de la autorreparación—, y comparten el mismo runtime público, así
