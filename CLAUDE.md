@@ -13,7 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > Si algo de este archivo difiere de `AGENTS.md`, **manda `AGENTS.md`**. `README.md` es la portada
 > del producto y `docs/README.md` el índice técnico.
 
-> **Contrato del checkout:** Regression **1.12.11 (49)**, release estable publicada, y SQLite **v17**.
+> **Contrato del checkout:** Regression **1.12.12 (50)**, release estable publicada, y SQLite **v17**.
 > **v1.11.0 (37)** es el baseline histórico: conservar sus gates `public-1.11` de transición no
 > autoriza a saltarse la matriz global de futuras releases.
 
@@ -307,6 +307,15 @@ screencapture -x -l <CGWindowID> /tmp/check.png   # capturar y MIRAR la imagen
     entero y reproducir es un experimento limpio. Razonar por qué algo «no puede» ser la causa no
     es evidencia.
 
+38. **Un juego sin ventana puede estar abortado por el traductor, y los tres backends fallan por
+    motivos distintos.** PixARK sonaba y se cerraba: lo abortaba DXMT con
+    `UpdateTexture: "update staging texture"` (`UNIMPLEMENTED`), porque la creación asíncrona de
+    texturas de UE4 hace `UpdateSubresource` sobre una textura `D3D11_USAGE_STAGING`, ya en la
+    inicialización del RHI —`-NOTEXTURESTREAMING` no lo evita—. DXVK acepta el staging pero
+    MoltenVK no compila sus geometry shaders (`EmitVertex` en MSL → `DEVICE_LOST`); GPTK 4.0b2 se
+    cuelga sin ventana; **GPTK 3.0 lo ejecuta entero**. Se enruta `PixARK.exe` a GPTK 3.0 por
+    basename exacto, sin tocar DXMT ni su PIN. Ver `docs/games/pixark.md`.
+
 ---
 
 ## 4. Cómo se trabaja aquí (protocolo)
@@ -404,7 +413,7 @@ exacto que recibirá GitHub.** Actualizar también la nota de contrato en `READM
 
 ## 7. Estado actual (2026-08-25)
 
-- **Release estable**: v1.12.11 (49), instalada y verificada en `/Applications/Regression.app`
+- **Release estable**: v1.12.12 (50), instalada y verificada en `/Applications/Regression.app`
   (`verify-public-installed-state.sh --release-1.12.11`). Baseline histórico: v1.11.0 (37).
 - **Lo que trae 1.12.7**, todo con corrección general y no receta por juego:
   - **Un juego recién lanzado ya recibe teclado y ratón.** macOS 14 exige que la app activa

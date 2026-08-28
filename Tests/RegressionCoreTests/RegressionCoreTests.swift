@@ -94,7 +94,7 @@ final class RegressionCoreTests: XCTestCase {
             borderlands?.engineFingerprint,
             "d7172135a42000c3c4f672663500351f27df9b89bea0d76551dc79be828b95d0"
         )
-        XCTAssertEqual(VerifiedGameCatalog.revision, "2026-08-19.2")
+        XCTAssertEqual(VerifiedGameCatalog.revision, "2026-08-28.1")
         XCTAssertNil(VerifiedGameCatalog.certification(for: "999999999"))
     }
 
@@ -695,6 +695,7 @@ final class RegressionCoreTests: XCTestCase {
             "borderlands4.exe",
             "dragonkinthebanished-win64-shipping.exe",
             "witcher3.exe",
+            "pixark.exe",
         ]
 
         let patchURL = repositoryRoot
@@ -730,7 +731,7 @@ final class RegressionCoreTests: XCTestCase {
         }
         XCTAssertEqual(
             launcherContents.components(separatedBy: "$component/3.0/wine").count - 1,
-            4
+            5
         )
         // Cuatro rutas compiladas a 4.0b2 más la que emite el detector por evidencia.
         XCTAssertEqual(

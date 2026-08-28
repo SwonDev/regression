@@ -1,6 +1,6 @@
 --- a/dlls/ntdll/unix/loader.c
 +++ b/dlls/ntdll/unix/loader.c
-@@ -382,8 +382,348 @@
+@@ -382,8 +382,349 @@
      dll_paths = new_dll_paths;
      if (path_len > dll_path_maxlen)
          dll_path_maxlen = path_len;
@@ -86,7 +86,8 @@
 +           regression_executable_is( "tq2-win64-shipping.exe" ) ||
 +           regression_executable_is( "borderlands4.exe" ) ||
 +           regression_executable_is( "dragonkinthebanished-win64-shipping.exe" ) ||
-+           regression_executable_is( "witcher3.exe" );
++           regression_executable_is( "witcher3.exe" ) ||
++           regression_executable_is( "pixark.exe" );
 +}
 +
 +static const char *regression_external_d3dmetal_root(void)
@@ -349,7 +350,7 @@
  static void set_dll_path(void)
  {
      char *p, *path = getenv( "WINEDLLPATH" );
-@@ -2246,18 +2585,19 @@ static void start_main_thread(void)
+@@ -2246,18 +2586,19 @@ static void start_main_thread(void)
      {
          void *cxcompatdb = NULL;
          char *name = NULL;
@@ -369,7 +370,7 @@
  }
  
  #ifdef __ANDROID__
-@@ -2607,12 +2947,13 @@ static void check_command_line( int argc, char *argv[] )
+@@ -2607,12 +2948,13 @@ static void check_command_line( int argc, char *argv[] )
  /***********************************************************************
   *           __wine_main
   *

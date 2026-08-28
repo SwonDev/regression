@@ -706,6 +706,18 @@ aprendizaje conserva el historial, pero no aplica perfiles automáticamente.
     ellos la línea exacta que fallaba. Antes de pedir otra ejecución del juego, mira si el shader
     está en disco.
 
+99. **Un juego sin ventana puede estar abortado por el traductor, no por sí mismo, y hay que
+    medir los tres backends antes de elegir.** PixARK (App ID 593600, UE4 4.5) sonaba y se cerraba:
+    lo abortaba DXMT con `UpdateTexture: "update staging texture"` —`UNIMPLEMENTED`— porque la
+    creación asíncrona de texturas de UE4 hace `UpdateSubresource` sobre una textura
+    `D3D11_USAGE_STAGING`. `-NOTEXTURESTREAMING` **no** lo evita: ocurre en la inicialización del
+    RHI. Los tres caminos fallan por motivos distintos y hay que medirlos, no suponerlos: DXMT no
+    tiene el staging, DXVK sí pero MoltenVK no compila sus geometry shaders (`EmitVertex` en MSL →
+    `DEVICE_LOST`), GPTK 4.0b2 se cuelga sin abrir ventana y **GPTK 3.0 lo ejecuta entero**. Se
+    enruta `PixARK.exe` a GPTK 3.0 por basename exacto, sin tocar DXMT ni su PIN. La deuda queda
+    anotada con sitio exacto: `d3d11_context_impl.cpp`, rama `GetStagingResource` de
+    `UpdateTexture`. Ver `docs/games/pixark.md`.
+
 ## Protocolo de trabajo (OBLIGATORIO — cómo se hacen las cosas aquí)
 
 Este proyecto es un sistema de muchas piezas acopladas (wine + DXMT + DXVK + D3DMetal + CEF +
@@ -816,7 +828,7 @@ quizá roto otra — que es exactamente lo que este protocolo existe para evitar
 ## Estado rápido (2026-08-14)
 
 - **Contrato de este corte**: el código fuente y los empaquetadores convergen en Regression
-  **1.12.11 (49)** y SQLite **v17**. **v1.12.11 (49)** es la release estable actual y
+  **1.12.12 (50)** y SQLite **v17**. **v1.12.12 (50)** es la release estable actual y
   **v1.11.0 (37)** el baseline histórico; sus verificadores `public-1.11` se conservan como
   gates de transición, no como versión vigente. Toda release futura debe verificar el asset
   exacto y completar su matriz antes de publicarse.

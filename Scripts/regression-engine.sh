@@ -139,6 +139,14 @@ prepare_external_apple_gptk_routes()
         export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_EXECUTABLE=fft_enhanced.exe"
         export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_WINE_ROOT=$component/3.0/wine"
         count=$((count + 1))
+        # PixARK (UE4 4.5) habilita la creación asíncrona de texturas y hace
+        # `UpdateSubresource` sobre una textura D3D11_USAGE_STAGING. DXMT no implementa
+        # ese caso y aborta durante la inicialización del RHI: el juego suena y se cierra.
+        # DXVK sí lo acepta pero MoltenVK no compila sus geometry shaders. Ver
+        # docs/games/pixark.md.
+        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_EXECUTABLE=PixARK.exe"
+        export "REGRESSION_EXTERNAL_D3DMETAL_ROUTE_${count}_WINE_ROOT=$component/3.0/wine"
+        count=$((count + 1))
     fi
 
     if ! "$installer" --component 4.0b2 --verify-only >/dev/null 2>&1; then

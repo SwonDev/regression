@@ -94,6 +94,10 @@ fail()
     'printf "route-5-root=%s\n" "${REGRESSION_EXTERNAL_D3DMETAL_ROUTE_5_WINE_ROOT-unset}"' \
     'printf "route-6-executable=%s\n" "${REGRESSION_EXTERNAL_D3DMETAL_ROUTE_6_EXECUTABLE-unset}"' \
     'printf "route-6-root=%s\n" "${REGRESSION_EXTERNAL_D3DMETAL_ROUTE_6_WINE_ROOT-unset}"' \
+    'printf "route-7-executable=%s\n" "${REGRESSION_EXTERNAL_D3DMETAL_ROUTE_7_EXECUTABLE-unset}"' \
+    'printf "route-7-root=%s\n" "${REGRESSION_EXTERNAL_D3DMETAL_ROUTE_7_WINE_ROOT-unset}"' \
+    'printf "route-8-executable=%s\n" "${REGRESSION_EXTERNAL_D3DMETAL_ROUTE_8_EXECUTABLE-unset}"' \
+    'printf "route-8-root=%s\n" "${REGRESSION_EXTERNAL_D3DMETAL_ROUTE_8_WINE_ROOT-unset}"' \
     'printf "route-15-executable=%s\n" "${REGRESSION_EXTERNAL_D3DMETAL_ROUTE_15_EXECUTABLE-unset}"' \
     'printf "route-15-basename=%s\n" "${REGRESSION_EXTERNAL_D3DMETAL_ROUTE_15_BASENAME-unset}"' \
     'printf "route-15-root=%s\n" "${REGRESSION_EXTERNAL_D3DMETAL_ROUTE_15_WINE_ROOT-unset}"' \
@@ -149,6 +153,10 @@ assert_external_routes_absent()
         'route-5-root=unset' \
         'route-6-executable=unset' \
         'route-6-root=unset' \
+        'route-7-executable=unset' \
+        'route-7-root=unset' \
+        'route-8-executable=unset' \
+        'route-8-root=unset' \
         'route-15-executable=unset' \
         'route-15-basename=unset' \
         'route-15-root=unset'
@@ -165,8 +173,8 @@ run_engine 1
     "el launcher heredó un basename GPTK genérico controlado por el entorno host"
 [[ "$(/usr/bin/grep '^legacy-root=' "$ENVIRONMENT_LOG")" == "legacy-root=unset" ]] || fail \
     "el launcher heredó una raíz GPTK genérica controlada por el entorno host"
-[[ "$(/usr/bin/grep '^route-count=' "$ENVIRONMENT_LOG")" == "route-count=8" ]] || fail \
-    "el launcher no publicó las ocho rutas GPTK compiladas"
+[[ "$(/usr/bin/grep '^route-count=' "$ENVIRONMENT_LOG")" == "route-count=9" ]] || fail \
+    "el launcher no publicó las nueve rutas GPTK compiladas"
 [[ "$(/usr/bin/grep '^route-0-executable=' "$ENVIRONMENT_LOG")" == \
     "route-0-executable=Grim Dawn.exe" ]] || fail \
     "el índice GPTK 0 no conservó su executable compilado"
@@ -178,13 +186,18 @@ run_engine 1
 [[ "$(/usr/bin/grep '^route-3-executable=' "$ENVIRONMENT_LOG")" == \
     "route-3-executable=fft_enhanced.exe" ]] || fail "el índice GPTK 3 no conservó FFT"
 [[ "$(/usr/bin/grep '^route-4-executable=' "$ENVIRONMENT_LOG")" == \
-    "route-4-executable=TQ2-Win64-Shipping.exe" ]] || fail "el índice GPTK 4 no conservó TQ2"
+    "route-4-executable=PixARK.exe" ]] || fail "el índice GPTK 4 no conservó PixARK"
 [[ "$(/usr/bin/grep '^route-5-executable=' "$ENVIRONMENT_LOG")" == \
-    "route-5-executable=Borderlands4.exe" ]] || fail "el índice GPTK 5 no conservó Borderlands 4"
-
+    "route-5-executable=TQ2-Win64-Shipping.exe" ]] || fail "el índice GPTK 5 no conservó TQ2"
 [[ "$(/usr/bin/grep '^route-6-executable=' "$ENVIRONMENT_LOG")" == \
-    "route-6-executable=DragonkinTheBanished-Win64-Shipping.exe" ]] || fail \
-    "el índice GPTK 6 no conservó Dragonkin"
+    "route-6-executable=Borderlands4.exe" ]] || fail "el índice GPTK 6 no conservó Borderlands 4"
+
+[[ "$(/usr/bin/grep '^route-7-executable=' "$ENVIRONMENT_LOG")" == \
+    "route-7-executable=DragonkinTheBanished-Win64-Shipping.exe" ]] || fail \
+    "el índice GPTK 7 no conservó Dragonkin"
+[[ "$(/usr/bin/grep '^route-8-executable=' "$ENVIRONMENT_LOG")" == \
+    "route-8-executable=witcher3.exe" ]] || fail \
+    "el índice GPTK 8 no conservó The Witcher 3"
 EXPECTED_GPTK3_ROOT="$TEST_HOME/Library/Application Support/Regression/Components/AppleGPTK/3.0/wine"
 EXPECTED_GPTK4_ROOT="$TEST_HOME/Library/Application Support/Regression/Components/AppleGPTK/4.0b2/wine"
 [[ "$(/usr/bin/grep '^route-0-root=' "$ENVIRONMENT_LOG")" == \
@@ -193,11 +206,11 @@ EXPECTED_GPTK4_ROOT="$TEST_HOME/Library/Application Support/Regression/Component
 [[ "$(/usr/bin/grep '^route-1-root=' "$ENVIRONMENT_LOG")" == \
     "route-1-root=$EXPECTED_GPTK3_ROOT" ]] || fail \
     "el índice GPTK 1 no quedó emparejado con la raíz verificada"
-for index in 2 3; do
+for index in 2 3 4; do
     [[ "$(/usr/bin/grep "^route-${index}-root=" "$ENVIRONMENT_LOG")" == \
         "route-${index}-root=$EXPECTED_GPTK3_ROOT" ]] || fail "la ruta GPTK3 $index no quedó emparejada"
 done
-for index in 4 5; do
+for index in 5 6 7 8; do
     [[ "$(/usr/bin/grep "^route-${index}-root=" "$ENVIRONMENT_LOG")" == \
         "route-${index}-root=$EXPECTED_GPTK4_ROOT" ]] || fail "la ruta GPTK4 $index no quedó emparejada"
 done
@@ -222,4 +235,4 @@ assert_external_routes_absent "verify/repair fallidos"
 run_engine 0
 [[ "$(/usr/bin/sed -n '1p' "$ARGUMENT_LOG")" == "--component 3.0 --verify-only" ]] || fail \
     "el launcher cambió la verificación 3.0 por otra generación"
-printf 'PASS: las ocho rutas GPTK solo llegan al loader tras verificar su generación.\n'
+printf 'PASS: las nueve rutas GPTK solo llegan al loader tras verificar su generación.\n'

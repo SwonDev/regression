@@ -40,7 +40,7 @@ public enum AppleGPTKVersion: String, Equatable, Sendable {
 }
 
 public enum GameRuntimeProfileCatalog {
-    public static let revision = "2026-08-22.1"
+    public static let revision = "2026-08-28.1"
 
     public static let all: [CompiledGameRuntimeProfile] = [
         CompiledGameRuntimeProfile(
@@ -104,6 +104,24 @@ public enum GameRuntimeProfileCatalog {
                 "profile.scope": "exact-app-process",
                 "profile.graphics.backend": "d3dmetal",
                 "profile.graphics.route": "complete",
+                "profile.component.id": "apple-gptk",
+                "profile.component.version": "3.0",
+                "profile.component.distribution": "external-apple-authorized",
+                "profile.launcher.entrypoints": "regression,steam",
+                "profile.router.contract": "compiled-exact-process-external-d3dmetal-v1"
+            ]
+        ),
+        CompiledGameRuntimeProfile(
+            appID: "593600",
+            identifier: "pixark.apple-gptk-3.0-portable",
+            revision: 1,
+            executable: "pixark.exe",
+            requiresActiveSteamClient: true,
+            configurationValues: [
+                "profile.scope": "exact-app-process",
+                "profile.graphics.backend": "d3dmetal",
+                "profile.graphics.route": "complete",
+                "profile.engine.family": "unreal-engine-4",
                 "profile.component.id": "apple-gptk",
                 "profile.component.version": "3.0",
                 "profile.component.distribution": "external-apple-authorized",

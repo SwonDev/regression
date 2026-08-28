@@ -230,6 +230,29 @@ final class CompiledGameRepairTests: XCTestCase {
         """))
     }
 
+    /// PixARK sonaba y se cerraba: DXMT aborta el proceso en `UpdateTexture` cuando UE4 hace
+    /// `UpdateSubresource` sobre una textura staging. La ruta a Apple GPTK 3.0 debe quedar fijada
+    /// al proceso exacto y sólo para el backend propio. Ver docs/games/pixark.md.
+    func testPixArkRuntimeProfileRoutesTheExactProcessToAppleGPTK3() throws {
+        let profile = try XCTUnwrap(
+            GameRuntimeProfileCatalog.profile(for: "593600", backend: .regression)
+        )
+
+        XCTAssertEqual(profile.identifier, "pixark.apple-gptk-3.0-portable")
+        XCTAssertEqual(profile.executable, "pixark.exe")
+        XCTAssertEqual(profile.configurationValues["profile.scope"], "exact-app-process")
+        XCTAssertEqual(profile.configurationValues["profile.graphics.backend"], "d3dmetal")
+        XCTAssertEqual(profile.configurationValues["profile.component.version"], "3.0")
+        XCTAssertTrue(profile.requiresActiveSteamClient)
+        XCTAssertNil(GameRuntimeProfileCatalog.profile(for: "593600", backend: .crossOver))
+
+        // El perfil no puede arrastrar a ningún otro proceso al componente externo.
+        let unrelated = try XCTUnwrap(
+            GameRuntimeProfileCatalog.profile(for: "619820", backend: .regression)
+        )
+        XCTAssertNotEqual(unrelated.configurationValues["profile.component.version"], "3.0")
+    }
+
     func testDragonwildsRuntimeProfileIsProcessScopedAndRegressionOnly() throws {
         let profile = try XCTUnwrap(
             GameRuntimeProfileCatalog.profile(for: "1374490", backend: .regression)

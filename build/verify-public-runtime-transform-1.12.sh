@@ -25,7 +25,7 @@ runtime_entries() {
 tools/wine/wine bin/wine d047199971479d20423a196756e01048c96d738557fd4e416e4cda9d0d0e1fd1
 server/wineserver bin/wineserver d80925c5a5ddc2e8e7bbefe6f06c55b4ad9ea8190f30f252a6464e610de1c6f0
 loader/wine lib/wine/x86_64-unix/wine 3eedd595dd34ac7ce51586e6d9bc4c298581edf70bd022d0fe30e0e0009e394e
-dlls/ntdll/ntdll.so lib/wine/x86_64-unix/ntdll.so 7b08210d619c0a90eb77e2fbe8504c2efbd2bcd20bd3c348f3f1f47a07de9961
+dlls/ntdll/ntdll.so lib/wine/x86_64-unix/ntdll.so f2717c8e8b23c70ef6bdcc1f8ae49d1d4cf2c62fe8109376b60fb09cee6e796e
 EOF
 }
 

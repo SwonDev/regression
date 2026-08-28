@@ -67,9 +67,16 @@ public struct VerifiedGameCertification: Codable, Equatable, Identifiable, Senda
 /// motor ni sustituye la telemetría: evita perder el estado blindado al regenerar los datos
 /// locales. Solo se añade una entrada después de validar render, entrada, opciones y gameplay.
 public enum VerifiedGameCatalog {
-    public static let revision = "2026-08-19.2"
+    public static let revision = "2026-08-28.1"
 
     public static let all: [VerifiedGameCertification] = [
+        VerifiedGameCertification(
+            appID: "593600",
+            gameName: "PixARK",
+            backend: .regression,
+            verifiedAt: "2026-08-28",
+            evidence: "docs/games/pixark.md"
+        ),
         VerifiedGameCertification(
             appID: "1128000",
             gameName: "Cube World",
